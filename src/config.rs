@@ -133,6 +133,15 @@ impl Config {
             {
                 return Err(GatewayError::InvalidConfig);
             }
+            if grant.operations.iter().any(|op| op.is_api()) {
+                if grant.repositories.len() != 1
+                    || !grant.repositories.contains("*")
+                    || grant.operations.iter().any(|op| !op.is_api())
+                {
+                    return Err(GatewayError::InvalidConfig);
+                }
+                continue;
+            }
             for repository in &grant.repositories {
                 validate_repository(repository, connection.provider)
                     .map_err(|_| GatewayError::InvalidConfig)?;

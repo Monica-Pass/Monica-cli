@@ -223,7 +223,7 @@ impl Gateway {
         event.timestamp = chrono::Utc::now().timestamp();
         event.error = result.as_ref().err().copied();
         if self.audit(&event).is_err() {
-            return Err(if event.operation == Some(Operation::CreateIssue) {
+            return Err(if event.operation.is_some_and(Operation::is_write) {
                 GatewayError::WriteOutcomeUnknown
             } else {
                 GatewayError::StateUnavailable
@@ -329,7 +329,17 @@ impl Gateway {
                 .journal
                 .get_mut(key)
                 .expect("write was journaled before dispatch");
-            record.outcome = Some(result.clone());
+            // Service API responses can contain private files or newly created
+            // credentials. Persist only a receipt, never the response payload.
+            record.outcome = Some(if operation.is_api() {
+                result.as_ref().map(|value| json!({
+                    "status": value["status"], "replayed": true,
+                    "request_id": arguments.request_id(),
+                    "message": "Already dispatched. Original response is not retained; read the service to inspect the result."
+                })).map_err(|error| *error)
+            } else {
+                result.clone()
+            });
             if self.save_journal(state).is_err() {
                 return Err(GatewayError::WriteOutcomeUnknown);
             }
@@ -338,7 +348,7 @@ impl Gateway {
         // tell the caller to inspect the remote outcome instead of implying no write.
         self.recheck_access(capability, &binding, operation, arguments.repository())
             .map_err(|error| {
-                if operation == Operation::CreateIssue {
+                if operation.is_write() {
                     GatewayError::WriteOutcomeUnknown
                 } else {
                     error
@@ -397,9 +407,15 @@ fn resolve_scope(grant: &Grant, mut value: Value) -> Result<Value> {
 }
 
 fn catalog(grant: &Grant, binding: &Connection) -> Value {
-    let tools: Vec<_> = grant.operations.iter().map(|operation| json!({
-        "name": operation.tool_name(binding.provider), "read_only": *operation != Operation::CreateIssue,
-    })).collect();
+    let tools: Vec<_> = grant
+        .operations
+        .iter()
+        .map(|operation| {
+            json!({
+                "name": operation.tool_name(binding.provider), "read_only": !operation.is_write(),
+            })
+        })
+        .collect();
     json!({
         "connections": [{
             "name": grant.connection, "provider": binding.provider, "note": binding.note,

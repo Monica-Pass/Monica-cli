@@ -27,7 +27,7 @@ Monica CLI 将服务 Token 保存在本地 MDBX3 加密保险库中。AI 通过 
 | 多语言界面 | 简体中文和 English，覆盖 TUI、表单、CLI 帮助和人工提示；自动选择语言，也可手动切换并保存。 |
 | WebDAV 保险库 | 登录 WebDAV、浏览远端 MDBX 文件、打开本地副本，并手动同步加密保险库。 |
 
-**当前服务能力包括 GitHub / GitLab 的 Issue 列表、详情和创建。** 支持官方服务，也支持人工配置自托管服务的 HTTPS API 地址。
+**支持 GitHub / GitLab 通用 API 代理，以及按仓库限制的 Issue 工具。** 完整服务授权后，分支、提交、MR/PR、评论、流水线等接口无需修改 Monica 即可调用；详见[通用 API 使用说明](docs/service-api.md)。 支持官方服务，也支持人工配置自托管服务的 HTTPS API 地址。
 
 ```mermaid
 flowchart LR
@@ -211,6 +211,8 @@ AI 可先调用 `monica_list_connections`，参数为 `{}`，获取当前授权�
 | 列出 Issue | `github_list_issues` | `gitlab_list_issues` |
 | 读取 Issue | `github_get_issue` | `gitlab_get_issue` |
 | 创建 Issue | `github_create_issue` | `gitlab_create_issue` |
+| 服务 API 读取 | `github_api_read` | `gitlab_api_read` |
+| 服务 API 写入 / GraphQL | `github_api_write` | `gitlab_api_write` |
 
 读取详情需要 `number`，GitLab 对应项目内的 Issue IID。创建需要明确的写权限，并提供 `title` 和 UUID 格式的 `request_id`；重试同一次创建时复用相同的 ID 和参数，避免重复创建。若返回 `write_outcome_unknown`，先核对远端结果。
 

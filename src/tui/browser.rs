@@ -41,9 +41,14 @@ pub(super) fn grant_status(grant: &Grant) -> Message {
 }
 
 pub(super) fn grant_access(grant: &Grant) -> Message {
-    if grant.operations.contains(&Operation::CreateIssue) {
+    if grant
+        .operations
+        .iter()
+        .any(|operation| operation.is_write())
+    {
         if grant.operations.contains(&Operation::ListIssues)
             || grant.operations.contains(&Operation::GetIssue)
+            || grant.operations.contains(&Operation::ApiRead)
         {
             Message::AccessReadWrite
         } else {

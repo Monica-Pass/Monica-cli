@@ -36,7 +36,10 @@ pub(crate) async fn execute(
     credential: &Credential,
     arguments: &Arguments,
 ) -> Result<Value> {
-    let url = request_url(binding, arguments)?;
+    let url = match arguments {
+        Arguments::Api(args) => args.url(&binding.api_base)?,
+        _ => request_url(binding, arguments)?,
+    };
     let mut headers = HeaderMap::new();
     headers.insert(
         USER_AGENT,
@@ -64,6 +67,32 @@ pub(crate) async fn execute(
         },
         authorization,
     );
+    if let Arguments::Api(args) = arguments {
+        let mut request = client
+            .request(
+                reqwest::Method::from_bytes(args.method.as_bytes())
+                    .map_err(|_| GatewayError::InvalidRequest)?,
+                url,
+            )
+            .headers(headers)
+            .headers(args.extra_headers()?);
+        if let Some(body) = &args.body {
+            request = request.json(body);
+        }
+        if let Some(body) = &args.body_base64 {
+            request = request.body(
+                base64::engine::general_purpose::STANDARD
+                    .decode(body)
+                    .map_err(|_| GatewayError::InvalidRequest)?,
+            );
+        }
+        let result = crate::service_api::response(request, &credential.token).await;
+        return if args.request_id.is_some() {
+            result.map_err(|_| GatewayError::WriteOutcomeUnknown)
+        } else {
+            result
+        };
+    }
     let request = match arguments {
         Arguments::Create(args) => {
             let body = match binding.provider {
@@ -201,6 +230,7 @@ pub(crate) fn reject_secret_value(value: &Value, token: &str) -> Result<()> {
 fn project_response(raw: Value, binding: &Connection, arguments: &Arguments) -> Result<Value> {
     let provider = binding.provider;
     match arguments {
+        Arguments::Api(_) => Err(GatewayError::InvalidRequest),
         Arguments::List(args) => {
             let rows = raw.as_array().ok_or(GatewayError::ResponseBlocked)?;
             if rows.len() > args.per_page as usize {

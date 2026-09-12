@@ -262,7 +262,13 @@ impl Fixture {
             capability_hash: capability_hash(&capability),
             connection: "work".to_owned(),
             connection_fingerprint: connection_fingerprint(&connection),
-            repositories: [REPOSITORY.to_owned()].into(),
+            repositories: [if operations.iter().any(|op| op.is_api()) {
+                "*"
+            } else {
+                REPOSITORY
+            }
+            .to_owned()]
+            .into(),
             operations: operations.iter().copied().collect(),
             issued_at: now,
             expires_at: now + 3600,

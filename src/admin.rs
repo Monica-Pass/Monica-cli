@@ -27,10 +27,10 @@ pub struct GrantOptions {
     pub name: String,
     #[arg(short = 'c', long)]
     pub connection: String,
-    /// Exact repository path; repeat for multiple repositories. No wildcards.
+    /// Exact repository paths, or * for an explicit service-wide API grant.
     #[arg(short = 'r', long = "repo", required = true)]
     pub repositories: Vec<String>,
-    /// Read-only by default. Repeat to explicitly allow create-issue.
+    /// Read-only Issue tools by default. Explicit api-read/api-write grants enable service API access.
     #[arg(long = "operation", visible_alias = "op", value_enum, default_values = ["list-issues", "get-issue"])]
     pub operations: Vec<Operation>,
     #[arg(short = 't', long, visible_alias = "ttl", default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=1440))]
@@ -461,9 +461,11 @@ pub fn issue_grant(store: &ConfigStore, options: &GrantOptions, password: &str) 
             .connections
             .get(&options.connection)
             .ok_or(GatewayError::NotFound)?;
-        for repository in &options.repositories {
-            validate_repository(repository, binding.provider)?;
-        }
+        crate::model::validate_grant_scope(
+            &options.repositories,
+            &options.operations,
+            binding.provider,
+        )?;
         let vault = Vault::open(&config.vault, password)?;
         // A human must prove that this binding is an available credential.
         let credential = vault.credential(binding, chrono::Utc::now().timestamp())?;

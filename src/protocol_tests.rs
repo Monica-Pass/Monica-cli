@@ -266,3 +266,69 @@ async fn protocol_mcp_codec_closes_on_oversized_frames() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn protocol_api_discovery_and_cli_bridge_preserve_authorization() {
+    use crate::protocol::McpBridge;
+    let mut fixture = Fixture::new(
+        Provider::Gitlab,
+        &[Operation::ApiRead, Operation::ApiWrite],
+        vec![Reply::json(json!({"username":"synthetic-user"}))],
+    )
+    .await;
+    let listener = fixture.broker_listener.take().unwrap();
+    let endpoint = format!("http://{}/", listener.local_addr().unwrap());
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let broker = tokio::spawn(serve_broker(fixture.gateway.clone(), listener, async {
+        let _ = stopped.await;
+    }));
+    let bridge = McpBridge::new(ClientConfig {
+        version: 1,
+        endpoint,
+        capability: fixture.capability.to_string(),
+    })
+    .unwrap();
+    let tools = bridge.discover().await.unwrap();
+    assert_eq!(tools.len(), 3);
+    let read = tools
+        .iter()
+        .find(|tool| tool.name == "gitlab_api_read")
+        .unwrap();
+    let write = tools
+        .iter()
+        .find(|tool| tool.name == "gitlab_api_write")
+        .unwrap();
+    assert_eq!(
+        read.annotations.as_ref().unwrap().read_only_hint,
+        Some(true)
+    );
+    assert_eq!(
+        write.annotations.as_ref().unwrap().read_only_hint,
+        Some(false)
+    );
+    assert_eq!(
+        write.annotations.as_ref().unwrap().destructive_hint,
+        Some(true)
+    );
+    assert_eq!(
+        write.input_schema["properties"]["repository"]["enum"],
+        json!(["*"])
+    );
+    let call = fixture.call(Operation::ApiRead, json!({"method":"GET","path":"user"}));
+    assert_eq!(
+        bridge.execute(call.clone()).await.unwrap()["body"]["username"],
+        "synthetic-user"
+    );
+    fixture
+        .store
+        .update(|config| {
+            let mut config = config.unwrap();
+            config.grants.clear();
+            Ok((config, ()))
+        })
+        .unwrap();
+    assert!(bridge.execute(call).await.is_err());
+    assert_eq!(fixture.upstream.requests().len(), 1);
+    stop.send(()).unwrap();
+    broker.await.unwrap().unwrap();
+}

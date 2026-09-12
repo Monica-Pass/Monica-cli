@@ -406,7 +406,7 @@ impl Form {
                     Field::text(
                         tr!(lang, OperationsLabel),
                         "list-issues,get-issue",
-                        "list-issues,get-issue,create-issue",
+                        "list-issues,get-issue,create-issue / api-read,api-write",
                     ),
                     Field::text(
                         tr!(lang, TtlLabel),
@@ -736,7 +736,9 @@ impl Form {
                     .map(str::to_owned)
                     .collect();
                 for repository in &repositories {
-                    validate_repository(repository, connection.provider)?;
+                    if repository != "*" {
+                        validate_repository(repository, connection.provider)?;
+                    }
                 }
                 let operations: Vec<_> = self
                     .text(3)
@@ -745,6 +747,8 @@ impl Form {
                         "list-issues" => Ok(Operation::ListIssues),
                         "get-issue" => Ok(Operation::GetIssue),
                         "create-issue" => Ok(Operation::CreateIssue),
+                        "api-read" => Ok(Operation::ApiRead),
+                        "api-write" => Ok(Operation::ApiWrite),
                         _ => Err(GatewayError::InvalidRequest),
                     })
                     .collect::<Result<_>>()?;

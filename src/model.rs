@@ -37,14 +37,32 @@ pub enum Operation {
     ListIssues,
     GetIssue,
     CreateIssue,
+    ApiRead,
+    ApiWrite,
 }
 
 impl Operation {
+    pub const ALL: [Self; 5] = [
+        Self::ListIssues,
+        Self::GetIssue,
+        Self::CreateIssue,
+        Self::ApiRead,
+        Self::ApiWrite,
+    ];
+    pub fn is_write(self) -> bool {
+        matches!(self, Self::CreateIssue | Self::ApiWrite)
+    }
+    pub fn is_api(self) -> bool {
+        matches!(self, Self::ApiRead | Self::ApiWrite)
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Self::ListIssues => "list_issues",
             Self::GetIssue => "get_issue",
             Self::CreateIssue => "create_issue",
+            Self::ApiRead => "api_read",
+            Self::ApiWrite => "api_write",
         }
     }
 
@@ -53,7 +71,7 @@ impl Operation {
     }
 
     pub fn from_tool(name: &str, provider: Provider) -> Result<Self> {
-        [Self::ListIssues, Self::GetIssue, Self::CreateIssue]
+        Self::ALL
             .into_iter()
             .find(|operation| operation.tool_name(provider) == name)
             .ok_or(GatewayError::PermissionDenied)
@@ -119,10 +137,16 @@ pub enum Arguments {
     List(ListIssuesArgs),
     Get(GetIssueArgs),
     Create(CreateIssueArgs),
+    Api(crate::service_api::ApiArgs),
 }
 
 impl Arguments {
     pub fn parse(operation: Operation, value: Value, provider: Provider) -> Result<Self> {
+        if operation.is_api() {
+            return Ok(Self::Api(crate::service_api::ApiArgs::parse(
+                operation, value,
+            )?));
+        }
         let parsed = match operation {
             Operation::ListIssues => {
                 let args: ListIssuesArgs =
@@ -156,6 +180,7 @@ impl Arguments {
                     .to_string();
                 Self::Create(args)
             }
+            Operation::ApiRead | Operation::ApiWrite => unreachable!(),
         };
         validate_repository(parsed.repository(), provider)?;
         Ok(parsed)
@@ -166,12 +191,14 @@ impl Arguments {
             Self::List(args) => &args.repository,
             Self::Get(args) => &args.repository,
             Self::Create(args) => &args.repository,
+            Self::Api(args) => &args.repository,
         }
     }
 
     pub fn request_id(&self) -> Option<&str> {
         match self {
             Self::Create(args) => Some(&args.request_id),
+            Self::Api(args) => args.request_id.as_deref(),
             _ => None,
         }
     }
@@ -244,6 +271,24 @@ pub fn validate_api_base(value: &str, provider: Provider) -> Result<Url> {
         return Err(GatewayError::InvalidConfig);
     }
     Ok(url)
+}
+
+/// Service-wide API grants are explicit and cannot masquerade as repository grants.
+pub fn validate_grant_scope(
+    repositories: &[String],
+    operations: &[Operation],
+    provider: Provider,
+) -> Result<()> {
+    if operations.iter().any(|op| op.is_api()) {
+        if repositories != ["*"] || operations.iter().any(|op| !op.is_api()) {
+            return Err(GatewayError::InvalidRequest);
+        }
+    } else {
+        for repository in repositories {
+            validate_repository(repository, provider)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

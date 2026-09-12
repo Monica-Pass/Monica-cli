@@ -4,9 +4,7 @@ use monica_pass_cli::admin::{self, BrokerSession, absolute, default_config};
 use monica_pass_cli::config::{ClientConfig, ConfigStore, read_json};
 use monica_pass_cli::error::{GatewayError, Result};
 use monica_pass_cli::i18n::{self, Language, Preferences};
-use monica_pass_cli::model::{
-    validate_api_base, validate_name, validate_note, validate_repository,
-};
+use monica_pass_cli::model::{validate_api_base, validate_name, validate_note};
 use monica_pass_cli::protocol::{McpBridge, serve_mcp};
 use monica_pass_cli::tr;
 use monica_pass_cli::webdav::{WebDavClient, WebDavProfile};
@@ -53,6 +51,17 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
     let path = cli.config.map(Ok).unwrap_or_else(default_config)?;
     let store = ConfigStore::new(absolute(&path)?);
     match command {
+        Command::Call { name, request } => {
+            let client = admin::grant_client(&store, &name)?;
+            let call = read_json(
+                &request,
+                monica_pass_cli::protocol::MAX_REQUEST_BYTES as u64,
+            )?;
+            let result = McpBridge::new(read_json(&client, 16 * 1024)?)?
+                .execute(call)
+                .await?;
+            output.result("call", result.clone(), Some(&result))?;
+        }
         Command::Databases => {
             let data = json!({"databases":monica_pass_cli::databases::list(&store)?});
             output.result("databases", data.clone(), Some(&data))?;
@@ -297,9 +306,11 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
                 .connections
                 .get(&options.connection)
                 .ok_or(GatewayError::NotFound)?;
-            for repository in &options.repositories {
-                validate_repository(repository, connection.provider)?;
-            }
+            monica_pass_cli::model::validate_grant_scope(
+                &options.repositories,
+                &options.operations,
+                connection.provider,
+            )?;
             let password = input.take(SecretField::Password, tr!(lang, PromptGrantPassword))?;
             admin::lock_broker(&store).await?;
             let path = admin::issue_grant(&store, &options, &password)?;

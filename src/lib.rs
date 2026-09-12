@@ -6,6 +6,7 @@ pub mod gateway;
 pub mod i18n;
 pub mod model;
 pub mod protocol;
+pub mod service_api;
 pub mod sync;
 pub mod tui;
 mod upstream;

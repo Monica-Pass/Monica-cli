@@ -646,3 +646,66 @@ fn a_cli_management_command_drains_a_running_broker_before_editing() {
     );
     assert!(broker.0.wait().unwrap().success());
 }
+
+#[test]
+fn service_api_grant_requires_explicit_wide_scope_and_call_is_discoverable() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cli(
+        directory.path(),
+        &[
+            "add",
+            "work",
+            "--repo",
+            "org/repo",
+            "--json",
+            "--secrets-stdin",
+        ],
+        Some(&credentials()),
+    ));
+    let invalid = cli(
+        directory.path(),
+        &[
+            "grant",
+            "invalid",
+            "--connection",
+            "work",
+            "--repo",
+            "org/repo",
+            "--operation",
+            "api-write",
+            "--json",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    );
+    failure(invalid, "invalid_request");
+    success(cli(
+        directory.path(),
+        &[
+            "grant",
+            "service",
+            "--connection",
+            "work",
+            "--repo",
+            "*",
+            "--operation",
+            "api-read",
+            "--operation",
+            "api-write",
+            "--json",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    ));
+    let config = ConfigStore::new(directory.path().join("gateway.json"))
+        .load()
+        .unwrap();
+    let grant = config.grants.iter().find(|g| g.name == "service").unwrap();
+    assert_eq!(
+        grant.operations,
+        [Operation::ApiRead, Operation::ApiWrite].into()
+    );
+    assert_eq!(grant.repositories, ["*".to_owned()].into());
+    let command = success(cli(directory.path(), &["commands", "call", "--json"], None));
+    assert_eq!(command["secret_input"]["required"], json!([]));
+}

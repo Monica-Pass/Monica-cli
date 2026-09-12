@@ -138,6 +138,13 @@ pub enum Command {
     /// Authorize exact repositories and operations. Requires the vault password.
     #[command(visible_alias = "g")]
     Grant(GrantOptions),
+    /// Execute a tool through an unlocked broker. Request file contains public ToolCall JSON.
+    Call {
+        /// Existing grant name.
+        name: String,
+        #[arg(long, value_name = "JSON_FILE")]
+        request: PathBuf,
+    },
     /// Revoke a grant. Subsequent calls using its capability will fail.
     #[command(visible_aliases = ["rv", "x"])]
     Revoke { name: String },
@@ -190,6 +197,7 @@ pub enum WebDavCommand {
 impl Command {
     pub fn name(&self) -> &'static str {
         match self {
+            Self::Call { .. } => "call",
             Self::Databases => "databases",
             Self::Use { .. } => "use",
             Self::Token { .. } => "token",

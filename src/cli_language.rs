@@ -158,6 +158,7 @@ pub(super) fn localize(mut command: Command, language: Language) -> Command {
         "init" => CliInitHelp,
         "connect" => CliConnectHelp,
         "grant" => CliGrantHelp,
+        "call" => CliCallHelp,
         "revoke" => CliRevokeHelp,
         "serve" => CliServeHelp,
         "lock" => CliLockHelp,

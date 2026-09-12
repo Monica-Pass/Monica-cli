@@ -27,7 +27,7 @@ Monica CLI stores service tokens in a local, encrypted MDBX3 vault. AI requests 
 | Interface languages | Simplified Chinese and English across the TUI, forms, CLI help and human-facing messages, with automatic selection and saved preferences. |
 | WebDAV vaults | Sign in to WebDAV, browse remote MDBX files, open local copies, and manually sync encrypted vaults. |
 
-**The available service operations are listing, reading, and creating GitHub / GitLab Issues.** Both hosted services and manually configured HTTPS API endpoints for self-hosted installations are supported.
+**GitHub / GitLab service API proxying is available alongside repository-scoped Issue tools.** Explicit service-wide grants support branches, commits, MR/PRs, comments, pipelines and other API endpoints without adding new Monica tools. See [service API usage](docs/service-api.md). Both hosted services and manually configured HTTPS API endpoints for self-hosted installations are supported.
 
 ```mermaid
 flowchart LR
@@ -211,6 +211,8 @@ The `repository` argument can be omitted when the grant covers exactly one repos
 | List Issues | `github_list_issues` | `gitlab_list_issues` |
 | Read an Issue | `github_get_issue` | `gitlab_get_issue` |
 | Create an Issue | `github_create_issue` | `gitlab_create_issue` |
+| Service API read | `github_api_read` | `gitlab_api_read` |
+| Service API write / GraphQL | `github_api_write` | `gitlab_api_write` |
 
 Reading an Issue requires `number`, which is the project-local Issue IID on GitLab. Creation requires explicit write permission, a `title`, and a UUID `request_id`. Reuse the same ID and arguments when retrying the same creation to avoid duplicates. If the result is `write_outcome_unknown`, check the remote repository before taking further action.
 
