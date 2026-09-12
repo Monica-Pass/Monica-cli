@@ -97,7 +97,7 @@ $staging = Join-Path $InstallDir ('.install-' + [guid]::NewGuid().ToString('N') 
 try {
     [System.IO.File]::Copy($sourcePath, $staging, $false)
     $version = & $staging --version
-    if ($LASTEXITCODE -ne 0 -or $version -notmatch '^monica-pass [0-9]+\.') {
+    if ($LASTEXITCODE -ne 0 -or $version -notmatch '^monica(?:-?pass)? [0-9]+\.') {
         throw 'The source executable did not pass its version check.'
     }
     if (Test-Path -LiteralPath $executable) {

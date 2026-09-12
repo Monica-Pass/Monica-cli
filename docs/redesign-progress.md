@@ -14,6 +14,8 @@ Implemented and tested:
 
 Verification: 82 Rust tests passed (64 library, 6 binary, 8 CLI management, 3 language, 1 portable), Clippy all-targets with warnings denied, and formatting. Synthetic home renderings at 70×20 and 100×30 were visually inspected. These are Ratatui buffer renderings, not native Windows Terminal screenshots.
 
+Release build passed. Installed to `D:/Apps/MonicaCLI` with existing data preserved. All three executable aliases passed version checks, and `monicapass --json commands` returned valid discovery JSON. Installer version validation now accepts the shorter program name.
+
 Scope and limitations:
 
 - [Token format](token-format.md) documents the native encrypted API-token payload and Android integration contract. Portable MDBX roundtrip is tested; Android's current login-only interface still needs a dedicated Token editor. This change does not claim Android UI support.
