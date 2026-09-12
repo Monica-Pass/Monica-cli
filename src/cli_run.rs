@@ -1,0 +1,421 @@
+use std::path::PathBuf;
+
+use monica_pass_cli::admin::{self, BrokerSession, absolute, default_config};
+use monica_pass_cli::config::{ClientConfig, ConfigStore, read_json};
+use monica_pass_cli::error::{GatewayError, Result};
+use monica_pass_cli::i18n::{self, Language, Preferences};
+use monica_pass_cli::model::{
+    validate_api_base, validate_name, validate_note, validate_repository,
+};
+use monica_pass_cli::protocol::{McpBridge, serve_mcp};
+use monica_pass_cli::tr;
+use monica_pass_cli::webdav::{WebDavClient, WebDavProfile};
+use serde_json::json;
+use zeroize::Zeroizing;
+
+use crate::cli::{Cli, Command, WebDavCommand};
+use crate::cli_input::{SecretField, SecretInput, required_fields};
+use crate::cli_output::Output;
+
+pub async fn run(cli: Cli, lang: Language) -> Result<()> {
+    let output = Output { json: cli.json };
+    let command = cli.command.unwrap_or(if cli.json || cli.non_interactive {
+        Command::Status
+    } else {
+        Command::Tui
+    });
+    // Stdio belongs exclusively to MCP in this branch. It must never read
+    // management secrets, print CLI JSON, or initialize the terminal manager.
+    if let Command::Mcp { client } = &command {
+        if cli.json || cli.secrets_stdin {
+            return Err(GatewayError::InvalidRequest);
+        }
+        return serve_mcp(&absolute(client)?).await;
+    }
+    if matches!(command, Command::Tui) && (cli.json || cli.non_interactive || cli.secrets_stdin) {
+        return Err(GatewayError::InvalidRequest);
+    }
+    let mut input = SecretInput::new(
+        cli.secrets_stdin,
+        cli.non_interactive || cli.json,
+        required_fields(command.name()),
+    )?;
+    if let Command::Commands { topic } = &command {
+        return crate::cli_discovery::run(topic, lang, output);
+    }
+    if let Command::Check {
+        client: Some(client),
+        ..
+    } = &command
+    {
+        return check(absolute(client)?, output).await;
+    }
+    let path = cli.config.map(Ok).unwrap_or_else(default_config)?;
+    let store = ConfigStore::new(absolute(&path)?);
+    match command {
+        Command::Library => {
+            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            admin::lock_broker(&store).await?;
+            let library = monica_pass_cli::library::read(&store, &password)?;
+            let data = json!(library);
+            output.result("library", data.clone(), Some(&data))?;
+        }
+        Command::Category { title, parent } => {
+            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            admin::lock_broker(&store).await?;
+            let id = monica_pass_cli::library::create_category(
+                &store,
+                &password,
+                &title,
+                parent.as_deref(),
+            )?;
+            let data = json!({"id":id,"title":title,"parent":parent});
+            output.result("category", data.clone(), Some(&data))?;
+        }
+        Command::Move { id, target } => {
+            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            admin::lock_broker(&store).await?;
+            monica_pass_cli::library::move_item(&store, &password, &id, &target)?;
+            let data = json!({"id":id,"target":target});
+            output.result("move", data.clone(), Some(&data))?;
+        }
+        Command::Tui => return monica_pass_cli::tui::run(store, lang).await,
+        Command::Language { language } => {
+            let saved = if let Some(choice) = language {
+                Preferences { language: choice }.save(&store)?;
+                choice
+            } else {
+                Preferences::load(&store)?.language
+            };
+            let effective = language
+                .map(|choice| choice.resolve(i18n::system_language()))
+                .unwrap_or(lang);
+            output.result(
+                "language",
+                json!({"saved": saved, "effective": effective.choice()}),
+                None,
+            )?;
+            if !output.json {
+                println!(
+                    "{}",
+                    if language.is_some() {
+                        tr!(effective, CliLanguageSaved, language = effective.name())
+                    } else {
+                        tr!(
+                            lang,
+                            LanguageCurrent,
+                            language = lang.name(),
+                            choice = saved.code()
+                        )
+                    }
+                );
+            }
+        }
+        Command::Add { options, serve } => {
+            options.validate()?;
+            let creating = !store.path.exists();
+            let password = input.take(
+                SecretField::Password,
+                if creating {
+                    tr!(lang, PromptNewPassword)
+                } else {
+                    tr!(lang, PromptPassword)
+                },
+            )?;
+            let confirmation = if creating {
+                Some(input.confirm(&password, tr!(lang, PromptConfirmPassword))?)
+            } else {
+                None
+            };
+            if let Some(confirmation) = &confirmation {
+                admin::validate_new_password(&password, confirmation)?;
+            }
+            let token = input.take(SecretField::Token, tr!(lang, PromptTokenForAi))?;
+            admin::lock_broker(&store).await?;
+            let path = admin::quick_add(
+                &store,
+                &options,
+                &password,
+                confirmation.as_deref().map(String::as_str),
+                token,
+            )?;
+            drop(confirmation);
+            let settings = admin::mcp_settings(&options.name, &path)?;
+            output.result("add", json!({"name":options.name, "client_file":path, "settings_file":path.with_extension("mcp.json"), "mcp":settings, "created_vault":creating}), Some(&settings))?;
+            output.note(tr!(
+                lang,
+                CliCreated,
+                name = options.name,
+                repositories = format!("{:?}", options.repositories),
+                access = if options.allow_write {
+                    tr!(lang, CliWriteAllowed)
+                } else {
+                    tr!(lang, CliReadOnly)
+                },
+                path = path.with_extension("mcp.json").display()
+            ));
+            if serve {
+                return run_broker(store, password, lang, output).await;
+            }
+            output.note(tr!(lang, CliNextServe));
+        }
+        Command::List => {
+            let data = admin::status(&store)?;
+            output.result(
+                "list",
+                json!({"connections":data["connections"]}),
+                Some(&data["connections"]),
+            )?;
+        }
+        Command::Show { name } => {
+            let data = admin::show_connection(&store, &name)?;
+            output.result("show", data.clone(), Some(&data))?;
+        }
+        Command::Note { name, note } => {
+            validate_name(&name)?;
+            validate_note(&note)?;
+            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            admin::lock_broker(&store).await?;
+            admin::update_note(&store, &name, &note, &password)?;
+            output.result("note", json!({"name":name, "note":note}), None)?;
+            output.note(tr!(lang, CliNoteUpdated, name = name));
+        }
+        Command::Open { vault } => {
+            output.note(tr!(lang, CliOpeningLocal));
+            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            admin::lock_broker(&store).await?;
+            let count = monica_pass_cli::sync::open_local(&store, &absolute(&vault)?, &password)?;
+            output.result(
+                "open",
+                json!({"connections":count, "vault":store.load()?.vault, "grants_reset":true}),
+                None,
+            )?;
+            output.note(tr!(lang, CliOpenedLocal, count = count));
+        }
+        Command::Webdav { command } => {
+            return webdav_command(store, command, lang, &mut input, output).await;
+        }
+        Command::Settings { name } => {
+            let data = admin::settings_for_grant(&store, &name)?;
+            output.result("settings", data.clone(), Some(&data["mcp"]))?;
+            output.note(tr!(
+                lang,
+                CliSettingsSaved,
+                path = data["settings_file"].as_str().unwrap_or_default()
+            ));
+        }
+        Command::Check {
+            name: Some(name),
+            client: None,
+        } => return check(admin::grant_client(&store, &name)?, output).await,
+        Command::Init { vault, port } => {
+            let path = match vault {
+                Some(path) => absolute(&path)?,
+                None => store.path.with_file_name("gateway.mdbx"),
+            };
+            if path.exists() || store.path.exists() {
+                return Err(GatewayError::AlreadyExists);
+            }
+            let password = input.take(SecretField::Password, tr!(lang, PromptNewPassword))?;
+            let confirmation = input.confirm(&password, tr!(lang, PromptConfirmPassword))?;
+            admin::initialize(&store, &path, port, &password, &confirmation)?;
+            output.result("init", json!({"vault":path, "config":store.path}), None)?;
+            output.note(tr!(
+                lang,
+                CliVaultCreated,
+                vault = path.display(),
+                config = store.path.display()
+            ));
+        }
+        Command::Connect {
+            name,
+            provider,
+            api_base,
+            note,
+        } => {
+            validate_name(&name)?;
+            validate_note(&note)?;
+            let base = validate_api_base(
+                api_base.as_deref().unwrap_or(provider.default_api_base()),
+                provider,
+            )?
+            .to_string();
+            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            let token = input.take(SecretField::Token, tr!(lang, PromptToken))?;
+            admin::lock_broker(&store).await?;
+            admin::add_connection(&store, &name, provider, &base, &note, &password, token)?;
+            output.result(
+                "connect",
+                json!({"name":name, "provider":provider, "api_base":base, "note":note}),
+                None,
+            )?;
+            output.note(tr!(lang, CliConnectionStored, name = name));
+        }
+        Command::Grant(options) => {
+            validate_name(&options.name)?;
+            let config = store.load()?;
+            let connection = config
+                .connections
+                .get(&options.connection)
+                .ok_or(GatewayError::NotFound)?;
+            for repository in &options.repositories {
+                validate_repository(repository, connection.provider)?;
+            }
+            let password = input.take(SecretField::Password, tr!(lang, PromptGrantPassword))?;
+            admin::lock_broker(&store).await?;
+            let path = admin::issue_grant(&store, &options, &password)?;
+            drop(password);
+            let settings = admin::mcp_settings(&options.name, &path)?;
+            output.result(
+                "grant",
+                json!({"name":options.name, "client_file":path, "mcp":settings}),
+                Some(&settings),
+            )?;
+            output.note(tr!(lang, CliClientSaved, path = path.display()));
+        }
+        Command::Revoke { name } => {
+            admin::revoke(&store, &name)?;
+            output.result("revoke", json!({"name":name, "revoked":true}), None)?;
+            output.note(tr!(lang, CliGrantRevoked, name = name));
+        }
+        Command::Serve => {
+            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            admin::lock_broker(&store).await?;
+            return run_broker(store, password, lang, output).await;
+        }
+        Command::Lock => {
+            if !store.path.is_file() {
+                return Err(GatewayError::NotFound);
+            }
+            admin::lock_broker(&store).await?;
+            output.result("lock", json!({"locked":true}), None)?;
+            output.note(tr!(lang, BrokerLockedHint));
+        }
+        Command::Status => {
+            let data = admin::status(&store)?;
+            output.result("status", data.clone(), Some(&data))?;
+        }
+        Command::Mcp { .. } | Command::Check { .. } | Command::Commands { .. } => {
+            return Err(GatewayError::InvalidRequest);
+        }
+    }
+    Ok(())
+}
+
+async fn check(path: PathBuf, output: Output) -> Result<()> {
+    let config: ClientConfig = read_json(&path, 16 * 1024)?;
+    let tools = McpBridge::new(config)?.discover().await?;
+    output.result(
+        "check",
+        json!({"tools":tools}),
+        Some(&json!({"ok":true,"tools":tools})),
+    )
+}
+
+async fn run_broker(
+    store: ConfigStore,
+    password: Zeroizing<String>,
+    lang: Language,
+    output: Output,
+) -> Result<()> {
+    let mut session = BrokerSession::start(store.clone(), password).await?;
+    let address = store.load()?.listen;
+    output.event(
+        "serve",
+        "ready",
+        json!({"listen":address, "session_seconds":300}),
+    )?;
+    output.note(tr!(lang, CliBrokerReady, address = address));
+    output.note(tr!(lang, CliSessionLifetime));
+    tokio::select! {
+        result = session.wait() => result?,
+        _ = tokio::signal::ctrl_c() => session.stop().await?,
+    }
+    output.event("serve", "stopped", json!({"locked":true}))?;
+    output.note(tr!(lang, CliBrokerStopped));
+    Ok(())
+}
+
+async fn webdav_command(
+    store: ConfigStore,
+    command: WebDavCommand,
+    lang: Language,
+    input: &mut SecretInput,
+    output: Output,
+) -> Result<()> {
+    if matches!(command, WebDavCommand::Status) {
+        let profile = WebDavProfile::load(&store)?;
+        let binding = if store.path.exists() {
+            store.load()?.webdav
+        } else {
+            None
+        };
+        let safe_remote_replace = binding.as_ref().map(|binding| binding.etag.is_some());
+        let data = json!({"profile":profile, "sync":binding, "password_saved":false, "safe_remote_replace":safe_remote_replace});
+        return output.result("webdav status", data.clone(), Some(&data));
+    }
+    let profile = match &command {
+        WebDavCommand::Login { url, username } => WebDavProfile::new(url, username)?,
+        WebDavCommand::Sync => {
+            store
+                .load()?
+                .webdav
+                .ok_or(GatewayError::RemoteNotConfigured)?
+                .profile
+        }
+        _ => WebDavProfile::load(&store)?.ok_or(GatewayError::InvalidWebDav)?,
+    };
+    let client = WebDavClient::new(
+        profile,
+        input.take(SecretField::WebDavPassword, tr!(lang, PromptWebDavPassword))?,
+    )?;
+    match command {
+        WebDavCommand::Login { .. } => {
+            client.list("").await?;
+            client.profile.save(&store)?;
+            output.result(
+                "webdav login",
+                json!({"profile":client.profile,"password_saved":false}),
+                None,
+            )?;
+            output.note(tr!(lang, CliLoginVerified));
+        }
+        WebDavCommand::List { path } => {
+            let entries = client.list(&path).await?;
+            let data = json!({"path":path,"entries":entries});
+            output.result("webdav list", data.clone(), Some(&data))?;
+        }
+        WebDavCommand::Open { path } => {
+            let password = input.take(SecretField::Password, tr!(lang, PromptRemotePassword))?;
+            admin::lock_broker(&store).await?;
+            let count =
+                monica_pass_cli::sync::open_remote(&store, &client, &path, &password).await?;
+            output.result(
+                "webdav open",
+                json!({"connections":count,"vault":store.load()?.vault,"grants_reset":true}),
+                None,
+            )?;
+            output.note(tr!(lang, CliOpenedRemote, count = count));
+        }
+        WebDavCommand::Publish { path } => {
+            let password = input.take(SecretField::Password, tr!(lang, PromptLocalPassword))?;
+            admin::lock_broker(&store).await?;
+            let result = monica_pass_cli::sync::publish(&store, &client, &path, &password).await?;
+            output.result("webdav publish", json!({"result":result}), None)?;
+            if !output.json {
+                println!("{}", lang.sync_result(result));
+            }
+        }
+        WebDavCommand::Sync => {
+            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            admin::lock_broker(&store).await?;
+            let result = monica_pass_cli::sync::synchronize(&store, &client, &password).await?;
+            output.result("webdav sync", json!({"result":result}), None)?;
+            if !output.json {
+                println!("{}", lang.sync_result(result));
+            }
+        }
+        WebDavCommand::Status => unreachable!("status does not need a login"),
+    }
+    Ok(())
+}

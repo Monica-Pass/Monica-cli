@@ -1,0 +1,60 @@
+[package]
+name = "monica-pass-cli"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT OR Apache-2.0"
+description = "Local credential gateway for AI tools, backed by MDBX3"
+
+[workspace]
+resolver = "2"
+
+[[bin]]
+name = "monica-pass"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.29"
+futures-util = { version = "0.3", features = ["sink"] }
+hex = "0.4"
+mdbx-core = { path = "../mdbx/crates/mdbx-core" }
+mdbx-storage = { path = "../mdbx/crates/mdbx-storage", default-features = false, features = ["core"] }
+rand = "0.8"
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
+roxmltree = "0.21"
+percent-encoding = "2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+rmcp = { version = "=3.3.0", default-features = false, features = ["server", "transport-io"] }
+rpassword = "7.4"
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2.6"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "io-std", "io-util", "time", "sync", "fs"] }
+tokio-util = { version = "0.7", features = ["codec", "io"] }
+url = { version = "2", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+zeroize = { version = "1.8", features = ["derive"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Memory"] }
+
+[dev-dependencies]
+rcgen = "0.14"
+rmcp = { version = "=3.3.0", default-features = false, features = ["client", "server", "transport-io"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
