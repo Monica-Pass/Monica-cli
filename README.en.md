@@ -1,8 +1,8 @@
 # Monica CLI
 
-The database and nested-category home redesign is in progress. Screenshots below show the earlier management interface. See [redesign status](docs/redesign-progress.md) and [source checkout instructions](docs/source-checkout.md).
+**English** · [简体中文](README.md)
 
-[简体中文](README.md) · **English**
+[Implementation status](docs/redesign-progress.md) · [Source dependencies](docs/source-checkout.md) · [Token / Android format](docs/token-format.md)
 
 **A local credential gateway that lets AI use services within the permissions you grant.**
 
@@ -10,9 +10,9 @@ Monica CLI stores service tokens in a local, encrypted MDBX3 vault. AI requests 
 
 [Quick start](#quick-start) · [Connect an AI client](#connect-an-ai-client) · [WebDAV vaults](#webdav-vaults) · [Build from source](#build-from-source) · [GitHub](https://github.com/Monica-Pass/Monica-cli)
 
-![Monica CLI terminal manager in English](docs/images/manager.en.png)
+![Monica CLI database and category home](docs/images/home.png)
 
-*English interface with example data. Purpose notes retain their original language.*
+*Database and nested-category home rendered from synthetic test data. The interface supports English and Simplified Chinese.*
 
 ## What Monica does
 
@@ -40,47 +40,32 @@ flowchart LR
 
 ## Quick start
 
-The executable is named `monica-pass`, or `monica-pass.exe` on Windows. Add it to your `PATH` or run it using its file path. See [Build from source](#build-from-source) for compilation instructions.
+On Windows, build and run `./scripts/install.ps1 -InstallDir D:\Apps\MonicaCLI`. The installer adds `monica`, `monicapass`, and `monica-pass` to your user PATH. Open a new terminal, then run `monica`. Updating preserves the `data` directory; close Monica before updating.
 
-After building on Windows, install it to a directory of your choice with PowerShell:
+The default home shows databases, nested categories, and entries:
 
-```powershell
-.\scripts\install.ps1 -InstallDir D:\Apps\MonicaCLI
-```
+1. Press `Enter` to create your first database, or `o` to open an MDBX file. Its password protects the encrypted database.
+2. Press `Enter` to browse. Use `n` to create a category and `c` to save a service Token in the selected category.
+3. Press `F3` to open settings when you need AI grants, MCP configuration, or WebDAV sync.
 
-The installer keeps the executable and `data` directory together, adds the program to your user `PATH`, and creates a Start menu shortcut. Open a new terminal to use `monica-pass`. Run the same command to update the program while preserving vaults and configuration. Use `-Source` to select a built executable, or `-NoPath` and `-NoShortcut` to skip those settings.
-
-```sh
-monica-pass
-```
-
-Launching without a subcommand opens the terminal manager. To connect your first service:
-
-1. **Press `c` to add a connection.** For example, use `work-github` as its name, `your-org/your-repo` as the repository, and “Track product issues and feature requests” as its purpose. GitHub is the default provider; GitLab is also available.
-2. **Enter the token and master password, then press `Ctrl+S`.** Sensitive fields use hidden input. On first use, Monica creates a vault. There is no minimum password length; the password must be nonempty and both entries must match. Saving creates a read-only grant, generates the MCP configuration, and unlocks the gateway.
-3. **Add the generated MCP configuration to your AI client.** Keep the Monica terminal that unlocked the gateway running while AI uses the grant. Press `m` to view the configuration again, or `p` to check tool discovery.
-
-A quick-create grant lasts **60 minutes** by default. Each unlock session lasts **5 minutes**, after which the gateway stops and the vault locks. Press `u` in the TUI to unlock it again. Unlocking does not extend the grant's expiry; create a new grant when it expires.
-
-### Common shortcuts
-
-| Action | Keys |
+| Home action | Key |
 | --- | --- |
-| Switch section / pane | `1`–`5` / `Tab`, `Shift+Tab` |
-| Move and open | `h/j/k/l`, arrow keys, `Enter` |
-| Filter the current list | `/`; `Esc` clears the filter in normal mode |
-| Quick add / edit purpose | `c` / `e` |
-| Create / open a local vault | `n` / `o` |
-| Create / revoke an AI grant | `a` / `x` |
-| View MCP configuration / check tools | `m` / `p` |
-| Unlock / lock | `u` / `L` |
-| Help for the current page / all commands / latest result | `?` / `5` / `!` |
-| Switch language and save | `F2` |
-| Enter a command / quit | `:` / `q` |
+| Choose database / create another | `d`, then `Enter` / `n` |
+| Open category / parent | `Enter` / `h` or `Backspace` |
+| Switch category tree and entries | `Tab` |
+| New category / service Token | `n` / `c` |
+| Rename category / replace Token | `e` |
+| Move to another category | `m` |
+| Open an MDBX file | `o` |
+| Clear cached metadata and lock | `L` |
+| Home / settings | `F3` |
+| Language / quit | `F2` / `q` |
 
-In a form, use `Tab` to move between fields and `Ctrl+S` to save. Press `Esc` once to return to the form's normal mode, then again to cancel.
+In edit forms, `Tab` moves between fields and `Ctrl+S` opens a separate database-password step. `Esc` in that step returns to the draft and clears the password. Each management operation unlocks the database only while it runs; summary metadata is cached for at most five minutes. This is separate from the AI broker's five-minute unlock session.
 
-Use a UTF-8 terminal with at least **70 columns × 20 rows**. A [Nerd Font](https://www.nerdfonts.com/) displays the full icon set; enter `:icons` to switch to plain characters. Windows Terminal is recommended on Windows.
+In settings, press `c` for guided service setup, or `a` to configure an explicit grant. Grants have **no expiry by default**, and remain revocable. Leave the expiry field blank (CLI: `--ttl 0`) for indefinite authorization, or enter 1–1440 minutes. An indefinite grant still requires an active unlocked broker. Token replacement revokes existing grants for that connection.
+
+Use a UTF-8 terminal at least **70 columns × 20 rows**. Settings retain `/` filtering, `1`–`5` page navigation and `:` commands.
 
 ### Interface language
 

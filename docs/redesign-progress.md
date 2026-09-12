@@ -1,23 +1,22 @@
-# Database-first redesign — work in progress
+# Database-first redesign
 
-Full requested scope remains: executable aliases; clear database/category home with nested folders; separate settings; coherent unlock flow; optional unlimited grants; dedicated Token fields compatible with Android; CLI parity; visual verification; installation after verification.
+Implemented and tested:
 
-Implemented in current source:
+- Launch aliases: `monica`, `monicapass`, `monica-pass` through the Windows installer.
+- Default database/category/entry home; nested categories, tree navigation, category rename, entry/category moves. `F3` opens the explicit settings pages.
+- `d` lists current and previous databases; `n` creates another database without overwriting the previous one. Switching verifies its password and discards old grants.
+- Token creation targets the selected category. Dedicated masked Token replacement preserves the native entry ID and revokes existing grants before replacing the encrypted payload.
+- Shared CLI operations: `databases/db`, `use`, `library/tree`, `category/mkdir`, `rename-category`, `move/mv`, `connect --category`, `token`.
+- Grant expiry is optional: blank or zero means no expiry, including quick setup. Authorization remains revocable and requires an unlocked broker session.
+- Edit forms separate business fields from the database-password confirmation. Esc from confirmation preserves the draft and clears the password. Every management operation closes its engine session; only summary metadata is cached for up to five minutes. Passwords are not cached to simulate an unlocked vault.
+- Settings Token creation remains in settings after saving; the WebDAV/MCP end-to-end test covers this navigation regression.
+- EN/ZH quick-start documentation reflects the home/settings split and indefinite grant default.
 
-- `library.rs`: bounded unlocked metadata browsing, native nested categories and moves; shared CLI `library/tree`, `category/mkdir`, `move/mv`.
-- `tui/home.rs`: default library page with category navigation, entry details, locked state, explicit F3 settings; n category, m move, c token.
-- Native category persistence and cycle rejection test passes. Home navigation/three terminal sizes test passes. 14 settings TUI tests pass after explicit settings entry in fixtures.
-- Forms have three-row field spacing and focused hints. New category/move forms currently still ask for password; coherent unlock workflow remains required.
-- Unlimited grants use expires_at=0. Existing expiry validation/authentication/UI updated; CLI help corrected. Dedicated unlimited grant regression tests still needed.
-- Installer copies executable aliases and detects all alias processes. Do not kill running user apps to install. Previous installation occurred before current home changes: source is ahead of D:/Apps/MonicaCLI.
-- Token records remain encrypted native api-token objects with monica.gateway.credential.v1 schema and token field. Inventory now scans API tokens in all native categories so moved tokens can recover. Verify move + reopen + gateway recovery explicitly.
+Verification: 82 Rust tests passed (64 library, 6 binary, 8 CLI management, 3 language, 1 portable), Clippy all-targets with warnings denied, and formatting. Synthetic home renderings at 70×20 and 100×30 were visually inspected. These are Ratatui buffer renderings, not native Windows Terminal screenshots.
 
-Outstanding:
+Scope and limitations:
 
-- Multi-database selection/registration, real interactive category tree focus, search, rename; preserve identities across refresh and mutation.
-- Unlock flow separate from editing, avoiding repeated password fields while respecting engine session policy; home cache must be cleared on lock/expiry/vault change. Current browsing unlock closes engine and retains metadata for 300 seconds, so UI must not imply a persistent unlocked engine session.
-- Token creation in selected category, editing Token with dedicated field, Android display/roundtrip adapter in current Android MDBX client. Android source located under Monica-main/Monica for Android; inspect its AGENTS.md before editing. Current Mdbx2Repository uses groupId as parent ID.
-- Polish visual hierarchy and modal behavior; render actual screenshots using existing scripts/render_tui.py and tests harness. Current home is an initial implementation, not approved final design.
-- Verify complete fmt/clippy/tests/release after final changes, update README/automation docs and AGENTS to match actual behavior, then install when program is closed (never force-stop user UI).
-
-Last checks: cargo check passed; clippy all-targets -D warnings passed before last small edits; native nested category persistence test passed; 14 settings tests passed; home test passed. No claim of final completion.
+- [Token format](token-format.md) documents the native encrypted API-token payload and Android integration contract. Portable MDBX roundtrip is tested; Android's current login-only interface still needs a dedicated Token editor. This change does not claim Android UI support.
+- Browsing caches public summaries, not an open management session. Saving requires a fresh database password. Cancelling password confirmation preserves the draft; an operation failure after submission currently closes the form.
+- Settings support search/filtering; the home uses category navigation.
+- Install only after the application exits; never force-stop a user's session.

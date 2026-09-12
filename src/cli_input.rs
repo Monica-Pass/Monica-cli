@@ -13,10 +13,9 @@ pub const MAX_SECRET_BYTES: usize = 16 * 1024;
 pub fn required_fields(command: &str) -> &'static [SecretField] {
     use SecretField::*;
     match command {
-        "add" | "connect" => &[Password, Token],
-        "init" | "note" | "open" | "grant" | "serve" | "library" | "category" | "move" => {
-            &[Password]
-        }
+        "add" | "connect" | "token" => &[Password, Token],
+        "init" | "note" | "open" | "grant" | "serve" | "library" | "category" | "move"
+        | "rename-category" | "use" => &[Password],
         "webdav login" | "webdav list" => &[WebDavPassword],
         "webdav open" | "webdav publish" | "webdav sync" => &[Password, WebDavPassword],
         _ => &[],

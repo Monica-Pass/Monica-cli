@@ -22,12 +22,30 @@ mod tests {
         let other = vault.create_category("Archive", None).unwrap();
         assert!(vault.move_library_item(&root, &child).is_err());
         vault.move_library_item(&child, &other).unwrap();
+        vault.rename_category(&child, "Renamed").unwrap();
         vault.lock().unwrap();
         assert!(vault.library().is_err());
         drop(vault);
         let reopened = Vault::open(&path, "test-password").unwrap();
         let library = reopened.library().unwrap();
         assert_eq!(library.categories.len(), 3);
+        assert_eq!(
+            library
+                .categories
+                .iter()
+                .find(|c| c.id == child)
+                .unwrap()
+                .title,
+            "Renamed"
+        );
+        let tree = library.category_tree();
+        assert_eq!(
+            tree.iter()
+                .map(|(c, _)| c.title.as_str())
+                .collect::<Vec<_>>(),
+            ["Archive", "Renamed", "Work"]
+        );
+        assert_eq!(tree[1].1, 1);
         assert_eq!(
             library
                 .categories
@@ -65,7 +83,62 @@ pub struct Entry {
     pub title: String,
     pub kind: String,
 }
+
+impl Library {
+    /// Parent-first display order, bounded even for malformed imported cycles.
+    pub fn category_tree(&self) -> Vec<(&Category, usize)> {
+        let mut result = Vec::new();
+        let mut visited = std::collections::BTreeSet::new();
+        let mut stack: Vec<_> = self
+            .categories
+            .iter()
+            .rev()
+            .filter(|c| {
+                c.parent
+                    .as_ref()
+                    .is_none_or(|id| !self.categories.iter().any(|p| &p.id == id))
+            })
+            .map(|c| (c, 0))
+            .collect();
+        loop {
+            while let Some((category, depth)) = stack.pop() {
+                if !visited.insert(category.id.as_str()) {
+                    continue;
+                }
+                result.push((category, depth));
+                stack.extend(
+                    self.categories
+                        .iter()
+                        .rev()
+                        .filter(|c| c.parent.as_deref() == Some(category.id.as_str()))
+                        .map(|c| (c, depth + 1)),
+                );
+            }
+            match self
+                .categories
+                .iter()
+                .find(|c| !visited.contains(c.id.as_str()))
+            {
+                Some(category) => stack.push((category, 0)),
+                None => break,
+            }
+        }
+        result
+    }
+}
 impl Vault {
+    pub fn rename_category(&self, id: &str, title: &str) -> Result<()> {
+        if title.trim().is_empty() || title.len() > 256 || title.chars().any(char::is_control) {
+            return Err(GatewayError::InvalidRequest);
+        }
+        if !self.library()?.categories.iter().any(|c| c.id == id) {
+            return Err(GatewayError::NotFound);
+        }
+        self.library_write(WriteCommand::RenameProject {
+            project_id: id.to_owned(),
+            title: title.to_owned(),
+        })
+    }
     pub fn library(&self) -> Result<Library> {
         let connection = self
             .runtime
@@ -202,6 +275,16 @@ pub fn read(store: &ConfigStore, password: &str) -> Result<Library> {
     let _guard = store.acquire_broker_lock()?;
     let vault = Vault::open(&store.load()?.vault, password)?;
     let result = vault.library();
+    vault.lock()?;
+    result
+}
+
+pub fn rename_category(store: &ConfigStore, password: &str, id: &str, title: &str) -> Result<()> {
+    crate::upstream::reject_secret_value(&serde_json::json!([title]), password)
+        .map_err(|_| GatewayError::SensitiveMetadata)?;
+    let _guard = store.acquire_broker_lock()?;
+    let vault = Vault::open(&store.load()?.vault, password)?;
+    let result = vault.rename_category(id, title);
     vault.lock()?;
     result
 }

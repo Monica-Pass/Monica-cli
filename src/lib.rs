@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod config;
+pub mod databases;
 pub mod error;
 pub mod gateway;
 pub mod i18n;

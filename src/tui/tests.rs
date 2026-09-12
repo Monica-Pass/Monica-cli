@@ -2,6 +2,70 @@ use super::*;
 use ratatui::backend::TestBackend;
 
 #[test]
+fn editing_defers_database_password_and_escape_preserves_draft() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = App::new(
+        ConfigStore::new(directory.path().join("gateway.json")),
+        Language::En,
+    );
+    app.show_form(Kind::Category(None));
+    app.paste("Work projects");
+    let edit = render(&mut app, 70, 20);
+    assert!(edit.contains("Work projects"));
+    assert!(!edit.contains("Master password"));
+    app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    assert!(app.pending.is_none());
+    assert!(render(&mut app, 70, 20).contains("Unlock to save"));
+    app.paste("synthetic-password");
+    assert!(!render(&mut app, 70, 20).contains("synthetic-password"));
+    app.key(key(KeyCode::F(2)));
+    assert!(matches!(&app.mode, Mode::Form(form) if form.authenticating));
+    app.key(key(KeyCode::Esc));
+    let Mode::Form(form) = &app.mode else {
+        panic!("draft lost")
+    };
+    assert!(!form.authenticating);
+    assert_eq!(form.fields[0].input.value.as_str(), "Work projects");
+    assert!(form.fields[1].input.value.is_empty());
+    assert!(app.pending.is_none());
+}
+
+#[test]
+fn database_picker_targets_selected_database_without_empty_fallback() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = App::new(
+        ConfigStore::new(directory.path().join("gateway.json")),
+        Language::ZhCn,
+    );
+    app.databases = vec![
+        crate::databases::Database {
+            id: "current".into(),
+            name: "个人".into(),
+            path: directory.path().join("personal.mdbx"),
+            current: true,
+        },
+        crate::databases::Database {
+            id: "saved-id".into(),
+            name: "工作".into(),
+            path: directory.path().join("work.mdbx"),
+            current: false,
+        },
+    ];
+    app.database_picker = true;
+    app.key(key(KeyCode::Down));
+    let screen = render(&mut app, 100, 30).replace(' ', "");
+    assert!(screen.contains("个人") && screen.contains("工作"));
+    app.key(key(KeyCode::Enter));
+    assert!(
+        matches!(&app.mode, Mode::Form(Form { kind: Kind::SwitchDatabase { id, name }, .. }) if id == "saved-id" && name == "工作")
+    );
+    app.mode = Mode::Normal;
+    app.databases.clear();
+    app.key(key(KeyCode::Enter));
+    assert!(matches!(app.mode, Mode::Normal));
+}
+
+#[test]
 fn home_browses_nested_categories_and_opens_settings_explicitly() {
     let directory = tempfile::tempdir().unwrap();
     let mut app = App::new(
@@ -38,6 +102,10 @@ fn home_browses_nested_categories_and_opens_settings_explicitly() {
         assert!(screen.contains("GitLab"));
         assert!(screen.contains("Token"));
         assert!(!screen.contains("create-issue"));
+        capture_buffer(
+            &format!("home-{width}x{height}"),
+            &draw(&mut app, width, height),
+        );
     }
     app.key(key(KeyCode::Char('h')));
     assert_eq!(app.category.as_deref(), Some("root"));
@@ -45,6 +113,35 @@ fn home_browses_nested_categories_and_opens_settings_explicitly() {
     assert!(!app.home);
     app.key(key(KeyCode::F(3)));
     assert!(app.home);
+    app.key(key(KeyCode::Tab));
+    assert!(app.home_tree_focus);
+    app.key(key(KeyCode::Down));
+    app.key(key(KeyCode::Down));
+    app.key(key(KeyCode::Char('e')));
+    assert!(
+        matches!(&app.mode, Mode::Form(Form { kind: Kind::RenameCategory { id, .. }, .. }) if id == "child")
+    );
+    app.mode = Mode::Normal;
+    app.key(key(KeyCode::Enter));
+    assert_eq!(app.category.as_deref(), Some("child"));
+    assert!(!app.home_tree_focus);
+    app.home_restore = Some((
+        Some("child".into()),
+        Some("token".into()),
+        Some("child".into()),
+    ));
+    let mut updated = app.library.clone().unwrap();
+    updated.categories[1].title = "新分类名".into();
+    updated.categories.reverse();
+    app.apply(Outcome::Library(updated));
+    assert_eq!(app.category.as_deref(), Some("child"));
+    assert_eq!(app.home_rows()[app.home_selected].0, "token");
+    assert_eq!(
+        app.library.as_ref().unwrap().category_tree()[app.home_tree_selected - 1]
+            .0
+            .id,
+        "child"
+    );
 }
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -922,6 +1019,7 @@ fn fill(app: &mut App, values: &[&str]) -> String {
         field.input.insert(value);
     }
     form.selected = form.fields.len() - 1;
+    form.authenticating = form.auth_field.is_some();
     render(app, 120, 38)
 }
 

@@ -233,6 +233,16 @@ impl Vault {
         binding: &Connection,
         note: &str,
     ) -> Result<Connection> {
+        self.edit_credential(name, binding, note, None)
+    }
+
+    pub(crate) fn edit_credential(
+        &self,
+        name: &str,
+        binding: &Connection,
+        note: &str,
+        token: Option<Zeroizing<String>>,
+    ) -> Result<Connection> {
         validate_name(name)?;
         validate_note(note)?;
         let (mut stored, project_id) =
@@ -240,6 +250,13 @@ impl Vault {
         reject_secret_value(&serde_json::json!([name, note]), &stored.token)
             .map_err(|_| GatewayError::SensitiveMetadata)?;
         stored.note = note.to_owned();
+        if let Some(token) = token {
+            validate_token(&token)?;
+            reject_secret_value(&serde_json::json!([name, note, &binding.api_base]), &token)
+                .map_err(|_| GatewayError::SensitiveMetadata)?;
+            stored.token.zeroize();
+            stored.token = token.to_string();
+        }
         let payload_json =
             serde_json::to_string(&stored).map_err(|_| GatewayError::StateUnavailable)?;
         let connection = self

@@ -2,7 +2,7 @@
 
 **简体中文** · [English](README.en.md)
 
-当前源码正在进行数据库与嵌套分类主页改造，下面的截图展示此前的管理界面。[改造进度](docs/redesign-progress.md) · [克隆与构建依赖](docs/source-checkout.md)
+[实现与验证](docs/redesign-progress.md) · [克隆与构建依赖](docs/source-checkout.md) · [Token 与 Android 数据约定](docs/token-format.md)
 
 **面向 AI 的本地凭据代理，让 AI 在你的授权范围内使用服务。**
 
@@ -10,9 +10,9 @@ Monica CLI 将服务 Token 保存在本地 MDBX3 加密保险库中。AI 通过 
 
 [快速开始](#快速开始) · [接入 AI](#接入-ai) · [WebDAV 保险库](#webdav-保险库) · [从源码构建](#从源码构建) · [GitHub](https://github.com/Monica-Pass/Monica-cli)
 
-![Monica CLI 终端管理界面](docs/images/manager.png)
+![Monica CLI 终端管理界面](docs/images/home.png)
 
-*连接列表与用途预览，图中均为示例数据。*
+*数据库与嵌套分类主页；由合成测试数据渲染。*
 
 ## 能做什么
 
@@ -40,47 +40,32 @@ flowchart LR
 
 ## 快速开始
 
-可执行文件名为 `monica-pass`，Windows 下为 `monica-pass.exe`。获取程序后将其加入 `PATH`，或直接运行文件所在路径；编译方法见[从源码构建](#从源码构建)。
+Windows 构建后运行 `./scripts/install.ps1 -InstallDir D:\Apps\MonicaCLI` 安装。安装器会将 `monica`、`monicapass`、`monica-pass` 三个入口加入用户 PATH。打开新终端后输入 `monica` 即可启动。更新保留 `data` 数据目录；更新前请退出 Monica。
 
-Windows 从源码构建后，可用 PowerShell 安装到指定目录：
+默认主页按数据库、嵌套分类和条目组织内容：
 
-```powershell
-.\scripts\install.ps1 -InstallDir D:\Apps\MonicaCLI
-```
+1. 首次按 `Enter` 创建数据库，或按 `o` 打开 MDBX 文件。数据库密码用于保护其中的加密内容。
+2. 按 `Enter` 解锁查看；用 `n` 创建分类，用 `c` 在当前分类保存服务 Token。
+3. 需要配置 AI 授权、MCP 或 WebDAV 同步时，按 `F3` 打开设置。
 
-安装器将程序和 `data` 数据目录放在一起，设置当前用户的 `PATH` 并创建开始菜单快捷方式。打开新终端后即可使用 `monica-pass`；以后用同一命令更新程序，会保留已有保险库和配置。也可用 `-Source` 指定已构建的 exe，或用 `-NoPath`、`-NoShortcut` 跳过对应设置。
-
-```sh
-monica-pass
-```
-
-不带子命令启动时会进入管理 TUI。首次使用按下面三步完成接入：
-
-1. **按 `c` 添加连接。** 例如名称填写 `work-github`，仓库填写 `your-org/your-repo`，用途写“跟踪产品问题与功能建议”。服务默认 GitHub，也可选择 GitLab。
-2. **填写 Token 和主密码，按 `Ctrl+S` 保存。** 敏感字段隐藏输入；首次使用会自动创建保险库，主密码不设最小长度，只需非空且两次输入一致。保存后会创建只读授权、生成 MCP 配置并解锁代理。
-3. **把生成的 MCP 配置加入 AI 客户端。** 保持 Monica 的解锁终端运行，即可让 AI 使用这份授权。之后可按 `m` 再次查看配置，按 `p` 检查工具发现。
-
-快速创建的授权默认有效 **60 分钟**。一次解锁会话为 **5 分钟**，到时代理会停止并锁库；在 TUI 按 `u` 重新解锁即可。重新解锁不会延长授权有效期，授权到期后需重新创建。
-
-### 常用按键
-
-| 操作 | 按键 |
+| 主页操作 | 按键 |
 | --- | --- |
-| 切换分类 / 栏位 | `1`–`5` / `Tab`、`Shift+Tab` |
-| 移动与打开 | `h/j/k/l`、方向键、`Enter` |
-| 筛选当前列表 | `/`，普通模式下 `Esc` 清除筛选 |
-| 快速添加 / 编辑用途 | `c` / `e` |
-| 新建 / 打开本地保险库 | `n` / `o` |
-| 创建 / 撤销 AI 授权 | `a` / `x` |
-| 查看 MCP 配置 / 检查工具 | `m` / `p` |
-| 解锁 / 锁定 | `u` / `L` |
-| 当前页帮助 / 全部命令 / 最近结果 | `?` / `5` / `!` |
-| 切换语言并保存 | `F2` |
-| 输入命令 / 退出 | `:` / `q` |
+| 选择数据库 / 再建一个数据库 | `d` 后按 `Enter` / `n` |
+| 打开分类 / 返回上一级 | `Enter` / `h` 或 `Backspace` |
+| 切换分类树与条目列表 | `Tab` |
+| 新建分类 / 服务 Token | `n` / `c` |
+| 重命名分类 / 更换 Token | `e` |
+| 移动到其他分类 | `m` |
+| 打开 MDBX 文件 | `o` |
+| 清除浏览缓存并锁定 | `L` |
+| 主页 / 设置 | `F3` |
+| 切换语言 / 退出 | `F2` / `q` |
 
-表单中用 `Tab` 切换字段，`Ctrl+S` 保存。按一次 `Esc` 回到表单普通模式，再按一次取消。
+编辑表单用 `Tab` 切换字段，`Ctrl+S` 进入独立的数据库密码步骤。在密码步骤按 `Esc` 返回草稿并清除密码。每次管理操作只在执行期间解锁数据库，条目摘要最多缓存五分钟；这与 AI 代理的五分钟解锁会话相互独立。
 
-建议使用支持 UTF-8 的终端，至少 **70 列 × 20 行**。使用 [Nerd Font](https://www.nerdfonts.com/) 可显示完整图标；也可输入 `:icons` 切换为普通字符。Windows 推荐使用 Windows Terminal。
+设置中按 `c` 可引导式接入服务，按 `a` 单独配置授权。授权**默认长期有效**，可随时撤销；有效期留空（命令行 `--ttl 0`）即不设到期时间，也可指定 1–1440 分钟。长期授权仍需要代理处于解锁状态。更换 Token 后，该连接原有授权会被撤销。
+
+建议使用至少 **70 列 × 20 行**的 UTF-8 终端。设置页面保留 `/` 筛选、`1`–`5` 切页和 `:` 命令入口。
 
 ### 界面语言
 

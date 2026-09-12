@@ -12,6 +12,20 @@ use crate::sync;
 use crate::webdav::{RemoteEntry, WebDavClient, WebDavProfile};
 
 pub(super) enum Action {
+    SwitchDatabase {
+        id: String,
+        password: Zeroizing<String>,
+    },
+    Token {
+        name: String,
+        password: Zeroizing<String>,
+        token: Zeroizing<String>,
+    },
+    RenameCategory {
+        id: String,
+        title: String,
+        password: Zeroizing<String>,
+    },
     Category {
         title: String,
         parent: Option<String>,
@@ -45,6 +59,7 @@ pub(super) enum Action {
         password: Zeroizing<String>,
     },
     Connect {
+        category: Option<String>,
         name: String,
         provider: Provider,
         base: String,
@@ -80,7 +95,10 @@ impl Action {
     pub fn pauses_broker(&self) -> bool {
         matches!(
             self,
-            Self::Category { .. }
+            Self::SwitchDatabase { .. }
+                | Self::Token { .. }
+                | Self::RenameCategory { .. }
+                | Self::Category { .. }
                 | Self::Move { .. }
                 | Self::Library(_)
                 | Self::Add { .. }
@@ -99,7 +117,11 @@ impl Action {
 
     pub fn label(&self) -> Message {
         match self {
-            Self::Category { .. } | Self::Move { .. } => Message::PendingConnect,
+            Self::SwitchDatabase { .. } => Message::PendingOpen,
+            Self::Token { .. } => Message::PendingConnect,
+            Self::RenameCategory { .. } | Self::Category { .. } | Self::Move { .. } => {
+                Message::PendingConnect
+            }
             Self::Library(_) => Message::PendingUnlock,
             Self::Add { .. } => Message::PendingAdd,
             Self::Note { .. } => Message::PendingNote,
@@ -161,6 +183,41 @@ pub(super) async fn perform(
         admin::lock_broker(&store).await?;
     }
     match action {
+        Action::SwitchDatabase { id, password } => {
+            let library = tokio::task::spawn_blocking(move || {
+                crate::databases::switch(&store, &id, &password)?;
+                crate::library::read(&store, &password)
+            })
+            .await
+            .map_err(|_| GatewayError::StateUnavailable)??;
+            Ok(Outcome::Library(library))
+        }
+        Action::Token {
+            name,
+            password,
+            token,
+        } => {
+            let library = tokio::task::spawn_blocking(move || {
+                admin::update_token(&store, &name, &password, token)?;
+                crate::library::read(&store, &password)
+            })
+            .await
+            .map_err(|_| GatewayError::StateUnavailable)??;
+            Ok(Outcome::Library(library))
+        }
+        Action::RenameCategory {
+            id,
+            title,
+            password,
+        } => {
+            let library = tokio::task::spawn_blocking(move || {
+                crate::library::rename_category(&store, &password, &id, &title)?;
+                crate::library::read(&store, &password)
+            })
+            .await
+            .map_err(|_| GatewayError::StateUnavailable)??;
+            Ok(Outcome::Library(library))
+        }
         Action::Category {
             title,
             parent,
@@ -251,6 +308,7 @@ pub(super) async fn perform(
             Ok(opened(count))
         }
         Action::Connect {
+            category,
             name,
             provider,
             base,
@@ -258,12 +316,24 @@ pub(super) async fn perform(
             token,
             password,
         } => {
-            tokio::task::spawn_blocking(move || {
-                admin::add_connection(&store, &name, provider, &base, &note, &password, token)
+            let library = tokio::task::spawn_blocking(move || {
+                admin::add_connection_in_category(
+                    &store,
+                    admin::NewConnection {
+                        name: &name,
+                        provider,
+                        base: &base,
+                        note: &note,
+                        category: category.as_deref(),
+                    },
+                    &password,
+                    token,
+                )?;
+                crate::library::read(&store, &password)
             })
             .await
             .map_err(|_| GatewayError::StateUnavailable)??;
-            Ok(Outcome::Message(Message::ConnectionSavedHint))
+            Ok(Outcome::Library(library))
         }
         Action::Grant { options, password } => {
             let name = options.name.clone();

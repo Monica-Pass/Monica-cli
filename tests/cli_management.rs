@@ -72,6 +72,47 @@ fn credentials() -> Vec<u8> {
 }
 
 #[test]
+fn token_edit_uses_secret_stdin_and_revokes_previous_grants() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cli(
+        directory.path(),
+        &[
+            "add",
+            "work",
+            "--repo",
+            "org/repo",
+            "--json",
+            "--secrets-stdin",
+        ],
+        Some(&credentials()),
+    ));
+    let new_token = "synthetic-replacement-token-523";
+    let secret = serde_json::to_vec(&json!({"password":PASSWORD,"token":new_token})).unwrap();
+    let output = cli(
+        directory.path(),
+        &["token", "work", "--json", "--secrets-stdin"],
+        Some(&secret),
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(new_token));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(new_token));
+    let data = success(output);
+    assert_eq!(data["token_updated"], true);
+    assert_eq!(data["previous_grants_revoked"], true);
+    let status = success(cli(directory.path(), &["status", "--json"], None));
+    assert!(status["grants"].as_array().unwrap().is_empty());
+    assert_eq!(status["connections"].as_array().unwrap().len(), 1);
+    let discovery = success(cli(
+        directory.path(),
+        &["commands", "token", "--json"],
+        None,
+    ));
+    assert_eq!(
+        discovery["secret_input"]["required"],
+        json!(["password", "token"])
+    );
+}
+
+#[test]
 fn short_passwords_work_for_new_vaults_and_quick_add_without_special_flags() {
     const SHORT_PASSWORD: &str = "735941";
     let directory = tempfile::tempdir().unwrap();

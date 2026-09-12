@@ -53,6 +53,33 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
     let path = cli.config.map(Ok).unwrap_or_else(default_config)?;
     let store = ConfigStore::new(absolute(&path)?);
     match command {
+        Command::Databases => {
+            let data = json!({"databases":monica_pass_cli::databases::list(&store)?});
+            output.result("databases", data.clone(), Some(&data))?;
+        }
+        Command::Use { id } => {
+            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            admin::lock_broker(&store).await?;
+            monica_pass_cli::databases::switch(&store, &id, &password)?;
+            let data = json!({"switched":true,"grants_reset":true});
+            output.result("use", data.clone(), Some(&data))?;
+        }
+        Command::Token { name } => {
+            validate_name(&name)?;
+            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            let token = input.take(SecretField::Token, tr!(lang, PromptToken))?;
+            admin::lock_broker(&store).await?;
+            admin::update_token(&store, &name, &password, token)?;
+            let data = json!({"name":name,"token_updated":true,"previous_grants_revoked":true});
+            output.result("token", data.clone(), Some(&data))?;
+        }
+        Command::RenameCategory { id, title } => {
+            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            admin::lock_broker(&store).await?;
+            monica_pass_cli::library::rename_category(&store, &password, &id, &title)?;
+            let data = json!({"id":id,"title":title});
+            output.result("rename-category", data.clone(), Some(&data))?;
+        }
         Command::Library => {
             let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;
@@ -213,7 +240,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
                 Some(path) => absolute(&path)?,
                 None => store.path.with_file_name("gateway.mdbx"),
             };
-            if path.exists() || store.path.exists() {
+            if path.exists() {
                 return Err(GatewayError::AlreadyExists);
             }
             let password = input.take(SecretField::Password, tr!(lang, PromptNewPassword))?;
@@ -228,6 +255,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             ));
         }
         Command::Connect {
+            category,
             name,
             provider,
             api_base,
@@ -243,7 +271,18 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
             let token = input.take(SecretField::Token, tr!(lang, PromptToken))?;
             admin::lock_broker(&store).await?;
-            admin::add_connection(&store, &name, provider, &base, &note, &password, token)?;
+            admin::add_connection_in_category(
+                &store,
+                admin::NewConnection {
+                    name: &name,
+                    provider,
+                    base: &base,
+                    note: &note,
+                    category: category.as_deref(),
+                },
+                &password,
+                token,
+            )?;
             output.result(
                 "connect",
                 json!({"name":name, "provider":provider, "api_base":base, "note":note}),

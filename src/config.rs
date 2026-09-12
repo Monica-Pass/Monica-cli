@@ -48,6 +48,8 @@ pub struct Grant {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database_name: Option<String>,
     pub version: u32,
     pub vault: PathBuf,
     pub collection_id: Option<String>,
@@ -61,6 +63,7 @@ pub struct Config {
 impl Config {
     pub fn new(vault: PathBuf) -> Self {
         Self {
+            database_name: None,
             version: 1,
             vault,
             collection_id: None,
@@ -72,6 +75,13 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if self
+            .database_name
+            .as_ref()
+            .is_some_and(|name| name.len() > 1024 || name.chars().any(char::is_control))
+        {
+            return Err(GatewayError::InvalidConfig);
+        }
         if let Some(remote) = &self.webdav {
             remote.validate()?;
         }
@@ -462,6 +472,26 @@ mod tests {
         });
         config.connections.insert("work".to_owned(), connection);
         (config, capability)
+    }
+
+    #[test]
+    fn perpetual_grants_survive_time_and_serialization_but_remain_revocable() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut config, capability) = fixture(directory.path());
+        config.grants[0].expires_at = 0;
+        config.validate().unwrap();
+        let serialized = serde_json::to_vec(&config).unwrap();
+        let mut restored: Config = serde_json::from_slice(&serialized).unwrap();
+        restored.validate().unwrap();
+        assert!(restored.authenticate(&capability, 999).is_err());
+        assert!(restored.authenticate(&capability, 1000).is_ok());
+        assert!(
+            restored
+                .authenticate(&capability, 1000 + 20 * 365 * 86400)
+                .is_ok()
+        );
+        restored.grants.clear();
+        assert!(restored.authenticate(&capability, 1001).is_err());
     }
 
     #[test]

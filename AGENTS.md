@@ -19,5 +19,8 @@ Keep one small Rust crate for Monica's local credential gateway, backed by MDBX3
 - TUI previews and filters use explicit public metadata only. Resolve filtered rows by connection/grant name or remote path before acting; empty results must never fall back to an unrelated record. Refresh must preserve selected identities when ordering changes.
 - WebDAV passwords are session-only. Use engine portable snapshots, bounded transfers and ETag conditional writes; never copy a live main database or overwrite a conflicting revision.
 - Drain and lock the broker before vault management/sync. Preserve old local files, reset grants on vault switches, and retain only matching credential bindings on a normal pull.
+- The default home browses databases and native nested categories; gateway administration lives in explicit settings. Preserve the current home/settings context after a mutation.
+- Zero grant expiry means indefinite authorization, not expiration. It still requires an unlocked broker and remains revocable. Never restore old grants when reopening a saved database.
+- API tokens retain their native type, entry identity and encrypted token field across moves/sync. See docs/token-format.md before changing the payload contract.
 
 On this Windows workspace use `cargo +1.97.0-x86_64-pc-windows-gnu ...`; the default MSVC toolchain is older than the declared minimum.

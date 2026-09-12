@@ -35,6 +35,11 @@ monica-pass cmds dav open --json
 | 仅保存连接 | `c work -p github -n "项目用途"` | `password`, `token` |
 | 列表 / 详情 | `ls` / `show work` | 无 |
 | 修改用途 | `e work "新的公开用途"` | `password` |
+| 更换 Token（撤销旧授权） | `token work` | `password`, `token` |
+| 列出数据库 / 切换数据库 | `db` / `use ID` | 无 / `password` |
+| 浏览分类与条目 | `tree` | `password` |
+| 新建 / 重命名分类 | `mkdir TITLE --parent ID` / `rename-category ID TITLE` | `password` |
+| 移动条目或分类 | `mv ID TARGET_CATEGORY_ID` | `password` |
 | 创建授权 | `g reader -c work -r org/repo -t 60` | `password` |
 | 撤销授权 | `rv reader` | 无 |
 | 获取并保存 MCP 配置 | `m reader` | 无 |
@@ -50,7 +55,7 @@ monica-pass cmds dav open --json
 | 查看 WebDAV 配置 | `dav st` | 无 |
 | 保存语言偏好 | `lang zh-CN` | 无 |
 
-表中的名称必须精确匹配。`show` 选择连接；`m`、`ck`、`rv` 选择授权。不存在的名称不会回退到其他条目。快速添加为连接和授权使用同一个名称，默认只读、有效 60 分钟；`-w` / `--allow-write` 才会增加创建 Issue 权限。详细授权用 `--op create-issue` 指定写操作。
+表中的名称必须精确匹配。`show` 选择连接；`m`、`ck`、`rv` 选择授权。不存在的名称不会回退到其他条目。快速添加为连接和授权使用同一个名称，默认只读、长期有效（可用 --ttl 指定分钟数）；`-w` / `--allow-write` 才会增加创建 Issue 权限。详细授权用 `--op create-issue` 指定写操作。
 
 ## 凭据输入协议
 

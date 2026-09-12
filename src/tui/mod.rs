@@ -241,11 +241,17 @@ enum Mode {
 }
 
 struct App {
+    databases: Vec<crate::databases::Database>,
+    database_picker: bool,
+    database_selected: usize,
     home: bool,
     library: Option<crate::library::Library>,
     library_loaded: Option<Instant>,
     category: Option<String>,
     home_selected: usize,
+    home_tree_focus: bool,
+    home_tree_selected: usize,
+    home_restore: Option<(Option<String>, Option<String>, Option<String>)>,
     store: ConfigStore,
     language: Language,
     config: Option<Config>,
@@ -278,11 +284,17 @@ impl App {
     fn new(store: ConfigStore, language: Language) -> Self {
         let lang = language;
         let mut app = Self {
+            databases: Vec::new(),
+            database_picker: false,
+            database_selected: 0,
             home: true,
             library: None,
             library_loaded: None,
             category: None,
             home_selected: 0,
+            home_tree_focus: false,
+            home_tree_selected: 0,
+            home_restore: None,
             store,
             language,
             config: None,
@@ -311,6 +323,10 @@ impl App {
             last_refresh: Instant::now(),
         };
         app.reload();
+        match crate::databases::list(&app.store) {
+            Ok(databases) => app.databases = databases,
+            Err(error) => app.error(error),
+        }
         // Keep the landing page stable. The overview is the user's workspace;
         // management and AI authorization are entered deliberately from it.
         if app
@@ -401,6 +417,27 @@ impl App {
             return;
         }
         if action.pauses_broker() {
+            if matches!(
+                action,
+                Action::Connect { .. }
+                    | Action::Token { .. }
+                    | Action::Category { .. }
+                    | Action::RenameCategory { .. }
+                    | Action::Move { .. }
+            ) {
+                let row = self
+                    .home_rows()
+                    .get(self.home_selected)
+                    .map(|(id, _, _)| id.clone());
+                let tree = self.library.as_ref().and_then(|l| {
+                    self.home_tree_selected
+                        .checked_sub(1)
+                        .and_then(|i| l.category_tree().get(i).map(|(c, _)| c.id.clone()))
+                });
+                self.home_restore = Some((self.category.clone(), row, tree));
+            } else {
+                self.home_restore = None;
+            }
             self.library = None;
             self.library_loaded = None;
         }
@@ -443,6 +480,7 @@ impl App {
                 }
                 form.selected = previous.selected;
                 form.insert = previous.insert;
+                form.authenticating = previous.authenticating;
                 Mode::Form(form)
             }
             Mode::Popup(_) => Mode::Normal,
@@ -910,13 +948,38 @@ impl App {
     fn apply(&mut self, outcome: Outcome) {
         let lang = self.language;
         self.reload();
+        match crate::databases::list(&self.store) {
+            Ok(databases) => self.databases = databases,
+            Err(error) => self.error(error),
+        }
         match outcome {
             Outcome::Library(library) => {
+                self.database_picker = false;
                 self.library = Some(library);
                 self.library_loaded = Some(Instant::now());
                 self.category = None;
                 self.home_selected = 0;
-                self.home = true;
+                if let Some((category, row, tree)) = self.home_restore.take() {
+                    self.category = category.filter(|id| {
+                        self.library
+                            .as_ref()
+                            .is_some_and(|l| l.categories.iter().any(|c| &c.id == id))
+                    });
+                    self.home_selected = self
+                        .home_rows()
+                        .iter()
+                        .position(|(id, _, _)| Some(id) == row.as_ref())
+                        .unwrap_or(0);
+                    self.home_tree_selected = self
+                        .library
+                        .as_ref()
+                        .and_then(|l| {
+                            l.category_tree()
+                                .iter()
+                                .position(|(c, _)| Some(&c.id) == tree.as_ref())
+                        })
+                        .map_or(0, |i| i + 1);
+                }
                 self.message_at = None;
             }
             Outcome::Added { name, path, broker } => {

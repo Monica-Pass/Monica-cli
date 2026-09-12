@@ -193,7 +193,7 @@ fn download_file(store: &ConfigStore) -> Result<DownloadFile> {
     })
 }
 
-fn remember_previous(store: &ConfigStore, previous: &Config) -> Result<()> {
+pub(crate) fn remember_previous(store: &ConfigStore, previous: &Config) -> Result<()> {
     let history = store
         .path
         .with_extension("history")
@@ -206,10 +206,12 @@ fn replace_vault(
     path: PathBuf,
     inventory: GatewayInventory,
     remote: Option<RemoteBinding>,
+    name: Option<String>,
 ) -> Result<usize> {
     let count = inventory.connections.len();
     store.update(|previous| {
         let mut config = Config::new(path);
+        config.database_name = name;
         if let Some(previous) = previous {
             remember_previous(store, &previous)?;
             config.listen = previous.listen;
@@ -228,7 +230,16 @@ pub fn open_local(store: &ConfigStore, source: &Path, password: &str) -> Result<
     let snapshot = Snapshot::new(store, source)?;
     let inventory = snapshot.inspect(password)?;
     let (path, _) = snapshot.install(store)?;
-    replace_vault(store, path, inventory, None)
+    replace_vault(
+        store,
+        path,
+        inventory,
+        None,
+        source
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned),
+    )
 }
 
 /// Human selection of a remote MDBX. Existing local state and configuration are
@@ -254,7 +265,16 @@ pub async fn open_remote(
         local_sha256,
         last_sync: chrono::Utc::now().timestamp(),
     };
-    replace_vault(store, local, inventory, Some(binding))
+    replace_vault(
+        store,
+        local,
+        inventory,
+        Some(binding),
+        std::path::Path::new(path)
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned),
+    )
 }
 
 /// Publishes to a new remote name only. It also provides a safe way to keep a

@@ -150,7 +150,7 @@ pub fn initialize(
 ) -> Result<()> {
     validate_new_password(password, confirmation)?;
     let path = absolute(path)?;
-    if path == store.path || path.exists() || store.path.exists() {
+    if path == store.path || path.exists() {
         return Err(GatewayError::AlreadyExists);
     }
     let mut config = Config::new(path.clone());
@@ -158,14 +158,22 @@ pub fn initialize(
     config.validate()?;
     let _guard = store.acquire_broker_lock()?;
     store.update(|previous| {
-        if previous.is_some() {
-            return Err(GatewayError::AlreadyExists);
+        if let Some(previous) = &previous {
+            crate::sync::remember_previous(store, previous)?;
         }
         ensure_parent(&path)?;
         let vault = Vault::create(&path, password, TigaMode::Multi)?;
         vault.lock()?;
         Ok((config, ()))
     })
+}
+
+pub struct NewConnection<'a> {
+    pub name: &'a str,
+    pub provider: Provider,
+    pub base: &'a str,
+    pub note: &'a str,
+    pub category: Option<&'a str>,
 }
 
 pub fn add_connection(
@@ -177,6 +185,33 @@ pub fn add_connection(
     password: &str,
     token: Zeroizing<String>,
 ) -> Result<()> {
+    add_connection_in_category(
+        store,
+        NewConnection {
+            name,
+            provider,
+            base,
+            note,
+            category: None,
+        },
+        password,
+        token,
+    )
+}
+
+pub fn add_connection_in_category(
+    store: &ConfigStore,
+    options: NewConnection<'_>,
+    password: &str,
+    token: Zeroizing<String>,
+) -> Result<()> {
+    let NewConnection {
+        name,
+        provider,
+        base,
+        note,
+        category,
+    } = options;
     validate_name(name)?;
     validate_note(note)?;
     let base = validate_api_base(base, provider)?.to_string();
@@ -188,8 +223,18 @@ pub fn add_connection(
             return Err(GatewayError::AlreadyExists);
         }
         let vault = Vault::open(&config.vault, password)?;
+        if category.is_some_and(|id| uuid::Uuid::parse_str(id).is_err()) {
+            vault.lock()?;
+            return Err(GatewayError::InvalidRequest);
+        }
+        if let Some(id) = category
+            && !vault.library()?.categories.iter().any(|c| c.id == id)
+        {
+            vault.lock()?;
+            return Err(GatewayError::NotFound);
+        }
         let (collection, connection) = vault.store_credential(
-            config.collection_id.as_deref(),
+            category.or(config.collection_id.as_deref()),
             name,
             provider,
             &base,
@@ -197,7 +242,9 @@ pub fn add_connection(
             token,
         )?;
         vault.lock()?;
-        config.collection_id = Some(collection);
+        if category.is_none() {
+            config.collection_id = Some(collection);
+        }
         config.connections.insert(name.to_owned(), connection);
         Ok((config, ()))
     })
@@ -311,6 +358,35 @@ pub fn update_note(store: &ConfigStore, name: &str, note: &str, password: &str) 
         config.connections.insert(name.to_owned(), updated?);
         Ok((config, ()))
     })
+}
+
+/// Replace an encrypted token in place and require new authorization for it.
+pub fn update_token(
+    store: &ConfigStore,
+    name: &str,
+    password: &str,
+    token: Zeroizing<String>,
+) -> Result<()> {
+    validate_name(name)?;
+    crate::vault::validate_token(&token)?;
+    let _guard = store.acquire_broker_lock()?;
+    let (vault, binding) = store.update(|config| {
+        let mut config = config.ok_or(GatewayError::NotFound)?;
+        let binding = config.connections.get(name).ok_or(GatewayError::NotFound)?;
+        check_public(
+            &json!([name, &binding.note, &binding.api_base]),
+            &[password, &token],
+        )?;
+        let vault = Vault::open(&config.vault, password)?;
+        // Persist revocation before replacing the encrypted payload. A failed
+        // config write must never leave old grants bound to a new Token.
+        let binding = binding.clone();
+        config.grants.retain(|grant| grant.connection != name);
+        Ok((config, (vault, binding)))
+    })?;
+    let result = vault.edit_credential(name, &binding, &binding.note, Some(token));
+    vault.lock()?;
+    result.map(|_| ())
 }
 
 fn prepare_grant(
@@ -655,6 +731,125 @@ mod tests {
             allow_write: false,
             ttl_minutes: 60,
         }
+    }
+
+    #[test]
+    fn category_token_creation_and_move_recover_after_portable_sync() {
+        use crate::test_support::{PASSWORD, TOKEN};
+        let directory = tempfile::tempdir().unwrap();
+        let store = ConfigStore::new(directory.path().join("gateway.json"));
+        let path = directory.path().join("source.mdbx");
+        initialize(&store, &path, 47831, PASSWORD, PASSWORD).unwrap();
+        let root = crate::library::create_category(&store, PASSWORD, "Projects", None).unwrap();
+        let child =
+            crate::library::create_category(&store, PASSWORD, "GitLab", Some(&root)).unwrap();
+        add_connection_in_category(
+            &store,
+            NewConnection {
+                name: "work",
+                provider: Provider::Gitlab,
+                base: Provider::Gitlab.default_api_base(),
+                note: "Work issues",
+                category: Some(&child),
+            },
+            PASSWORD,
+            Zeroizing::new(TOKEN.to_owned()),
+        )
+        .unwrap();
+        let config = store.load().unwrap();
+        let id = config.connections["work"].credential_id.clone();
+        let library = crate::library::read(&store, PASSWORD).unwrap();
+        assert_eq!(
+            library
+                .entries
+                .iter()
+                .find(|e| e.id == id)
+                .unwrap()
+                .category,
+            child
+        );
+        crate::library::move_item(&store, PASSWORD, &id, &root).unwrap();
+        crate::library::rename_category(&store, PASSWORD, &root, "Renamed Projects").unwrap();
+        let copy = directory.path().join("portable.mdbx");
+        mdbx_storage::backup::BackupService::create_portable_copy_path(&path, &copy).unwrap();
+        let vault = Vault::open(&copy, PASSWORD).unwrap();
+        let recovered = vault.gateway_inventory().unwrap();
+        assert_eq!(recovered.connections["work"].credential_id, id);
+        assert_eq!(
+            vault
+                .library()
+                .unwrap()
+                .entries
+                .iter()
+                .find(|e| e.id == id)
+                .unwrap()
+                .category,
+            root
+        );
+        assert_eq!(
+            vault
+                .credential(
+                    &recovered.connections["work"],
+                    chrono::Utc::now().timestamp()
+                )
+                .unwrap()
+                .token
+                .as_str(),
+            TOKEN
+        );
+        vault.lock().unwrap();
+    }
+
+    #[test]
+    fn token_replacement_preserves_entry_and_requires_new_authorization() {
+        use crate::test_support::{PASSWORD, TOKEN};
+        let directory = tempfile::tempdir().unwrap();
+        let store = ConfigStore::new(directory.path().join("gateway.json"));
+        quick_add(
+            &store,
+            &quick_options("work"),
+            PASSWORD,
+            Some(PASSWORD),
+            Zeroizing::new(TOKEN.to_owned()),
+        )
+        .unwrap();
+        let before = store.load().unwrap();
+        assert!(!before.grants.is_empty());
+        assert!(
+            update_token(
+                &store,
+                "work",
+                "wrong",
+                Zeroizing::new("replacement-synthetic-token".into())
+            )
+            .is_err()
+        );
+        assert!(store.load().unwrap().grants == before.grants);
+        let replacement = "replacement-synthetic-token";
+        update_token(&store, "work", PASSWORD, Zeroizing::new(replacement.into())).unwrap();
+        let after = store.load().unwrap();
+        assert_eq!(
+            after.connections["work"].credential_id,
+            before.connections["work"].credential_id
+        );
+        assert!(after.grants.is_empty());
+        let vault = Vault::open(&after.vault, PASSWORD).unwrap();
+        assert_eq!(
+            vault
+                .credential(&after.connections["work"], chrono::Utc::now().timestamp())
+                .unwrap()
+                .token
+                .as_str(),
+            replacement
+        );
+        vault.lock().unwrap();
+        drop(vault);
+        let bytes = std::fs::read(&after.vault).unwrap();
+        assert!(
+            !bytes
+                .windows(replacement.len())
+                .any(|w| w == replacement.as_bytes())
+        );
     }
 
     #[test]

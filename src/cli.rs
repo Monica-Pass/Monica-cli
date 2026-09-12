@@ -35,6 +35,15 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// List the current and previously opened databases.
+    #[command(visible_alias = "db")]
+    Databases,
+    /// Switch to a saved database ID. Requires its password; old grants stay revoked.
+    Use { id: String },
+    /// Replace a stored Token through secure input; revoke its old AI grants.
+    Token { name: String },
+    /// Rename a native MDBX category by its stable ID.
+    RenameCategory { id: String, title: String },
     /// Browse database categories and entry summaries after unlocking.
     #[command(visible_alias = "tree")]
     Library,
@@ -113,6 +122,9 @@ pub enum Command {
     /// Save a service connection. Requires a password and token through secure input.
     #[command(visible_alias = "c")]
     Connect {
+        /// Native category ID; defaults to the connection collection.
+        #[arg(long)]
+        category: Option<String>,
         name: String,
         #[arg(short = 'p', long, value_enum, default_value = "github")]
         provider: Provider,
@@ -178,6 +190,10 @@ pub enum WebDavCommand {
 impl Command {
     pub fn name(&self) -> &'static str {
         match self {
+            Self::Databases => "databases",
+            Self::Use { .. } => "use",
+            Self::Token { .. } => "token",
+            Self::RenameCategory { .. } => "rename-category",
             Self::Library => "library",
             Self::Category { .. } => "category",
             Self::Move { .. } => "move",

@@ -833,16 +833,41 @@ fn render_form(
     lang: Language,
 ) {
     let width = screen.width.saturating_sub(6).min(90);
+    let indices = form.visible_fields();
+    let selected = indices
+        .iter()
+        .position(|i| *i == form.selected)
+        .unwrap_or(0);
+    let auth_notice = if lang == Language::En {
+        "Enter this database's password to save. Esc returns to your draft. The password is not retained."
+    } else {
+        "输入当前数据库的密码以保存。Esc 返回草稿；密码不会被保留。"
+    };
     let notice = wrapped_lines(
-        vec![Line::raw(clean(&form.notice))],
+        vec![Line::raw(clean(if form.authenticating {
+            auth_notice
+        } else {
+            &form.notice
+        }))],
         width.saturating_sub(4),
     );
     let notice_height = (notice.len() as u16).min(3);
     let height =
-        (form.fields.len() as u16 * 3 + notice_height + 5).min(screen.height.saturating_sub(3));
+        (indices.len() as u16 * 3 + notice_height + 5).min(screen.height.saturating_sub(3));
     let area = centered(screen, width, height);
     clear_modal(frame, area);
-    let title = format!(" {} ", form.title);
+    let title = format!(
+        " {} ",
+        if form.authenticating {
+            if lang == Language::En {
+                "Unlock to save"
+            } else {
+                "解锁并保存"
+            }
+        } else {
+            form.title
+        }
+    );
     let block = panel(&title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -857,15 +882,15 @@ fn render_form(
         split[0],
     );
     let visible = (split[1].height / 3).max(1) as usize;
-    let start = form.selected.saturating_sub(visible.saturating_sub(1));
-    for (row, (index, field)) in form
-        .fields
+    let start = selected.saturating_sub(visible.saturating_sub(1));
+    for (row, index) in indices
         .iter()
-        .enumerate()
+        .copied()
         .skip(start)
         .take(visible)
         .enumerate()
     {
+        let field = &form.fields[index];
         let field_area = Rect {
             y: split[1].y + row as u16 * 3,
             height: 2,
@@ -936,8 +961,8 @@ fn render_form(
         } else {
             tr!(lang, ModeNormal)
         },
-        index = form.selected + 1,
-        count = form.fields.len()
+        index = selected + 1,
+        count = indices.len()
     );
     let note = error.map_or_else(
         || {

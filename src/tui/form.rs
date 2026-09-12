@@ -122,6 +122,9 @@ impl Field {
 
 #[derive(Clone)]
 pub(super) enum Kind {
+    SwitchDatabase { id: String, name: String },
+    Token(String),
+    RenameCategory { id: String, title: String },
     Category(Option<String>),
     Move(String),
     Library,
@@ -152,6 +155,8 @@ pub(super) struct Form {
     pub fields: Vec<Field>,
     pub selected: usize,
     pub insert: bool,
+    pub auth_field: Option<usize>,
+    pub authenticating: bool,
 }
 
 impl Form {
@@ -160,7 +165,11 @@ impl Form {
         let vault_path = app
             .store
             .path
-            .with_file_name("gateway.mdbx")
+            .with_file_name(if app.config.is_some() {
+                "new-database.mdbx"
+            } else {
+                "gateway.mdbx"
+            })
             .display()
             .to_string();
         let name = app.selected_connection().unwrap_or_default();
@@ -171,6 +180,57 @@ impl Form {
             .map(|binding| binding.profile.clone())
             .or_else(|| app.profile.clone());
         let (title, notice, mut fields) = match &kind {
+            Kind::SwitchDatabase { name, .. } => (
+                if lang == crate::i18n::Language::En {
+                    "Open database"
+                } else {
+                    "打开数据库"
+                },
+                if lang == crate::i18n::Language::En {
+                    format!("Unlock {name}. AI grants must be created again after switching.")
+                } else {
+                    format!("解锁 {name}。切换后需重新创建 AI 授权。")
+                },
+                vec![Field::secret(tr!(lang, MasterPasswordLabel))],
+            ),
+            Kind::Token(name) => (
+                if lang == crate::i18n::Language::En {
+                    "Update Token"
+                } else {
+                    "更新 Token"
+                },
+                if lang == crate::i18n::Language::En {
+                    format!(
+                        "{name}: replace the encrypted Token. Previous AI grants will be revoked."
+                    )
+                } else {
+                    format!("更新 {name} 的加密 Token，原有 AI 授权将撤销。")
+                },
+                vec![
+                    Field::secret(tr!(lang, ServiceTokenLabel)),
+                    Field::secret(tr!(lang, MasterPasswordLabel)),
+                ],
+            ),
+            Kind::RenameCategory { title, .. } => (
+                if lang == crate::i18n::Language::En {
+                    "Rename category"
+                } else {
+                    "重命名分类"
+                },
+                String::new(),
+                vec![
+                    Field::text(
+                        if lang == crate::i18n::Language::En {
+                            "Name"
+                        } else {
+                            "分类名称"
+                        },
+                        title,
+                        "",
+                    ),
+                    Field::secret(tr!(lang, MasterPasswordLabel)),
+                ],
+            ),
             Kind::Category(_) => (
                 if lang == crate::i18n::Language::En {
                     "New category"
@@ -428,6 +488,19 @@ impl Form {
                 field.hint = tr!(lang, HiddenInputHint);
             }
         }
+        let auth_field = match kind {
+            Kind::Token(_)
+            | Kind::RenameCategory { .. }
+            | Kind::Category(_)
+            | Kind::Move(_)
+            | Kind::Add { new_vault: false }
+            | Kind::Note
+            | Kind::Connect
+            | Kind::Grant
+            | Kind::Publish
+            | Kind::OpenLocal => Some(fields.len() - 1),
+            _ => None,
+        };
         Self {
             kind,
             title,
@@ -435,36 +508,67 @@ impl Form {
             fields,
             selected: 0,
             insert: true,
+            auth_field,
+            authenticating: false,
         }
     }
 
+    pub fn visible_fields(&self) -> Vec<usize> {
+        if self.authenticating {
+            return self.auth_field.into_iter().collect();
+        }
+        (0..self.fields.len())
+            .filter(|i| Some(*i) != self.auth_field)
+            .collect()
+    }
+
+    fn submit(&mut self) -> FormEvent {
+        if let Some(index) = self.auth_field
+            && !self.authenticating
+        {
+            self.authenticating = true;
+            self.selected = index;
+            self.insert = true;
+            return FormEvent::None;
+        }
+        FormEvent::Submit
+    }
+
     pub fn key(&mut self, key: KeyEvent) -> FormEvent {
+        if key.code == KeyCode::Esc && self.authenticating {
+            if let Some(index) = self.auth_field {
+                self.fields[index].input = Input::new("", 4096);
+            }
+            self.authenticating = false;
+            self.selected = 0;
+            self.insert = true;
+            return FormEvent::None;
+        }
+        let indices = self.visible_fields();
+        let position = indices
+            .iter()
+            .position(|i| *i == self.selected)
+            .unwrap_or(0);
         match key.code {
             KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                return FormEvent::Submit;
+                return self.submit();
             }
             KeyCode::Esc if self.insert => self.insert = false,
             KeyCode::Esc => return FormEvent::Cancel,
-            KeyCode::Tab | KeyCode::Down => self.selected = (self.selected + 1) % self.fields.len(),
+            KeyCode::Tab | KeyCode::Down => self.selected = indices[(position + 1) % indices.len()],
             KeyCode::BackTab | KeyCode::Up => {
-                self.selected = self
-                    .selected
-                    .checked_sub(1)
-                    .unwrap_or(self.fields.len() - 1)
+                self.selected = indices[position.checked_sub(1).unwrap_or(indices.len() - 1)]
             }
-            KeyCode::Enter if self.selected + 1 == self.fields.len() => return FormEvent::Submit,
+            KeyCode::Enter if position + 1 == indices.len() => return self.submit(),
             KeyCode::Enter => {
-                self.selected += 1;
+                self.selected = indices[position + 1];
                 self.insert = true;
             }
             KeyCode::Char('j') if !self.insert => {
-                self.selected = (self.selected + 1) % self.fields.len()
+                self.selected = indices[(position + 1) % indices.len()]
             }
             KeyCode::Char('k') if !self.insert => {
-                self.selected = self
-                    .selected
-                    .checked_sub(1)
-                    .unwrap_or(self.fields.len() - 1)
+                self.selected = indices[position.checked_sub(1).unwrap_or(indices.len() - 1)]
             }
             KeyCode::Char('i') if !self.insert => self.insert = true,
             KeyCode::Char('q') if !self.insert => return FormEvent::Cancel,
@@ -492,6 +596,20 @@ impl Form {
 
     pub fn action(&mut self, app: &App) -> Result<Action> {
         Ok(match &self.kind {
+            Kind::SwitchDatabase { id, .. } => Action::SwitchDatabase {
+                id: id.clone(),
+                password: self.secret(0),
+            },
+            Kind::Token(name) => Action::Token {
+                name: name.clone(),
+                token: self.secret(0),
+                password: self.secret(1),
+            },
+            Kind::RenameCategory { id, .. } => Action::RenameCategory {
+                id: id.clone(),
+                title: self.text(0).to_owned(),
+                password: self.secret(1),
+            },
             Kind::Category(parent) => Action::Category {
                 title: self.text(0).to_owned(),
                 parent: parent.clone(),
@@ -595,6 +713,7 @@ impl Form {
                 )?
                 .to_string();
                 Action::Connect {
+                    category: if app.home { app.category.clone() } else { None },
                     name: self.text(0).to_owned(),
                     provider,
                     base,
