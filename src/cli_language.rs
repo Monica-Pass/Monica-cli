@@ -20,9 +20,7 @@ pub(super) fn parse() -> Result<(Cli, Language), ExitCode> {
     let protocol = mode
         .as_ref()
         .is_some_and(|matches| matches.subcommand_name() == Some("mcp"));
-    let mut command = Cli::command();
-    command.build();
-    let result = localize(command, language)
+    let result = localized_command(language)
         .try_get_matches_from(args)
         .and_then(|matches| Cli::from_arg_matches(&matches));
     match result {
@@ -64,6 +62,14 @@ pub(super) fn parse() -> Result<(Cli, Language), ExitCode> {
             Err(ExitCode::from(2))
         }
     }
+}
+
+fn localized_command(language: Language) -> Command {
+    // build() first, so global flags and the built-in help/version arguments
+    // exist and have propagated into every subcommand before they are translated.
+    let mut command = Cli::command();
+    command.build();
+    localize(command, language)
 }
 
 fn bootstrap(command: Command) -> Command {
@@ -179,53 +185,25 @@ pub(super) fn localize(mut command: Command, language: Language) -> Command {
             "{{before-help}}{{about-with-newline}}\n{} {{usage}}\n\n{{all-args}}{{after-help}}",
             tr!(language, CliUsage)
         ));
-    let args: Vec<_> = command
-        .get_arguments()
-        .map(|arg| arg.get_id().clone())
-        .collect();
-    for id in args {
-        let message = match id.as_str() {
-            "config" => CliConfigHelp,
-            "lang" => CliLangHelp,
-            "json" => CliJsonHelp,
-            "non_interactive" => CliNonInteractiveHelp,
-            "secrets_stdin" => CliSecretsStdinHelp,
-            "topic" => CliCommandTopicHelp,
-            "language" => CliLanguageValueHelp,
-            "name" => CliNameHelp,
-            "note" => CliNoteValueHelp,
-            "serve" => CliServeAfterHelp,
-            "vault" => CliVaultHelp,
-            "client" => CliClientHelp,
-            "port" => CliPortHelp,
-            "provider" => CliProviderHelp,
-            "api_base" => CliApiBaseHelp,
-            "connection" => CliConnectionHelp,
-            "repositories" => CliRepositoriesHelp,
-            "operations" => CliOperationsHelp,
-            "ttl_minutes" => CliTtlHelp,
-            "requests_per_minute" => CliRateHelp,
-            "out" => CliOutHelp,
-            "allow_write" => CliAllowWriteHelp,
-            "url" => CliUrlHelp,
-            "username" => CliUsernameHelp,
-            "path" => CliRemotePathHelp,
-            "help" => CliHelpHelp,
-            "version" => CliVersionHelp,
-            _ => continue,
+    // mut_args keeps declaration order; mut_arg would move each rewritten
+    // argument to the end of the list and desync the positional slots that
+    // build() already froze, so values land on the wrong fields.
+    command = command.mut_args(|arg| {
+        let message = argument_message(arg.get_id().as_str());
+        let positional = arg.is_positional();
+        let Some(message) = message else {
+            return arg;
         };
-        command = command.mut_arg(id, |arg| {
-            let heading = if arg.is_positional() {
-                CliArgumentsHeading
-            } else {
-                CliOptionsHeading
-            };
-            arg.help(language.text(message))
-                .help_heading(language.text(heading))
-                .hide_default_value(language == Language::ZhCn)
-                .hide_possible_values(language == Language::ZhCn)
-        });
-    }
+        let heading = if positional {
+            CliArgumentsHeading
+        } else {
+            CliOptionsHeading
+        };
+        arg.help(language.text(message))
+            .help_heading(language.text(heading))
+            .hide_default_value(language == Language::ZhCn)
+            .hide_possible_values(language == Language::ZhCn)
+    });
     command.mut_subcommands(|child| {
         let about = match child.get_name() {
             "list" if webdav => Some(CliDavListHelp),
@@ -241,9 +219,44 @@ pub(super) fn localize(mut command: Command, language: Language) -> Command {
     })
 }
 
+fn argument_message(id: &str) -> Option<Message> {
+    use Message::*;
+    Some(match id {
+        "config" => CliConfigHelp,
+        "lang" => CliLangHelp,
+        "json" => CliJsonHelp,
+        "non_interactive" => CliNonInteractiveHelp,
+        "secrets_stdin" => CliSecretsStdinHelp,
+        "topic" => CliCommandTopicHelp,
+        "language" => CliLanguageValueHelp,
+        "name" => CliNameHelp,
+        "note" => CliNoteValueHelp,
+        "serve" => CliServeAfterHelp,
+        "vault" => CliVaultHelp,
+        "client" => CliClientHelp,
+        "port" => CliPortHelp,
+        "provider" => CliProviderHelp,
+        "api_base" => CliApiBaseHelp,
+        "connection" => CliConnectionHelp,
+        "repositories" => CliRepositoriesHelp,
+        "operations" => CliOperationsHelp,
+        "ttl_minutes" => CliTtlHelp,
+        "requests_per_minute" => CliRateHelp,
+        "out" => CliOutHelp,
+        "allow_write" => CliAllowWriteHelp,
+        "url" => CliUrlHelp,
+        "username" => CliUsernameHelp,
+        "path" => CliRemotePathHelp,
+        "help" => CliHelpHelp,
+        "version" => CliVersionHelp,
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::Command as CliCommand;
 
     #[test]
     fn bootstrap_does_not_treat_note_text_as_language_arguments() {
@@ -265,5 +278,84 @@ mod tests {
         assert!(json_requested(&args, bootstrap_matches(&args).as_ref()));
         let args = ["monica-pass", "note", "work", "--", "--json"].map(OsString::from);
         assert!(!json_requested(&args, bootstrap_matches(&args).as_ref()));
+    }
+
+    fn bind(argv: &[&str], language: Language) -> CliCommand {
+        let matches = localized_command(language)
+            .try_get_matches_from(argv.iter().map(OsString::from))
+            .unwrap_or_else(|error| panic!("{argv:?} rejected: {error}"));
+        Cli::from_arg_matches(&matches)
+            .expect("bind")
+            .command
+            .expect("subcommand")
+    }
+
+    #[test]
+    fn translated_grammar_keeps_call_fields_aligned() {
+        for language in [Language::En, Language::ZhCn] {
+            let command = bind(
+                &["monica", "call", "gitlab-api", "--request", "request.json"],
+                language,
+            );
+            assert!(
+                matches!(command,
+                    CliCommand::Call { ref name, ref request }
+                    if name == "gitlab-api"
+                        && request == std::path::Path::new("request.json")),
+                "{language:?} bound the wrong fields"
+            );
+        }
+    }
+
+    #[test]
+    fn translated_grammar_keeps_option_values_off_positionals() {
+        let command = bind(
+            &[
+                "monica",
+                "connect",
+                "gitlab",
+                "-b",
+                "https://example.test/api/v4/",
+                "-n",
+                "public note",
+            ],
+            Language::ZhCn,
+        );
+        assert!(matches!(command,
+                CliCommand::Connect { ref name, ref api_base, ref note, .. }
+                if name == "gitlab"
+                    && api_base.as_deref() == Some("https://example.test/api/v4/")
+                    && note == "public note"));
+    }
+
+    #[test]
+    fn translation_rewrites_arguments_without_reordering_them() {
+        let command = localized_command(Language::ZhCn);
+        let call = command.find_subcommand("call").expect("call subcommand");
+        let ids: Vec<&str> = call
+            .get_arguments()
+            .map(|arg| arg.get_id().as_str())
+            .collect();
+        assert_eq!(ids[..2], ["name", "request"], "{ids:?}");
+        let help = |id: &str| {
+            call.get_arguments()
+                .find(|arg| arg.get_id().as_str() == id)
+                .and_then(|arg| arg.get_help())
+                .map(|help| help.to_string())
+        };
+        for (id, message) in [
+            ("name", Message::CliNameHelp),
+            ("config", Message::CliConfigHelp),
+        ] {
+            assert_eq!(
+                help(id),
+                Some(Language::ZhCn.text(message).to_string()),
+                "{id} lost its translated help"
+            );
+        }
+        assert!(
+            help("help").is_some(),
+            "built-in arguments are out of reach of the translation pass"
+        );
     }
 }
