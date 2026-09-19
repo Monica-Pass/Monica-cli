@@ -189,7 +189,7 @@ Each grant binds to one connection. To use multiple connections, add their corre
 
 ### Help AI understand a connection's purpose
 
-AI can call `monica_list_connections` with `{}` to discover the connection covered by its grant: its name, provider, purpose note, repository scope, available tools, and expiry.
+AI can call `monica_list_connections` with `{}` to discover the connection covered by its grant: its name, provider, purpose note, repository scope, available tools, and the expiry of that AI authorization. The credential stored in your vault does not expire.
 
 For example, name a connection `work-github` and give it the note “Track product issues and feature requests.” AI can use that context to choose the connection for a task. An MCP call to list Issues looks like this:
 

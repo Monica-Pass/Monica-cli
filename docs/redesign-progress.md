@@ -7,14 +7,16 @@ Implemented and tested:
 - `d` lists current and previous databases; `n` creates another database without overwriting the previous one. Switching verifies its password and discards old grants.
 - Token creation targets the selected category. Dedicated masked Token replacement preserves the native entry ID and revokes existing grants before replacing the encrypted payload.
 - Shared CLI operations: `databases/db`, `use`, `library/tree`, `category/mkdir`, `rename-category`, `move/mv`, `connect --category`, `token`.
-- Grant expiry is optional: blank or zero means no expiry, including quick setup. Authorization remains revocable and requires an unlocked broker session.
+- Every AI grant is time-boxed: omitting a duration means the 240-minute default, the configurable range is 1–1440 minutes, and an optional call budget is persisted so a broker restart cannot reset it. Legacy zero windows only survive in older config files. When a window or budget closes, calls return `reauthorization_required` until a person runs `monica refresh <grant>`, which rotates the bearer. Authorization stays revocable and requires an unlocked broker session. The stored credential is permanent until a person replaces it and has no expiry of its own.
 - Edit forms separate business fields from the database-password confirmation. Esc from confirmation preserves the draft and clears the password. Every management operation closes its engine session; only summary metadata is cached for up to five minutes. Passwords are not cached to simulate an unlocked vault.
 - Settings Token creation remains in settings after saving; the WebDAV/MCP end-to-end test covers this navigation regression.
-- EN/ZH quick-start documentation reflects the home/settings split and indefinite grant default.
+- EN/ZH quick-start documentation reflects the home/settings split and the bounded AI grant window. The public catalog reports expiry in a separate `authorization` object, so a time box never reads as a credential lifetime.
 
-Verification: 82 Rust tests passed (64 library, 6 binary, 8 CLI management, 3 language, 1 portable), Clippy all-targets with warnings denied, and formatting. Synthetic home renderings at 70×20 and 100×30 were visually inspected. These are Ratatui buffer renderings, not native Windows Terminal screenshots.
+Verification: 101 Rust tests passed (78 library, 10 binary, 9 CLI management, 3 language, 1 portable), Clippy all-targets with warnings denied, and formatting. Synthetic home renderings at 70×20 and 100×30 were visually inspected. These are Ratatui buffer renderings, not native Windows Terminal screenshots.
 
-Release build passed. Installed to `D:/Apps/MonicaCLI` with existing data preserved. All three executable aliases passed version checks, and `monicapass --json commands` returned valid discovery JSON. Installer version validation now accepts the shorter program name.
+The separate lifetimes were also demonstrated with the debug binary against a throwaway vault: a one-minute grant returned `reauthorization_required` while `list` and `status` still showed the connection, `refresh` succeeded with the master password only and rejected a payload that also carried a token, and revoking the grant left the stored credential in place.
+
+The release build and the `D:/Apps/MonicaCLI` install predate the grant window and the restructured public catalog; the installed executable reports `refresh` as an unknown command, so it still needs a rebuild and reinstall.
 
 Scope and limitations:
 

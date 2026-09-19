@@ -43,6 +43,32 @@ async fn gateway_catalog_is_scoped_and_stops_on_lock_or_revocation() {
         item["tools"],
         json!([{"name":"github_list_issues", "read_only":true}])
     );
+    // A time box belongs to the AI authorization, never to the connection entry.
+    let mut keys: Vec<&str> = item
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        [
+            "default_repository",
+            "name",
+            "note",
+            "provider",
+            "repositories",
+            "tools"
+        ]
+    );
+    assert_eq!(catalog["authorization"]["grant"], "test-agent");
+    assert!(
+        catalog["authorization"]["expires_at_unix"]
+            .as_i64()
+            .unwrap()
+            > chrono::Utc::now().timestamp()
+    );
     let text = catalog.to_string();
     for private in [
         TOKEN,
@@ -946,6 +972,21 @@ async fn closed_window_asks_for_reauthorization_and_revocation_stays_unauthorize
             .unwrap_err(),
         GatewayError::ReauthorizationRequired
     );
+    let binding = fixture.store.load().unwrap().connections["work"].clone();
+    let token = || {
+        fixture
+            .vault
+            .credential(&binding, chrono::Utc::now().timestamp())
+            .unwrap()
+            .token
+            .as_str()
+            .to_owned()
+    };
+    assert_eq!(
+        token(),
+        TOKEN,
+        "a closed window must not expire the credential"
+    );
     fixture
         .store
         .update(|config| {
@@ -961,6 +1002,11 @@ async fn closed_window_asks_for_reauthorization_and_revocation_stays_unauthorize
             .await
             .unwrap_err(),
         GatewayError::Unauthorized
+    );
+    assert_eq!(
+        token(),
+        TOKEN,
+        "revoking an authorization must not delete the stored credential"
     );
     assert_eq!(fixture.upstream.requests().len(), 0);
 }

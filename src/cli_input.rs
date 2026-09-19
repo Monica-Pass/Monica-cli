@@ -22,7 +22,7 @@ pub fn required_fields(command: &str) -> &'static [SecretField] {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SecretField {
     Password,
     Token,
@@ -176,5 +176,23 @@ mod tests {
             Secrets::read(bytes.as_slice(), &[SecretField::Password]),
             Err(GatewayError::InvalidSecretInput)
         ));
+    }
+
+    #[test]
+    fn reauthorizing_an_ai_grant_needs_the_master_password_only() {
+        for command in ["grant", "refresh"] {
+            assert_eq!(
+                required_fields(command),
+                &[SecretField::Password],
+                "{command} must never ask for the stored token"
+            );
+            let password_only = br#"{"password":"vault-passphrase"}"#;
+            Secrets::read(password_only.as_slice(), required_fields(command)).unwrap();
+            let with_token = br#"{"password":"vault-passphrase","token":"a-token"}"#;
+            assert!(matches!(
+                Secrets::read(with_token.as_slice(), required_fields(command)),
+                Err(GatewayError::InvalidSecretInput)
+            ));
+        }
     }
 }

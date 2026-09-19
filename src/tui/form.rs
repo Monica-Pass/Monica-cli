@@ -412,9 +412,9 @@ impl Form {
                         tr!(lang, TtlLabel),
                         "",
                         if lang == crate::i18n::Language::En {
-                            "Empty = no expiry; 1–1440 minutes"
+                            "Blank = 240 minutes; 1–1440 allowed"
                         } else {
-                            "留空为长期有效；也可填写 1–1440 分钟"
+                            "留空即 240 分钟；可填 1–1440"
                         },
                     ),
                     Field::text(tr!(lang, RateLimitLabel), "60", "1–600"),
