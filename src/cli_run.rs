@@ -14,6 +14,7 @@ use zeroize::Zeroizing;
 use crate::cli::{Cli, Command, WebDavCommand};
 use crate::cli_input::{SecretField, SecretInput, required_fields};
 use crate::cli_output::Output;
+use crate::cli_table;
 
 pub async fn run(cli: Cli, lang: Language) -> Result<()> {
     let output = Output { json: cli.json };
@@ -88,6 +89,13 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             monica_pass_cli::library::rename_category(&store, &password, &id, &title)?;
             let data = json!({"id":id,"title":title});
             output.result("rename-category", data.clone(), Some(&data))?;
+        }
+        Command::RenameEntry { name, title } => {
+            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            admin::lock_broker(&store).await?;
+            admin::rename_entry(&store, &name, &title, &password)?;
+            let data = json!({"name":name,"title":title});
+            output.result("rename-entry", data.clone(), Some(&data))?;
         }
         Command::Library => {
             let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
@@ -197,15 +205,14 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
         }
         Command::List => {
             let data = admin::status(&store)?;
-            output.result(
-                "list",
-                json!({"connections":data["connections"]}),
-                Some(&data["connections"]),
-            )?;
+            let connections = data["connections"].clone();
+            let human = (!output.json).then(|| cli_table::render_connections(&connections, lang));
+            output.result_text("list", json!({"connections": connections}), human)?;
         }
         Command::Show { name } => {
             let data = admin::show_connection(&store, &name)?;
-            output.result("show", data.clone(), Some(&data))?;
+            let human = (!output.json).then(|| cli_table::render_connection_detail(&data, lang));
+            output.result_text("show", data, human)?;
         }
         Command::Note { name, note } => {
             validate_name(&name)?;
@@ -266,6 +273,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
         Command::Connect {
             category,
             name,
+            title,
             provider,
             api_base,
             note,
@@ -284,6 +292,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
                 &store,
                 admin::NewConnection {
                     name: &name,
+                    title: &title,
                     provider,
                     base: &base,
                     note: &note,
@@ -357,7 +366,8 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
         }
         Command::Status => {
             let data = admin::status(&store)?;
-            output.result("status", data.clone(), Some(&data))?;
+            let human = (!output.json).then(|| cli_table::render_status(&data, lang));
+            output.result_text("status", data, human)?;
         }
         Command::Mcp { .. } | Command::Check { .. } | Command::Commands { .. } => {
             return Err(GatewayError::InvalidRequest);

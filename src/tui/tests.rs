@@ -860,6 +860,131 @@ fn tui_refresh_preserves_selected_identity_when_config_order_changes() {
 }
 
 #[test]
+fn a_spent_call_budget_is_never_drawn_as_an_active_grant() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = manager_fixture(directory.path());
+    app.store
+        .update(|config| {
+            let mut config = config.unwrap();
+            config
+                .grants
+                .iter_mut()
+                .find(|grant| grant.name == "work-read")
+                .unwrap()
+                .max_calls = 2;
+            Ok((config, ()))
+        })
+        .unwrap();
+    let hash = app
+        .config
+        .as_ref()
+        .unwrap()
+        .grants
+        .iter()
+        .find(|grant| grant.name == "work-read")
+        .unwrap()
+        .capability_hash
+        .clone();
+    app.reload();
+    app.set_page(Page::Grants);
+    app.selected[Page::Grants.index()] = 0;
+    let name_color = |app: &mut App, needle: &str| {
+        let buffer = draw(app, 100, 30);
+        let row = buffer
+            .content
+            .chunks(100)
+            .position(|line| {
+                line.iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>()
+                    .contains(needle)
+            })
+            .unwrap_or_else(|| panic!("{needle} was not drawn"));
+        let cells = &buffer.content[row * 100..(row + 1) * 100];
+        let line: String = cells.iter().map(|cell| cell.symbol()).collect();
+        cells[line[..line.find(needle).unwrap()].chars().count()].fg
+    };
+    assert_eq!(
+        name_color(&mut app, "work-read"),
+        view::ACCENT,
+        "an unspent budget is still a live grant"
+    );
+
+    std::fs::write(app.store.usage_path(), format!(r#"{{"{hash}":2}}"#)).unwrap();
+    app.reload();
+    let screen = text(&mut app, 100, 30);
+    assert!(
+        screen.contains(app.language.text(Message::GrantExhausted)),
+        "{screen}"
+    );
+    assert_eq!(
+        name_color(&mut app, "work-read"),
+        view::DIM,
+        "a refused grant must not look live"
+    );
+    assert_eq!(name_color(&mut app, "work-write"), view::ACCENT);
+
+    app.selected[Page::Grants.index()] = 1;
+    let detail = text(&mut app, 100, 30);
+    assert!(detail.contains("2/2"), "{detail}");
+}
+
+#[test]
+fn the_home_tree_routes_to_the_grant_list_without_unlocking() {
+    for language in [Language::En, Language::ZhCn] {
+        let directory = tempfile::tempdir().unwrap();
+        let store = ConfigStore::new(directory.path().join("gateway.json"));
+        store
+            .update(|_| Ok((Config::new(directory.path().join("synthetic.mdbx")), ())))
+            .unwrap();
+        let mut app = App::new(store, language);
+        assert!(app.library.is_none(), "the vault stays locked here");
+        let rows: Vec<String> = app
+            .home_rows()
+            .iter()
+            .map(|row| row.id().to_owned())
+            .collect();
+        assert_eq!(
+            rows.last().map(String::as_str),
+            Some("action:grants"),
+            "{rows:?}"
+        );
+        assert!(
+            text(&mut app, 100, 30).contains(language.text(Message::PageGrants)),
+            "{language:?} locked"
+        );
+        app.home_selected = rows.len() - 1;
+        app.key(key(KeyCode::Enter));
+        assert!(app.page == Page::Grants);
+        assert!(!app.home);
+
+        app.key(key(KeyCode::F(3)));
+        app.apply(Outcome::Library(crowded_library()));
+        let tree: Vec<String> = app
+            .home_rows()
+            .iter()
+            .map(|row| row.id().to_owned())
+            .collect();
+        assert_eq!(
+            tree.first().map(String::as_str),
+            Some("action:grants"),
+            "{tree:?}"
+        );
+        app.update_home_filter(if language == Language::En {
+            "grant"
+        } else {
+            "授权"
+        });
+        assert!(
+            app.home_rows()
+                .iter()
+                .any(|row| row.id() == "action:grants"),
+            "{language:?} search"
+        );
+    }
+}
+
+#[test]
 fn tui_filtered_webdav_opens_exact_path_and_resets_search_on_folder_change() {
     let directory = tempfile::tempdir().unwrap();
     let mut app = manager_fixture(directory.path());
@@ -1390,6 +1515,7 @@ async fn tui_quick_add_unlocks_and_exposes_only_public_named_metadata_to_mcp() {
         &mut app,
         &[
             "work",
+            "工作 GitHub",
             "github",
             REPOSITORY,
             "处理产品问题反馈",
@@ -1461,6 +1587,7 @@ async fn tui_quick_add_unlocks_and_exposes_only_public_named_metadata_to_mcp() {
         &mut app,
         &[
             "second",
+            "",
             "github",
             REPOSITORY,
             "另一个只读连接",
@@ -1517,6 +1644,7 @@ async fn tui_webdav_setup_to_mcp_call_revocation_and_quit_works_end_to_end() {
         &mut app,
         &[
             "work",
+            "工作令牌",
             "github",
             &format!("https://127.0.0.1:{}/", upstream.port),
             "用于项目 Issue 跟踪",

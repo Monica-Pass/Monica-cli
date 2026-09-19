@@ -2,10 +2,10 @@
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use super::browser::{grant_access, grant_status, quick_command};
+use super::browser::{grant_access, grant_calls, grant_status, quick_command};
 use super::view::{ACCENT, DIM, ERROR, GREEN, WARNING, clean, human_size, timestamp};
 use super::{App, COMMANDS, Page};
-use crate::config::Grant;
+use crate::config::{Grant, GrantState};
 use crate::i18n::{Language, Message};
 use crate::model::Provider;
 use crate::tr;
@@ -114,7 +114,8 @@ fn connection(app: &App) -> Vec<Line<'static>> {
     } else {
         for grant in grants {
             lines.push(Line::default());
-            lines.push(scope_title(grant, lang));
+            let state = app.grant_state(grant);
+            lines.push(scope_title(grant, &state, lang));
             field(
                 &mut lines,
                 tr!(lang, RepositoriesHeading),
@@ -146,8 +147,8 @@ fn connection(app: &App) -> Vec<Line<'static>> {
     lines
 }
 
-pub(super) fn scope_title(grant: &Grant, lang: Language) -> Line<'static> {
-    let status = lang.text(grant_status(grant));
+pub(super) fn scope_title(grant: &Grant, state: &GrantState, lang: Language) -> Line<'static> {
+    let status = lang.text(grant_status(state));
     Line::from(vec![
         Span::styled(clean(&grant.name), Style::default().fg(ACCENT)),
         Span::styled(
@@ -160,7 +161,7 @@ pub(super) fn scope_title(grant: &Grant, lang: Language) -> Line<'static> {
         ),
         Span::styled(
             format!(" · {status}"),
-            Style::default().fg(if grant_status(grant) == Message::GrantActive {
+            Style::default().fg(if grant_status(state) == Message::GrantActive {
                 GREEN
             } else {
                 ERROR
@@ -181,7 +182,8 @@ fn grant(app: &App) -> Vec<Line<'static>> {
             Line::raw(tr!(lang, QuickAddHint)),
         ];
     };
-    let mut lines = vec![scope_title(grant, lang)];
+    let state = app.grant_state(grant);
+    let mut lines = vec![scope_title(grant, &state, lang)];
     field(&mut lines, "connection", &grant.connection);
     let connection = app
         .config
@@ -216,6 +218,11 @@ fn grant(app: &App) -> Vec<Line<'static>> {
         } else {
             timestamp(grant.expires_at)
         },
+    );
+    field(
+        &mut lines,
+        tr!(lang, TableColumnCalls),
+        grant_calls(grant, &state, lang),
     );
     field(
         &mut lines,

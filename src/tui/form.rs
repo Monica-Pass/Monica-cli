@@ -125,6 +125,7 @@ pub(super) enum Kind {
     SwitchDatabase { id: String, name: String },
     Token(String),
     RenameCategory { id: String, title: String },
+    RenameEntry { name: String, title: String },
     Category(Option<String>),
     Move(String),
     Library,
@@ -231,6 +232,26 @@ impl Form {
                     Field::secret(tr!(lang, MasterPasswordLabel)),
                 ],
             ),
+            Kind::RenameEntry { title, .. } => (
+                if lang == crate::i18n::Language::En {
+                    "Rename entry"
+                } else {
+                    "重命名条目"
+                },
+                if lang == crate::i18n::Language::En {
+                    "Set a display title (Chinese allowed); the AI handle is unchanged.".to_owned()
+                } else {
+                    "设置显示名称（支持中文）；AI 句柄保持不变。".to_owned()
+                },
+                vec![
+                    Field::text(
+                        tr!(lang, DisplayTitleLabel),
+                        title,
+                        tr!(lang, DisplayTitleHint),
+                    ),
+                    Field::secret(tr!(lang, MasterPasswordLabel)),
+                ],
+            ),
             Kind::Category(_) => (
                 if lang == crate::i18n::Language::En {
                     "New category"
@@ -301,6 +322,11 @@ impl Form {
                         tr!(lang, ConnectionNameForAi),
                         "",
                         tr!(lang, ConnectionNameHint),
+                    ),
+                    Field::text(
+                        tr!(lang, DisplayTitleLabel),
+                        "",
+                        tr!(lang, DisplayTitleHint),
                     ),
                     Field::text(tr!(lang, ProviderLabel), "github", tr!(lang, ProviderHint)),
                     Field::text(
@@ -381,6 +407,11 @@ impl Form {
                 tr!(lang, ConnectNotice).to_owned(),
                 vec![
                     Field::text(tr!(lang, ConnectionNameLabel), "", tr!(lang, ShortNameHint)),
+                    Field::text(
+                        tr!(lang, DisplayTitleLabel),
+                        "",
+                        tr!(lang, DisplayTitleHint),
+                    ),
                     Field::text(tr!(lang, ProviderLabel), "github", tr!(lang, ProviderHint)),
                     Field::text(tr!(lang, ApiBaseLabel), "", tr!(lang, BlankApiBaseHint)),
                     Field::text(tr!(lang, OptionalNoteLabel), "", tr!(lang, NoSecretsHint)),
@@ -491,6 +522,7 @@ impl Form {
         let auth_field = match kind {
             Kind::Token(_)
             | Kind::RenameCategory { .. }
+            | Kind::RenameEntry { .. }
             | Kind::Category(_)
             | Kind::Move(_)
             | Kind::Add { new_vault: false }
@@ -610,6 +642,11 @@ impl Form {
                 title: self.text(0).to_owned(),
                 password: self.secret(1),
             },
+            Kind::RenameEntry { name, .. } => Action::RenameEntry {
+                name: name.clone(),
+                title: self.text(0).to_owned(),
+                password: self.secret(1),
+            },
             Kind::Category(parent) => Action::Category {
                 title: self.text(0).to_owned(),
                 parent: parent.clone(),
@@ -634,37 +671,38 @@ impl Form {
             Kind::Library => Action::Library(self.secret(0)),
             Kind::Add { new_vault } => {
                 let creating = *new_vault;
-                let provider = match self.text(1) {
+                let provider = match self.text(2) {
                     "github" => Provider::Github,
                     "gitlab" => Provider::Gitlab,
                     _ => return Err(GatewayError::InvalidRequest),
                 };
                 let options = AddOptions {
                     name: self.text(0).to_owned(),
+                    title: self.text(1).to_owned(),
                     provider,
                     repositories: self
-                        .text(2)
+                        .text(3)
                         .split(',')
                         .map(str::trim)
                         .map(str::to_owned)
                         .collect(),
-                    note: self.text(3).to_owned(),
-                    api_base: (!self.text(4).is_empty()).then(|| self.text(4).to_owned()),
+                    note: self.text(4).to_owned(),
+                    api_base: (!self.text(5).is_empty()).then(|| self.text(5).to_owned()),
                     allow_write: false,
                     ttl_minutes: 0,
                 };
                 options.validate()?;
                 if creating {
                     validate_new_password(
-                        &self.fields[6].input.value,
                         &self.fields[7].input.value,
+                        &self.fields[8].input.value,
                     )?;
                 }
                 Action::Add {
                     options,
-                    token: self.secret(5),
-                    password: self.secret(6),
-                    confirmation: if creating { Some(self.secret(7)) } else { None },
+                    token: self.secret(6),
+                    password: self.secret(7),
+                    confirmation: if creating { Some(self.secret(8)) } else { None },
                 }
             }
             Kind::Note => {
@@ -698,16 +736,16 @@ impl Form {
             },
             Kind::Connect => {
                 validate_name(self.text(0))?;
-                let provider = match self.text(1) {
+                let provider = match self.text(2) {
                     "github" => Provider::Github,
                     "gitlab" => Provider::Gitlab,
                     _ => return Err(GatewayError::InvalidRequest),
                 };
                 let base = validate_api_base(
-                    if self.text(2).is_empty() {
+                    if self.text(3).is_empty() {
                         provider.default_api_base()
                     } else {
-                        self.text(2)
+                        self.text(3)
                     },
                     provider,
                 )?
@@ -715,11 +753,12 @@ impl Form {
                 Action::Connect {
                     category: if app.home { app.category.clone() } else { None },
                     name: self.text(0).to_owned(),
+                    title: self.text(1).to_owned(),
                     provider,
                     base,
-                    note: self.text(3).to_owned(),
-                    token: self.secret(4),
-                    password: self.secret(5),
+                    note: self.text(4).to_owned(),
+                    token: self.secret(5),
+                    password: self.secret(6),
                 }
             }
             Kind::Grant => {

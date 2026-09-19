@@ -83,10 +83,17 @@ fn human_errors_are_localized_without_changing_machine_output() {
     store.update(|_| Ok((config, ()))).unwrap();
     let mut outputs = Vec::new();
     for language in ["en", "zh-CN"] {
-        let output = cli(directory.path(), &["--lang", language, "status"]);
+        let output = cli(directory.path(), &["--lang", language, "status", "--json"]);
         assert!(output.status.success());
         assert!(output.stderr.is_empty());
         outputs.push(serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap());
     }
     assert_eq!(outputs[0], outputs[1]);
+    for (language, expected) in [("en", "No AI grants yet."), ("zh-CN", "尚无 AI 授权。")] {
+        let output = cli(directory.path(), &["--lang", language, "status"]);
+        assert!(output.status.success(), "{:?}", output.stderr);
+        let report = String::from_utf8(output.stdout).unwrap();
+        assert!(!report.starts_with('{'), "{report}");
+        assert!(report.contains(expected), "{report}");
+    }
 }

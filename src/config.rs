@@ -52,6 +52,33 @@ pub struct Grant {
     pub client_file: Option<PathBuf>,
 }
 
+/// When a grant stops serving the AI. Expiry alone is not enough: an exhausted
+/// call budget blocks the grant just as hard, and a frontend that ignores it
+/// would advertise a refused authorization as usable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GrantState {
+    pub used: u32,
+    pub pending: bool,
+    pub expired: bool,
+    pub exhausted: bool,
+}
+
+impl GrantState {
+    pub fn refresh_required(&self) -> bool {
+        self.expired || self.exhausted
+    }
+}
+
+pub fn grant_state(grant: &Grant, usage: &BTreeMap<String, u32>, now: i64) -> GrantState {
+    let used = usage.get(&grant.capability_hash).copied().unwrap_or(0);
+    GrantState {
+        used,
+        pending: now < grant.issued_at,
+        expired: grant.expires_at != 0 && now >= grant.expires_at,
+        exhausted: grant.max_calls != 0 && used >= grant.max_calls,
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -499,6 +526,32 @@ mod tests {
         });
         config.connections.insert("work".to_owned(), connection);
         (config, capability)
+    }
+
+    #[test]
+    fn grant_state_treats_a_spent_budget_exactly_like_expiry() {
+        let directory = tempfile::tempdir().unwrap();
+        let (config, _) = fixture(directory.path());
+        let grant = &config.grants[0];
+        let used: BTreeMap<String, u32> =
+            [(grant.capability_hash.clone(), 4)].into_iter().collect();
+
+        assert!(grant_state(grant, &BTreeMap::new(), 999).pending);
+        let live = grant_state(grant, &BTreeMap::new(), 1500);
+        assert!(!live.pending && !live.refresh_required());
+        let uncapped = grant_state(grant, &used, 1500);
+        assert_eq!(uncapped.used, 4);
+        assert!(
+            !uncapped.refresh_required(),
+            "a grant without a call budget cannot run out"
+        );
+
+        let mut capped = grant.clone();
+        capped.max_calls = 4;
+        let spent = grant_state(&capped, &used, 1500);
+        assert!(spent.exhausted && !spent.expired);
+        assert!(spent.refresh_required());
+        assert!(grant_state(&capped, &BTreeMap::new(), 2000).expired);
     }
 
     #[test]

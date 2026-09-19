@@ -243,6 +243,7 @@ impl Fixture {
             .store_credential(
                 None,
                 "work",
+                "",
                 provider,
                 &base,
                 "用于项目 Issue 跟踪",

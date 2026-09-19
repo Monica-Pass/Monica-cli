@@ -77,6 +77,8 @@ In edit forms, `Tab` moves between fields and `Ctrl+S` opens a separate database
 
 In settings, press `c` for guided service setup, or `a` to configure an explicit grant. Every authorization **expires**: the default lifetime is 240 minutes (`--ttl`, 1–1440; leaving the field blank no longer means forever), and `--max-calls` can additionally cap how many upstream calls that grant may make. Once the window or the call budget is spent the AI only receives `reauthorization_required`, and a person must run `monica refresh GRANT` locally — command line only for now, with no TUI key — which issues a new capability, so the MCP client must be restarted to pick it up. Grants stay revocable and still require an active unlocked broker. Token replacement revokes existing grants for that connection.
 
+The home tree always carries an **AI grants** row (locked vault included) whose suffix counts the authorizations currently in force. `Enter` opens the list: live rows show read-only or read-write scope, expired and "Calls used up" rows are dimmed, and the preview of the selected row shows `used/max` calls — so you can see which proxies are still serving without drilling into the database.
+
 Use a UTF-8 terminal at least **70 columns × 20 rows**. Settings retain `/` filtering, `1`–`5` page navigation and `:` commands.
 
 ### Interface language
@@ -97,6 +99,8 @@ monica-pass language auto
 Precedence is: `--lang` → the `MONICA_LANG` environment variable → saved preference → system locale. Automatic mode checks `LC_ALL`, `LC_MESSAGES` and `LANG`; on Windows, it uses the system locale when those variables are unset.
 
 Connection names and purpose notes are shown as entered. CLI JSON output, MCP tool names, arguments and error codes stay stable across interface languages.
+
+A connection name is an ASCII handle (`[A-Za-z0-9_-]`); grants, MCP config and command arguments all reference it. Each entry can also carry an optional display title (`--title`, CJK allowed, ≤256 UTF-8 bytes) that only affects how the vault list is shown, falling back to the handle when blank. Rename an existing entry with `rename-entry <handle> <new title>`, or press `r` on a selected entry in the TUI. Renaming changes only the display title — the encrypted payload and AI grants are untouched, and the AI always uses the handle.
 
 ### Start from the command line
 

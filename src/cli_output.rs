@@ -28,6 +28,23 @@ impl Output {
         }
     }
 
+    /// JSON mode emits the same envelope as [`Output::result`]; human mode prints a
+    /// pre-rendered table so read-only commands stay friendly without changing `--json`.
+    pub fn result_text(self, command: &str, data: Value, human: Option<String>) -> Result<()> {
+        if self.json {
+            print_json(
+                &json!({"ok": true, "command": command, "data": data}),
+                false,
+            )
+        } else if let Some(text) = human {
+            let mut stdout = std::io::stdout().lock();
+            writeln!(&mut stdout, "{text}").map_err(|_| GatewayError::StateUnavailable)?;
+            stdout.flush().map_err(|_| GatewayError::StateUnavailable)
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn event(self, command: &str, event: &str, data: Value) -> Result<()> {
         if self.json {
             print_json(

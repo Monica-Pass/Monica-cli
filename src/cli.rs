@@ -44,6 +44,8 @@ pub enum Command {
     Token { name: String },
     /// Rename a native MDBX category by its stable ID.
     RenameCategory { id: String, title: String },
+    /// Rename an entry's display title (Chinese allowed) by its connection handle.
+    RenameEntry { name: String, title: String },
     /// Browse database categories and entry summaries after unlocking.
     #[command(visible_alias = "tree")]
     Library,
@@ -126,6 +128,9 @@ pub enum Command {
         #[arg(long)]
         category: Option<String>,
         name: String,
+        /// Optional human-facing display title (Chinese allowed). The name stays the AI handle.
+        #[arg(long, default_value = "")]
+        title: String,
         #[arg(short = 'p', long, value_enum, default_value = "github")]
         provider: Provider,
         /// HTTPS API root; omit for github.com or gitlab.com.
@@ -205,6 +210,7 @@ impl Command {
             Self::Use { .. } => "use",
             Self::Token { .. } => "token",
             Self::RenameCategory { .. } => "rename-category",
+            Self::RenameEntry { .. } => "rename-entry",
             Self::Library => "library",
             Self::Category { .. } => "category",
             Self::Move { .. } => "move",

@@ -26,6 +26,11 @@ pub(super) enum Action {
         title: String,
         password: Zeroizing<String>,
     },
+    RenameEntry {
+        name: String,
+        title: String,
+        password: Zeroizing<String>,
+    },
     Category {
         title: String,
         parent: Option<String>,
@@ -61,6 +66,7 @@ pub(super) enum Action {
     Connect {
         category: Option<String>,
         name: String,
+        title: String,
         provider: Provider,
         base: String,
         note: String,
@@ -98,6 +104,7 @@ impl Action {
             Self::SwitchDatabase { .. }
                 | Self::Token { .. }
                 | Self::RenameCategory { .. }
+                | Self::RenameEntry { .. }
                 | Self::Category { .. }
                 | Self::Move { .. }
                 | Self::Library(_)
@@ -119,9 +126,10 @@ impl Action {
         match self {
             Self::SwitchDatabase { .. } => Message::PendingOpen,
             Self::Token { .. } => Message::PendingConnect,
-            Self::RenameCategory { .. } | Self::Category { .. } | Self::Move { .. } => {
-                Message::PendingConnect
-            }
+            Self::RenameCategory { .. }
+            | Self::RenameEntry { .. }
+            | Self::Category { .. }
+            | Self::Move { .. } => Message::PendingConnect,
             Self::Library(_) => Message::PendingUnlock,
             Self::Add { .. } => Message::PendingAdd,
             Self::Note { .. } => Message::PendingNote,
@@ -212,6 +220,19 @@ pub(super) async fn perform(
         } => {
             let library = tokio::task::spawn_blocking(move || {
                 crate::library::rename_category(&store, &password, &id, &title)?;
+                crate::library::read(&store, &password)
+            })
+            .await
+            .map_err(|_| GatewayError::StateUnavailable)??;
+            Ok(Outcome::Library(library))
+        }
+        Action::RenameEntry {
+            name,
+            title,
+            password,
+        } => {
+            let library = tokio::task::spawn_blocking(move || {
+                admin::rename_entry(&store, &name, &title, &password)?;
                 crate::library::read(&store, &password)
             })
             .await
@@ -310,6 +331,7 @@ pub(super) async fn perform(
         Action::Connect {
             category,
             name,
+            title,
             provider,
             base,
             note,
@@ -321,6 +343,7 @@ pub(super) async fn perform(
                     &store,
                     admin::NewConnection {
                         name: &name,
+                        title: &title,
                         provider,
                         base: &base,
                         note: &note,

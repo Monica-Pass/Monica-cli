@@ -16,7 +16,7 @@ use super::view::{
     ACCENT, BG, DIM, ERROR, FG, GREEN, Icon, LIGHT, Record, WARNING, broker_status, capsule_edge,
     chrome, clean, clipped, draw_record, path_line, position, rails, render_input, wrapped_lines,
 };
-use super::{App, KeyCode, KeyEvent, Mode};
+use super::{App, KeyCode, KeyEvent, Mode, Page};
 use crate::i18n::{Language, Message};
 use crate::library::Library;
 use crate::model::Provider;
@@ -27,6 +27,7 @@ pub(super) enum HomeAction {
     Open,
     OpenLocal,
     NewDatabase,
+    Authorizations,
 }
 
 /// One selectable row of the middle column. A category is the section header of
@@ -63,6 +64,7 @@ impl HomeRow {
                 HomeAction::Open => "action:browse",
                 HomeAction::OpenLocal => "action:open",
                 HomeAction::NewDatabase => "action:new",
+                HomeAction::Authorizations => "action:grants",
             },
         }
     }
@@ -154,24 +156,37 @@ impl App {
         }
         let mut rows = Vec::new();
         walk(library, self.category.as_deref(), 0, &mut rows);
-        if self.category.is_none() {
-            // Orphaned rows stay reachable instead of silently vanishing.
-            for entry in library
-                .entries
-                .iter()
-                .filter(|e| !library.categories.iter().any(|c| c.id == e.category))
-            {
-                rows.push(HomeRow::Entry {
-                    id: entry.id.clone(),
-                    title: entry.title.clone(),
-                    kind: entry.kind.clone(),
-                    category: entry.category.clone(),
-                    path: String::new(),
-                    depth: 0,
-                });
-            }
+        if self.category.is_some() {
+            return rows;
+        }
+        // Orphaned rows stay reachable instead of silently vanishing.
+        for entry in library
+            .entries
+            .iter()
+            .filter(|e| !library.categories.iter().any(|c| c.id == e.category))
+        {
+            rows.push(HomeRow::Entry {
+                id: entry.id.clone(),
+                title: entry.title.clone(),
+                kind: entry.kind.clone(),
+                category: entry.category.clone(),
+                path: String::new(),
+                depth: 0,
+            });
+        }
+        if let Some(row) = self.grants_row() {
+            rows.insert(0, row);
         }
         rows
+    }
+
+    /// Named route to the authorization list, kept first at the tree root so the
+    /// live token proxy is one Enter away without opening the detailed database.
+    fn grants_row(&self) -> Option<HomeRow> {
+        self.config.as_ref().map(|_| HomeRow::Action {
+            action: HomeAction::Authorizations,
+            title: Message::PageGrants,
+        })
     }
 
     fn home_actions(&self) -> Vec<HomeRow> {
@@ -191,6 +206,8 @@ impl App {
             action: HomeAction::OpenLocal,
             title: Message::OpenLocalRow,
         });
+        // Reachable while the vault is locked: grant state needs no master password.
+        rows.extend(self.grants_row());
         rows
     }
 
@@ -245,6 +262,12 @@ impl App {
                 }),
         );
         rows.sort_by_key(sort_key);
+        if let Some(row) = self.grants_row() {
+            let title = self.language.text(Message::PageGrants);
+            if hits(title.to_owned()) {
+                rows.insert(0, row);
+            }
+        }
         rows
     }
 
@@ -293,6 +316,7 @@ impl App {
             HomeAction::Open => self.show_form(Kind::Library),
             HomeAction::OpenLocal => self.show_form(Kind::OpenLocal),
             HomeAction::NewDatabase => self.show_form(Kind::Init),
+            HomeAction::Authorizations => self.set_page(Page::Grants),
         }
     }
 
@@ -453,6 +477,19 @@ impl App {
                     HomeRow::Action { action, .. } => self.run_home_action(*action),
                 }
             }
+            KeyCode::Char('r') if self.library.is_some() => {
+                let Some(row) = self.selected_home_row() else {
+                    return;
+                };
+                if let HomeRow::Entry { title, .. } = &row
+                    && let Some((name, _)) = self.home_entry_connection(&row)
+                {
+                    self.show_form(Kind::RenameEntry {
+                        name,
+                        title: title.clone(),
+                    });
+                }
+            }
             _ => {}
         }
     }
@@ -541,11 +578,21 @@ fn record(app: &App, row: &HomeRow) -> Record {
         }
         HomeRow::Action { action, title } => Record {
             name: clean(lang.text(*title)),
-            suffix: String::new(),
+            suffix: if *action == HomeAction::Authorizations {
+                counted(
+                    lang,
+                    app.grants_in_force(),
+                    Message::GrantWordOne,
+                    Message::GrantWord,
+                )
+            } else {
+                String::new()
+            },
             icon: match action {
                 HomeAction::Open => Icon::Unlock,
                 HomeAction::OpenLocal => Icon::Database,
                 HomeAction::NewDatabase => Icon::File,
+                HomeAction::Authorizations => Icon::Grant,
             },
             color: ACCENT,
         },
@@ -797,11 +844,15 @@ fn home_detail(app: &App) -> Vec<Line<'static>> {
             field(&mut lines, tr!(lang, TokenHeading), tr!(lang, TokenMasked));
             lines
         }
-        HomeRow::Action { title, .. } => vec![
-            heading(lang.text(*title)),
-            Line::default(),
-            Line::raw(tr!(lang, DetailActionHint)),
-        ],
+        HomeRow::Action { action, title } => {
+            let mut lines = vec![heading(lang.text(*title)), Line::default()];
+            if *action == HomeAction::Authorizations {
+                lines.push(Line::raw(tr!(lang, GrantsRowDetail)));
+                lines.push(Line::default());
+            }
+            lines.push(Line::raw(tr!(lang, DetailActionHint)));
+            lines
+        }
     };
     if let Some((name, provider)) = app.home_entry_connection(&row) {
         let Some(connection) = app.config.as_ref().and_then(|c| c.connections.get(&name)) else {
@@ -837,7 +888,8 @@ fn home_detail(app: &App) -> Vec<Line<'static>> {
             count = grants.len()
         )));
         for grant in grants {
-            lines.push(scope_title(grant, lang));
+            let state = app.grant_state(grant);
+            lines.push(scope_title(grant, &state, lang));
         }
     } else if matches!(row, HomeRow::Entry { .. }) {
         lines.push(Line::default());

@@ -4,6 +4,7 @@ mod cli_input;
 mod cli_language;
 mod cli_output;
 mod cli_run;
+mod cli_table;
 
 use cli::{Cli, Command};
 use monica_pass_cli::error::GatewayError;

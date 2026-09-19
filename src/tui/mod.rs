@@ -28,7 +28,7 @@ use browser::{Filter, Focus, quick_command};
 use form::{Form, FormEvent, Input, Kind};
 
 use crate::admin::{self, BrokerSession};
-use crate::config::{Config, ConfigStore, Grant, write_json};
+use crate::config::{Config, ConfigStore, Grant, GrantState, write_json};
 use crate::error::{GatewayError, Result};
 use crate::i18n::{self, Language, LanguageChoice, Message, Preferences};
 use crate::tr;
@@ -253,6 +253,7 @@ struct App {
     home_selected: usize,
     home_restore: Option<(Option<String>, Option<String>)>,
     store: ConfigStore,
+    usage: std::collections::BTreeMap<String, u32>,
     language: Language,
     config: Option<Config>,
     profile: Option<WebDavProfile>,
@@ -296,6 +297,7 @@ impl App {
             home_selected: 0,
             home_restore: None,
             store,
+            usage: std::collections::BTreeMap::new(),
             language,
             config: None,
             profile: None,
@@ -359,6 +361,12 @@ impl App {
         } else {
             self.config = None;
         }
+        // The usage ledger needs neither the master password nor the broker lock,
+        // so grant budgets stay readable while the vault is closed. A failed read
+        // keeps the previous values instead of blanking the panel for one tick.
+        if let Ok(usage) = crate::gateway::load_call_usage(&self.store) {
+            self.usage = usage;
+        }
         for (page, key) in Page::ALL.into_iter().zip(selection) {
             self.restore_selection(page, key.as_deref());
         }
@@ -404,6 +412,26 @@ impl App {
             .grants
             .get(self.selected_index(Page::Grants)?)
     }
+    /// One source of truth for "is this grant still serving the AI", shared with
+    /// `admin::status` and the gateway so the terminal cannot advertise a refused
+    /// authorization as usable.
+    fn grant_state(&self, grant: &Grant) -> GrantState {
+        crate::config::grant_state(grant, &self.usage, chrono::Utc::now().timestamp())
+    }
+    /// Authorizations currently serving the AI: not pending, not expired, budget unspent.
+    fn grants_in_force(&self) -> usize {
+        let Some(config) = self.config.as_ref() else {
+            return 0;
+        };
+        config
+            .grants
+            .iter()
+            .filter(|grant| {
+                let state = self.grant_state(grant);
+                !state.pending && !state.refresh_required()
+            })
+            .count()
+    }
     fn grant_client(&self) -> Result<(String, PathBuf)> {
         let grant = self.selected_grant().ok_or(GatewayError::NotFound)?;
         let path = match &grant.client_file {
@@ -423,6 +451,7 @@ impl App {
                     | Action::Token { .. }
                     | Action::Category { .. }
                     | Action::RenameCategory { .. }
+                    | Action::RenameEntry { .. }
                     | Action::Move { .. }
             ) {
                 let row = self

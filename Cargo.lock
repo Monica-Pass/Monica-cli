@@ -1441,6 +1441,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-util",
+ "unicode-width",
  "url",
  "uuid",
  "windows-sys 0.61.2",

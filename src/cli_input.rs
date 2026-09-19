@@ -15,7 +15,7 @@ pub fn required_fields(command: &str) -> &'static [SecretField] {
     match command {
         "add" | "connect" | "token" => &[Password, Token],
         "init" | "note" | "open" | "grant" | "refresh" | "serve" | "library" | "category"
-        | "move" | "rename-category" | "use" => &[Password],
+        | "move" | "rename-category" | "rename-entry" | "use" => &[Password],
         "webdav login" | "webdav list" => &[WebDavPassword],
         "webdav open" | "webdav publish" | "webdav sync" => &[Password, WebDavPassword],
         _ => &[],

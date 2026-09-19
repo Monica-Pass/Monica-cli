@@ -4,8 +4,8 @@ use zeroize::Zeroizing;
 
 use super::form::Input;
 use super::{App, COMMANDS, CommandHelp, Mode, Page};
-use crate::config::Grant;
-use crate::i18n::Message;
+use crate::config::{Grant, GrantState};
+use crate::i18n::{Language, Message};
 use crate::model::Operation;
 use crate::tr;
 
@@ -29,14 +29,23 @@ pub(super) fn quick_command(index: usize) -> Option<&'static CommandHelp> {
     COMMANDS.iter().find(|command| command.command == *name)
 }
 
-pub(super) fn grant_status(grant: &Grant) -> Message {
-    let now = chrono::Utc::now().timestamp();
-    if now < grant.issued_at {
+pub(super) fn grant_status(state: &GrantState) -> Message {
+    if state.pending {
         Message::GrantPending
-    } else if grant.expires_at != 0 && now >= grant.expires_at {
+    } else if state.expired {
         Message::GrantExpired
+    } else if state.exhausted {
+        Message::GrantExhausted
     } else {
         Message::GrantActive
+    }
+}
+
+pub(super) fn grant_calls(grant: &Grant, state: &GrantState, lang: Language) -> String {
+    if grant.max_calls == 0 {
+        tr!(lang, GrantCallsUnlimited).to_string()
+    } else {
+        format!("{}/{}", state.used, grant.max_calls)
     }
 }
 
@@ -117,8 +126,9 @@ impl App {
                         .as_ref()
                         .and_then(|config| config.grants.get(*index))
                         .map_or_else(String::new, |grant| {
+                            let state = self.grant_state(grant);
                             format!(
-                                "{} {} {} {} {} {}",
+                                "{} {} {} {} {} {} {}",
                                 grant.name,
                                 grant.connection,
                                 grant
@@ -133,8 +143,9 @@ impl App {
                                     .map(|operation| operation.name().replace('_', "-"))
                                     .collect::<Vec<_>>()
                                     .join(" "),
-                                lang.text(grant_status(grant)),
-                                lang.text(grant_access(grant))
+                                lang.text(grant_status(&state)),
+                                lang.text(grant_access(grant)),
+                                grant_calls(grant, &state, lang)
                             )
                         }),
                     Page::WebDav => self.entries.get(*index).map_or_else(String::new, |entry| {

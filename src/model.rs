@@ -230,6 +230,22 @@ pub fn validate_note(value: &str) -> Result<()> {
     Ok(())
 }
 
+pub const MAX_TITLE_BYTES: usize = 256;
+
+/// Display titles allow any script (e.g. Chinese) but stay non-empty, bounded and free of
+/// control/bidi spoofing characters. They are display-only; the ASCII handle uses validate_name.
+pub fn validate_title(value: &str) -> Result<()> {
+    if value.trim().is_empty()
+        || value.len() > MAX_TITLE_BYTES
+        || value.chars().any(|ch| {
+            ch.is_control() || matches!(ch, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        })
+    {
+        return Err(GatewayError::InvalidRequest);
+    }
+    Ok(())
+}
+
 pub fn validate_repository(value: &str, provider: Provider) -> Result<()> {
     let segments: Vec<_> = value.split('/').collect();
     if value.len() > 512
@@ -295,6 +311,17 @@ pub fn validate_grant_scope(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn validate_title_allows_cjk_and_rejects_blank_oversized_or_control() {
+        assert!(validate_title("微信令牌").is_ok());
+        assert!(validate_title("GitHub 工作 · prod").is_ok());
+        assert!(validate_title("   ").is_err());
+        assert!(validate_title("").is_err());
+        assert!(validate_title(&"字".repeat(257)).is_err());
+        assert!(validate_title("line\nbreak").is_err());
+        assert!(validate_title("bidi\u{202e}spoof").is_err());
+    }
 
     #[test]
     fn model_rejects_paths_headers_urls_and_unbounded_arguments() {

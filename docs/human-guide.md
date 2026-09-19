@@ -204,6 +204,26 @@ monica -C %CFG% st --json
 
 `max_calls: 0` 表示未设次数预算，只受时间窗口约束。注意命令行参数写 `--max-calls`、`--operation api-read`（短横线），而 JSON 输出里是 `api_read`、`list_issues`（下划线）——两种写法分别属于 CLI 与数据格式，不要互换。
 
+省略 `--json` 时是一给人看的表（实测，路径已缩写）：
+
+```text
+monica -C %CFG% st
+
+Config   C:\...\mcbase\gateway.json
+Vault    C:\...\mcbase\gateway.mdbx
+Gateway  127.0.0.1:47831 · stopped
+WebDAV   off
+
+Handle  Provider  Note
+base    github    baseline fixture
+
+Grant   Handle  Scope        Operations              Expires           Calls
+base    base    owner/repo   list_issues, get_issue  2026-09-20 02:04  unlimited
+second  base    owner/other  list_issues, get_issue  2026-09-20 02:05  5/5
+```
+
+`Calls` 一栏的 `5/5` 就是那份 `--max-calls 5` 的授权已经用满，代理已经在拒绝它。表格标签会随界面语言翻译（`--lang zh-CN` 下为「配置 / 保险库 / 代理 / 授权 / 调用」），`--json` 的输出与语言无关，脚本一律用 `--json`。
+
 ### 第 8 步　窗口结束后续期
 
 到期后 AI 侧只会收到 `reauthorization_required`，实测报文：
@@ -262,6 +282,7 @@ monica -C %CFG% rf work
 | 仅保存连接 | `connect` | `c` | 是 | 主密码 + Token |
 | 快速添加（连接+授权） | `add` | `a` | 是 | 主密码 + Token |
 | 编辑公开备注 | `note` | `e` | 是 | 主密码 |
+| 改条目显示标题 | `rename-entry <句柄> <新标题>` | — | 是 | 主密码 |
 | 更换 Token | `token <连接名>` | — | 是 | 主密码 + 新 Token |
 | 创建授权 | `grant` | `g` | 是 | 主密码 |
 | 续期授权 | `refresh` | `rf` | 是（会等待在途请求排空） | 主密码 |
@@ -276,7 +297,7 @@ monica -C %CFG% rf work
 
 要点：
 
-- **会先停代理的操作**：任何需要读写保险库的动作（`init` / `connect` / `add` / `grant` / `refresh` / `note` / `token` / `open` / `use` / `library` / `category` / `move` / `rename-category` / WebDAV 同步）。它们会等待在途请求结束，完成后**保持锁定**，要继续用 MCP 就得重新 `u`。
+- **会先停代理的操作**：任何需要读写保险库的动作（`init` / `connect` / `add` / `grant` / `refresh` / `note` / `token` / `open` / `use` / `library` / `category` / `move` / `rename-category` / `rename-entry` / WebDAV 同步）。它们会等待在途请求结束，完成后**保持锁定**，要继续用 MCP 就得重新 `u`。
 - **不停代理的操作**：`ls` / `show` / `st` / `m` / `ck` / `call` / `cmds` / `rv`。
 - 授权的 `operations` 里出现 `api_read` / `api_write` 意味着这份授权拥有该 Token 的完整 API 能力，范围必须是 `*`。给出这种授权前请把它当成"把 Token 交出去"来评估。
 - `rv` 不需要停代理，也**不会删除 `clients/` 下的 capability 文件**——它只把授权从配置里移除，文件留在原地。想让那份文件彻底消失要自己删。
@@ -304,9 +325,10 @@ monica grant gitlab-api --connection work-gitlab --repo "*" --operation api-read
 - GitLab：允许子组，2–12 段，如 `group/sub/project`。
 - 每段仅限 ASCII 字母数字与 `._-`，不能是 `.` 或 `..`，单段 ≤100 字符，总长 ≤512。
 
-### 6.3 名称与备注
+### 6.3 名称、显示标题与备注
 
-- 授权/连接名称：`[A-Za-z0-9_-]`，1–64 字符，**不支持中文**。
+- 连接/授权名称（句柄）：`[A-Za-z0-9_-]`，1–64 字符，**不支持中文**。这是 AI 授权、MCP 配置和命令行参数引用连接时使用的稳定标识，创建后不可改。
+- **显示标题**（条目名，可选）：允许中文等任意文字，≤256 UTF-8 字节；仅用于保险库列表里看，不影响句柄。`add`/`connect` 用 `--title 微信令牌` 指定，留空则标题等于句柄。已建条目用 `monica rename-entry <句柄> <新标题>` 改名；终端管理器里选中条目按 `r`。改名只动显示标题，加密载荷、凭据身份与 AI 授权都不受影响。标题与备注同样不得含密钥（`sensitive_metadata` 拦截）。
 - 备注：≤1024 UTF-8 字节，允许中文；不得含控制字符或双向文本覆盖符（防注入）。备注会原样展示给 AI，**永远不要往里写密钥**——含凭据特征的内容会被 `sensitive_metadata` 拦下。
 
 ### 6.4 三档建议
@@ -324,9 +346,17 @@ monica grant gitlab-api --connection work-gitlab --repo "*" --operation api-read
 - `add` 没有 `--max-calls`，也不能改 rpm（固定 60、不限次数）。要设预算必须走 `grant`。
 - `rf --max-calls 0` 合法，含义是**取消**这份授权的次数预算。这是人工侧独有的决定，AI 无权也不该建议。
 
-### 6.5 已知的显示缺口
+### 6.5 在 TUI 里核对预算
 
-TUI 的授权视图目前**不显示 `--max-calls` 与已用次数**，只有 `monica st --json` 和 `monica show <连接名>` 能看到 `max_calls` / `calls_used`。要核对预算请用命令行。
+主页树里始终有一行 **AI 授权**（锁定状态也在），行尾直接给出当前生效的授权数量，回车即进授权页。生效状态与 `monica st --json` 的 `refresh_required` 同源，不会各算一套：
+
+- 授权列表：仍在窗口内且预算未用尽才显示范围（只读 / 读写）并高亮；否则显示 **尚未生效**、**已过期** 或 **调用已用完**，并以暗色绘制。
+- 选中一行的预览面板：`调用` 一栏显示 `已用/上限`（如 `3/20`），未设预算时显示 **不限**。
+- `/` 搜索可命中这些文案，`已用完` 能一次筛出所有跑飞的授权。
+
+授权状态来自配置文件与 `gateway.usage.json`，**不需要主密码、也不需要代理在跑**，锁库时同样可查。
+
+仍然缺的两件事：TUI 里没有续期动作（`rf` 只在命令行，见第 8 步）；TUI 的授权表单不设次数预算（`max_calls` 固定为不限），要卡次数就走 `grant --max-calls`。
 
 ## 7. WebDAV 同步
 
@@ -453,7 +483,7 @@ monica -C <恢复的配置> m <授权名>     # 客户端文件是否还在原�
 ## 11. 能力边界（必须知道的几条）
 
 1. **不存在永久授权**，最长期 1440 分钟。
-2. TUI 授权视图不显示 `--max-calls` 与 `calls_used`，核对预算请用 `st` / `show` 的 JSON（见 [6.5](#65-已知的显示缺口)）。
+2. TUI 能看到授权状态与 `已用/上限`（见 [6.5](#65-在-tui-里核对预算)），但**没有续期按键**，授权表单也**不设次数预算**；这两件事只有命令行能做。
 3. MCP 只提供已支持的服务操作：**没有**凭据读取、任意 URL、任意请求头、Shell 执行工具。
 4. 已发出的远端操作无法撤回；锁定代理只阻止后续请求。
 5. 同一系统用户下、具备任意文件读写或进程调试权限的程序，不受这条接口边界保护。

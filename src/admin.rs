@@ -18,6 +18,7 @@ use crate::error::{GatewayError, Result};
 use crate::gateway::Gateway;
 use crate::model::{
     Operation, Provider, validate_api_base, validate_name, validate_note, validate_repository,
+    validate_title,
 };
 use crate::protocol::serve_broker;
 use crate::upstream::reject_secret_value;
@@ -62,6 +63,9 @@ pub struct RefreshOptions {
 pub struct AddOptions {
     /// A short name the AI will use, such as work-github.
     pub name: String,
+    /// Optional human-facing display title (Chinese allowed). The name stays the ASCII handle.
+    #[arg(long, default_value = "")]
+    pub title: String,
     #[arg(short = 'p', long, value_enum, default_value = "github")]
     pub provider: Provider,
     /// Optional HTTPS API root for a self-hosted service.
@@ -83,6 +87,9 @@ pub struct AddOptions {
 impl AddOptions {
     pub fn validate(&self) -> Result<()> {
         validate_name(&self.name)?;
+        if !self.title.trim().is_empty() {
+            validate_title(&self.title)?;
+        }
         validate_note(&self.note)?;
         validate_api_base(
             self.api_base
@@ -187,6 +194,7 @@ pub fn initialize(
 
 pub struct NewConnection<'a> {
     pub name: &'a str,
+    pub title: &'a str,
     pub provider: Provider,
     pub base: &'a str,
     pub note: &'a str,
@@ -206,6 +214,7 @@ pub fn add_connection(
         store,
         NewConnection {
             name,
+            title: "",
             provider,
             base,
             note,
@@ -224,15 +233,19 @@ pub fn add_connection_in_category(
 ) -> Result<()> {
     let NewConnection {
         name,
+        title,
         provider,
         base,
         note,
         category,
     } = options;
     validate_name(name)?;
+    if !title.trim().is_empty() {
+        validate_title(title)?;
+    }
     validate_note(note)?;
     let base = validate_api_base(base, provider)?.to_string();
-    check_public(&json!([name, &base, note]), &[password, &token])?;
+    check_public(&json!([name, title, &base, note]), &[password, &token])?;
     let _guard = store.acquire_broker_lock()?;
     store.update(|config| {
         let mut config = config.ok_or(GatewayError::NotFound)?;
@@ -253,6 +266,7 @@ pub fn add_connection_in_category(
         let (collection, connection) = vault.store_credential(
             category.or(config.collection_id.as_deref()),
             name,
+            title,
             provider,
             &base,
             note,
@@ -293,7 +307,13 @@ pub fn quick_add(
     )?
     .to_string();
     check_public(
-        &json!([&options.name, &options.note, &base, &options.repositories]),
+        &json!([
+            &options.name,
+            &options.title,
+            &options.note,
+            &base,
+            &options.repositories
+        ]),
         &[password, &token],
     )?;
     let output = client_path(store, &options.name)?;
@@ -332,6 +352,7 @@ pub fn quick_add(
         let stored = vault.store_credential(
             config.collection_id.as_deref(),
             &options.name,
+            &options.title,
             options.provider,
             &base,
             &options.note,
@@ -375,6 +396,21 @@ pub fn update_note(store: &ConfigStore, name: &str, note: &str, password: &str) 
         config.connections.insert(name.to_owned(), updated?);
         Ok((config, ()))
     })
+}
+
+/// Retitle an existing entry's display title (Chinese allowed). The connection handle and the
+/// encrypted payload stay unchanged; the title lives only in the shared MDBX entry.
+pub fn rename_entry(store: &ConfigStore, name: &str, title: &str, password: &str) -> Result<()> {
+    validate_name(name)?;
+    validate_title(title)?;
+    check_public(&json!([name, title]), &[password])?;
+    let _guard = store.acquire_broker_lock()?;
+    let config = store.load()?;
+    let binding = config.connections.get(name).ok_or(GatewayError::NotFound)?;
+    let vault = Vault::open(&config.vault, password)?;
+    let result = vault.rename_entry(binding, title);
+    vault.lock()?;
+    result
 }
 
 /// Replace an encrypted token in place and require new authorization for it.
@@ -730,14 +766,12 @@ pub fn status(store: &ConfigStore) -> Result<Value> {
         .grants
         .iter()
         .map(|grant| {
-            let expired = grant.expires_at != 0 && now >= grant.expires_at;
-            let used = usage.get(&grant.capability_hash).copied().unwrap_or(0);
-            let exhausted = grant.max_calls != 0 && used >= grant.max_calls;
+            let state = crate::config::grant_state(grant, &usage, now);
             json!({
                 "name": grant.name, "connection": grant.connection, "repositories": grant.repositories,
                 "operations": grant.operations, "expires_at_unix": grant.expires_at,
-                "expired": expired, "max_calls": grant.max_calls, "calls_used": used,
-                "refresh_required": expired || exhausted,
+                "expired": state.expired, "max_calls": grant.max_calls, "calls_used": state.used,
+                "refresh_required": state.refresh_required(),
             })
         })
         .collect();
@@ -858,6 +892,7 @@ mod tests {
     fn quick_options(name: &str) -> AddOptions {
         AddOptions {
             name: name.to_owned(),
+            title: String::new(),
             provider: Provider::Github,
             api_base: None,
             note: "处理 Monica 的问题反馈；备注不是权限指令。".to_owned(),
@@ -881,6 +916,7 @@ mod tests {
             &store,
             NewConnection {
                 name: "work",
+                title: "",
                 provider: Provider::Gitlab,
                 base: Provider::Gitlab.default_api_base(),
                 note: "Work issues",
@@ -932,6 +968,50 @@ mod tests {
             TOKEN
         );
         vault.lock().unwrap();
+    }
+
+    #[test]
+    fn rename_entry_retitles_ascii_handle_to_chinese_and_rejects_secret() {
+        use crate::test_support::{PASSWORD, TOKEN};
+        let directory = tempfile::tempdir().unwrap();
+        let store = ConfigStore::new(directory.path().join("gateway.json"));
+        quick_add(
+            &store,
+            &quick_options("work"),
+            PASSWORD,
+            Some(PASSWORD),
+            Zeroizing::new(TOKEN.to_owned()),
+        )
+        .unwrap();
+        let id = store.load().unwrap().connections["work"]
+            .credential_id
+            .clone();
+        // A blank display title falls back to the ASCII handle on creation.
+        assert_eq!(
+            crate::library::read(&store, PASSWORD)
+                .unwrap()
+                .entries
+                .iter()
+                .find(|e| e.id == id)
+                .unwrap()
+                .title,
+            "work"
+        );
+        rename_entry(&store, "work", "微信令牌", PASSWORD).unwrap();
+        assert_eq!(
+            crate::library::read(&store, PASSWORD)
+                .unwrap()
+                .entries
+                .iter()
+                .find(|e| e.id == id)
+                .unwrap()
+                .title,
+            "微信令牌"
+        );
+        // The handle keeps resolving and the credential is intact after a title-only rename.
+        assert!(store.load().unwrap().connections.contains_key("work"));
+        // A display title that would leak the master password is rejected.
+        assert!(rename_entry(&store, "work", PASSWORD, PASSWORD).is_err());
     }
 
     #[test]

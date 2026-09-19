@@ -335,13 +335,14 @@ fn record(app: &App, index: usize) -> Option<Record> {
         }
         Page::Grants => {
             let grant = app.config.as_ref()?.grants.get(index)?;
-            let active = grant_status(grant) == Message::GrantActive;
+            let state = app.grant_state(grant);
+            let active = grant_status(&state) == Message::GrantActive;
             (
                 grant.name.clone(),
                 if active {
                     lang.text(grant_access(grant))
                 } else {
-                    lang.text(grant_status(grant))
+                    lang.text(grant_status(&state))
                 }
                 .to_owned(),
                 Icon::Grant,

@@ -151,6 +151,7 @@ mod tests {
             &store,
             &crate::admin::AddOptions {
                 name: "work".into(),
+                title: String::new(),
                 provider: crate::model::Provider::Github,
                 api_base: None,
                 note: String::new(),

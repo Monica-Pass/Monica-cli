@@ -500,6 +500,7 @@ mod tests {
             .store_credential(
                 None,
                 "work",
+                "",
                 crate::model::Provider::Github,
                 crate::model::Provider::Github.default_api_base(),
                 "",

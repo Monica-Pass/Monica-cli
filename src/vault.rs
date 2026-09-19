@@ -18,7 +18,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::config::{Connection, private_file};
 use crate::error::{GatewayError, Result};
-use crate::model::{Provider, validate_api_base, validate_name, validate_note};
+use crate::model::{Provider, validate_api_base, validate_name, validate_note, validate_title};
 use crate::upstream::reject_secret_value;
 
 const CREDENTIAL_SCHEMA: &str = "monica.gateway.credential.v1";
@@ -27,6 +27,10 @@ const CREDENTIAL_SCHEMA: &str = "monica.gateway.credential.v1";
 #[serde(deny_unknown_fields)]
 struct StoredCredential {
     schema: String,
+    /// ASCII connection handle, stored so a Chinese display title never breaks vault re-import.
+    /// Empty in pre-title vaults, where the entry title still equals the handle.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    name: String,
     provider: Provider,
     api_base: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -107,20 +111,28 @@ impl Vault {
     }
 
     /// Local management only. The broker/MCP protocol has no route to this method.
+    #[allow(clippy::too_many_arguments)]
     pub fn store_credential(
         &self,
         collection_id: Option<&str>,
         name: &str,
+        title: &str,
         provider: Provider,
         api_base: &str,
         note: &str,
         token: Zeroizing<String>,
     ) -> Result<(String, Connection)> {
         validate_name(name)?;
+        let title = if title.trim().is_empty() {
+            name.to_owned()
+        } else {
+            validate_title(title)?;
+            title.trim().to_owned()
+        };
         let api_base = validate_api_base(api_base, provider)?.to_string();
         validate_token(&token)?;
         validate_note(note)?;
-        reject_secret_value(&serde_json::json!([name, &api_base, note]), &token)
+        reject_secret_value(&serde_json::json!([name, &title, &api_base, note]), &token)
             .map_err(|_| GatewayError::SensitiveMetadata)?;
         let collection = collection_id
             .map(str::to_owned)
@@ -128,6 +140,7 @@ impl Vault {
         let credential_id = uuid::Uuid::new_v4().to_string();
         let stored = StoredCredential {
             schema: CREDENTIAL_SCHEMA.to_owned(),
+            name: name.to_owned(),
             provider,
             api_base: api_base.clone(),
             note: note.to_owned(),
@@ -146,7 +159,7 @@ impl Vault {
             entry_id: credential_id.clone(),
             project_id: collection.clone(),
             entry_type: ObjectTypeId::ApiToken.to_string(),
-            title: name.to_owned(),
+            title,
             payload_json: payload,
         });
         let connection = self
@@ -259,6 +272,7 @@ impl Vault {
         }
         let payload_json =
             serde_json::to_string(&stored).map_err(|_| GatewayError::StateUnavailable)?;
+        let title = self.current_entry_title(&binding.credential_id, name);
         let connection = self
             .runtime
             .read()
@@ -273,7 +287,7 @@ impl Vault {
                     entry_id: binding.credential_id.clone(),
                     project_id,
                     entry_type: ObjectTypeId::ApiToken.to_string(),
-                    title: name.to_owned(),
+                    title,
                     payload_json,
                 }],
             ),
@@ -282,6 +296,53 @@ impl Vault {
         let mut updated = binding.clone();
         updated.note = note.to_owned();
         Ok(updated)
+    }
+
+    /// Change only the display title, retaining the encrypted payload and identity.
+    pub(crate) fn rename_entry(&self, binding: &Connection, title: &str) -> Result<()> {
+        validate_title(title)?;
+        let title = title.trim();
+        let (stored, project_id) = self.reveal_stored(binding, chrono::Utc::now().timestamp())?;
+        reject_secret_value(&serde_json::json!([title]), &stored.token)
+            .map_err(|_| GatewayError::SensitiveMetadata)?;
+        let payload_json =
+            serde_json::to_string(&stored).map_err(|_| GatewayError::StateUnavailable)?;
+        let connection = self
+            .runtime
+            .read()
+            .map_err(|_| GatewayError::StateUnavailable)?;
+        OperationCoordinator::execute(
+            &connection,
+            &CommitContext::new("monica-pass-admin".to_owned()),
+            WriteOperationRequest::new(
+                uuid::Uuid::new_v4().to_string(),
+                "gateway-rename-entry",
+                vec![WriteCommand::UpdateEntry {
+                    entry_id: binding.credential_id.clone(),
+                    project_id,
+                    entry_type: ObjectTypeId::ApiToken.to_string(),
+                    title: title.to_owned(),
+                    payload_json,
+                }],
+            ),
+        )
+        .map_err(|_| GatewayError::StateUnavailable)?;
+        Ok(())
+    }
+
+    /// Resolve the entry's stored display title, falling back to the handle when the entry is
+    /// not yet visible in the local library. Editing note/token must never clobber a title.
+    fn current_entry_title(&self, credential_id: &str, fallback: &str) -> String {
+        self.library()
+            .ok()
+            .and_then(|library| {
+                library
+                    .entries
+                    .into_iter()
+                    .find(|entry| entry.id == credential_id)
+                    .map(|entry| entry.title)
+            })
+            .unwrap_or_else(|| fallback.to_owned())
     }
 
     pub fn lock(&self) -> Result<()> {
@@ -363,8 +424,13 @@ impl Vault {
                         if stored.schema != CREDENTIAL_SCHEMA {
                             continue;
                         }
-                        let name = String::from_utf8(object.title.unwrap_or_default())
-                            .map_err(|_| GatewayError::VaultConnectionsInvalid)?;
+                        let name = if stored.name.is_empty() {
+                            // Legacy vaults stored no handle; their title is still the handle.
+                            String::from_utf8(object.title.unwrap_or_default())
+                                .map_err(|_| GatewayError::VaultConnectionsInvalid)?
+                        } else {
+                            stored.name.clone()
+                        };
                         validate_name(&name).map_err(|_| GatewayError::VaultConnectionsInvalid)?;
                         validate_api_base(&stored.api_base, stored.provider)?;
                         validate_token(&stored.token)?;
@@ -428,6 +494,7 @@ mod tests {
             .store_credential(
                 None,
                 "work",
+                "",
                 Provider::Github,
                 Provider::Github.default_api_base(),
                 "",
@@ -479,5 +546,284 @@ mod tests {
         let path = directory.path().join("vault.mdbx");
         assert!(Vault::create(&path, "", TigaMode::Multi).is_err());
         assert!(!path.exists());
+    }
+
+    fn entry_title(vault: &Vault, credential_id: &str) -> Option<String> {
+        vault
+            .library()
+            .unwrap()
+            .entries
+            .into_iter()
+            .find(|entry| entry.id == credential_id)
+            .map(|entry| entry.title)
+    }
+
+    #[test]
+    fn store_credential_display_title_is_utf8_and_blank_falls_back_to_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let vault = Vault::create(
+            &directory.path().join("vault.mdbx"),
+            PASSWORD,
+            TigaMode::Multi,
+        )
+        .unwrap();
+        let (_, custom) = vault
+            .store_credential(
+                None,
+                "work",
+                "微信令牌",
+                Provider::Github,
+                Provider::Github.default_api_base(),
+                "",
+                Zeroizing::new(TOKEN.to_owned()),
+            )
+            .unwrap();
+        assert_eq!(
+            entry_title(&vault, &custom.credential_id).as_deref(),
+            Some("微信令牌")
+        );
+        let (_, blank) = vault
+            .store_credential(
+                None,
+                "slack",
+                "   ",
+                Provider::Github,
+                Provider::Github.default_api_base(),
+                "",
+                Zeroizing::new(TOKEN.to_owned()),
+            )
+            .unwrap();
+        assert_eq!(
+            entry_title(&vault, &blank.credential_id).as_deref(),
+            Some("slack")
+        );
+    }
+
+    #[test]
+    fn editing_note_or_replacing_token_preserves_the_display_title() {
+        let directory = tempfile::tempdir().unwrap();
+        let vault = Vault::create(
+            &directory.path().join("vault.mdbx"),
+            PASSWORD,
+            TigaMode::Multi,
+        )
+        .unwrap();
+        let (_, binding) = vault
+            .store_credential(
+                None,
+                "work",
+                "GitHub 工作",
+                Provider::Github,
+                Provider::Github.default_api_base(),
+                "",
+                Zeroizing::new(TOKEN.to_owned()),
+            )
+            .unwrap();
+        assert_eq!(
+            entry_title(&vault, &binding.credential_id).as_deref(),
+            Some("GitHub 工作")
+        );
+        let after_note = vault.update_note("work", &binding, "更新后的用途").unwrap();
+        assert_eq!(
+            entry_title(&vault, &binding.credential_id).as_deref(),
+            Some("GitHub 工作")
+        );
+        let after_token = vault
+            .edit_credential(
+                "work",
+                &after_note,
+                "更新后的用途",
+                Some(Zeroizing::new(
+                    "replacement-upstream-secret-32-chars".to_owned(),
+                )),
+            )
+            .unwrap();
+        assert_eq!(
+            entry_title(&vault, &binding.credential_id).as_deref(),
+            Some("GitHub 工作")
+        );
+        let now = chrono::Utc::now().timestamp();
+        assert_eq!(
+            vault.credential(&after_token, now).unwrap().token.as_str(),
+            "replacement-upstream-secret-32-chars"
+        );
+    }
+
+    #[test]
+    fn rename_entry_retitles_and_survives_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("vault.mdbx");
+        let vault = Vault::create(&path, PASSWORD, TigaMode::Multi).unwrap();
+        let (_, binding) = vault
+            .store_credential(
+                None,
+                "oldhandle",
+                "",
+                Provider::Github,
+                Provider::Github.default_api_base(),
+                "",
+                Zeroizing::new(TOKEN.to_owned()),
+            )
+            .unwrap();
+        assert_eq!(
+            entry_title(&vault, &binding.credential_id).as_deref(),
+            Some("oldhandle")
+        );
+        vault.rename_entry(&binding, "旧条目改名").unwrap();
+        assert_eq!(
+            entry_title(&vault, &binding.credential_id).as_deref(),
+            Some("旧条目改名")
+        );
+        vault.lock().unwrap();
+        drop(vault);
+        let reopened = Vault::open(&path, PASSWORD).unwrap();
+        assert_eq!(
+            entry_title(&reopened, &binding.credential_id).as_deref(),
+            Some("旧条目改名")
+        );
+        let now = chrono::Utc::now().timestamp();
+        assert_eq!(
+            reopened.credential(&binding, now).unwrap().token.as_str(),
+            TOKEN
+        );
+    }
+
+    #[test]
+    fn display_title_cannot_leak_the_token() {
+        let directory = tempfile::tempdir().unwrap();
+        let vault = Vault::create(
+            &directory.path().join("vault.mdbx"),
+            PASSWORD,
+            TigaMode::Multi,
+        )
+        .unwrap();
+        assert!(matches!(
+            vault.store_credential(
+                None,
+                "work",
+                TOKEN,
+                Provider::Github,
+                Provider::Github.default_api_base(),
+                "",
+                Zeroizing::new(TOKEN.to_owned()),
+            ),
+            Err(GatewayError::SensitiveMetadata)
+        ));
+        let (_, binding) = vault
+            .store_credential(
+                None,
+                "work",
+                "ok",
+                Provider::Github,
+                Provider::Github.default_api_base(),
+                "",
+                Zeroizing::new(TOKEN.to_owned()),
+            )
+            .unwrap();
+        assert!(matches!(
+            vault.rename_entry(&binding, TOKEN),
+            Err(GatewayError::SensitiveMetadata)
+        ));
+    }
+
+    #[test]
+    fn gateway_inventory_uses_the_handle_not_the_display_title_when_importing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("vault.mdbx");
+        let vault = Vault::create(&path, PASSWORD, TigaMode::Multi).unwrap();
+        let (_, binding) = vault
+            .store_credential(
+                None,
+                "work",
+                "微信令牌",
+                Provider::Github,
+                Provider::Github.default_api_base(),
+                "",
+                Zeroizing::new(TOKEN.to_owned()),
+            )
+            .unwrap();
+        let inventory = vault.gateway_inventory().unwrap();
+        assert!(inventory.connections.contains_key("work"));
+        assert!(!inventory.connections.contains_key("微信令牌"));
+        assert_eq!(
+            inventory.connections["work"].credential_id,
+            binding.credential_id
+        );
+        vault.lock().unwrap();
+        drop(vault);
+        let reopened = Vault::open(&path, PASSWORD).unwrap();
+        let again = reopened.gateway_inventory().unwrap();
+        assert_eq!(
+            again.connections["work"].credential_id,
+            binding.credential_id
+        );
+        assert_eq!(
+            entry_title(&reopened, &binding.credential_id).as_deref(),
+            Some("微信令牌")
+        );
+    }
+
+    #[test]
+    fn gateway_inventory_falls_back_to_the_title_for_legacy_vaults_without_a_handle() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("vault.mdbx");
+        let vault = Vault::create(&path, PASSWORD, TigaMode::Multi).unwrap();
+        let (_, binding) = vault
+            .store_credential(
+                None,
+                "legacyhandle",
+                "",
+                Provider::Github,
+                Provider::Github.default_api_base(),
+                "",
+                Zeroizing::new(TOKEN.to_owned()),
+            )
+            .unwrap();
+        // Simulate a pre-change vault: rewrite the encrypted payload so it carries no handle.
+        let now = chrono::Utc::now().timestamp();
+        let (mut stored, project_id) = vault.reveal_stored(&binding, now).unwrap();
+        stored.name = String::new();
+        let payload_json = serde_json::to_string(&stored).unwrap();
+        assert!(
+            !payload_json.contains("\"name\""),
+            "legacy payload must omit the stored handle: {payload_json}"
+        );
+        let connection = vault.runtime.read().unwrap();
+        OperationCoordinator::execute(
+            &connection,
+            &CommitContext::new("monica-pass-test".to_owned()),
+            WriteOperationRequest::new(
+                uuid::Uuid::new_v4().to_string(),
+                "gateway-legacy-simulation",
+                vec![WriteCommand::UpdateEntry {
+                    entry_id: binding.credential_id.clone(),
+                    project_id,
+                    entry_type: ObjectTypeId::ApiToken.to_string(),
+                    title: "legacyhandle".to_owned(),
+                    payload_json,
+                }],
+            ),
+        )
+        .unwrap();
+        drop(connection);
+        // With no stored handle, the ASCII title is recovered as the connection handle.
+        let inventory = vault.gateway_inventory().unwrap();
+        assert!(inventory.connections.contains_key("legacyhandle"));
+        assert_eq!(
+            inventory.connections["legacyhandle"].credential_id,
+            binding.credential_id
+        );
+        assert_eq!(
+            vault
+                .credential(
+                    &inventory.connections["legacyhandle"],
+                    chrono::Utc::now().timestamp()
+                )
+                .unwrap()
+                .token
+                .as_str(),
+            TOKEN
+        );
+        vault.lock().unwrap();
     }
 }
