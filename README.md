@@ -1,3 +1,11 @@
+<div align="center">
+<img src="docs/images/logo.png" alt="Monica CLI 图标" width="112">
+</div>
+
+<div align="center">
+<img src="docs/images/banner.png" alt="MONICA CLI" width="880">
+</div>
+
 # Monica CLI
 
 **简体中文** · [English](README.en.md)
