@@ -40,7 +40,7 @@ flowchart LR
 
 ## 快速开始
 
-Windows 构建后运行 `./scripts/install.ps1 -InstallDir D:\Apps\MonicaCLI` 安装。安装器会将 `monica`、`monicapass`、`monica-pass` 三个入口加入用户 PATH。打开新终端后输入 `monica` 即可启动。更新保留 `data` 数据目录；更新前请退出 Monica。
+Windows 先按[从源码构建](#从源码构建)产出 `target/release/monica-pass.exe`，再运行 `./scripts/install.ps1 -InstallDir D:\Apps\MonicaCLI`。安装器默认取用该构建产物，也可用 `-Source` 指定其他可执行文件；`-InstallDir` 必须是绝对路径且不能是盘根目录，目标目录非空时必须已是一次 Monica 便携安装，更新前请先退出正在运行的 Monica。安装会写入 `monica-pass.exe` 以及 `monica`、`monicapass` 两个入口并加入用户 PATH，配置、保险库和日志保存在同目录的 `data/`。打开新终端后输入 `monica` 即可启动。安装副本不会随仓库更新；如果 `monica refresh` 之类的较新命令被报为未知命令，说明副本落后于源码，需要重新构建并安装。
 
 默认主页按数据库、嵌套分类和条目组织内容：
 
@@ -302,6 +302,10 @@ WebDAV 同步加密保险库，本地的 AI 授权文件和操作日志不会随
 
 ## 更多资料
 
+- [人工使用手册](docs/human-guide.md)：建库、授权、接入 AI 的完整流程与故障对照表。
+- [给 AI 的使用说明](docs/ai-guide.md)：可整段粘贴进项目规则的 AI 侧规范，含全部错误码对应的动作。
+- [CLI 自动化](docs/automation.md)：`--secrets-stdin` 协议与稳定 JSON 结果约定。
+- [通用服务 API 代理](docs/service-api.md)：`api_read` / `api_write` 的请求格式与限制。
 - [安全边界、授权与恢复](SECURITY.md)
 - [TUI 布局与交互说明](docs/tui-design.md)
 - [第三方许可与致谢](THIRD_PARTY_NOTICES.md)；终端界面参考了 [Yazi](https://github.com/sxyazi/yazi)。

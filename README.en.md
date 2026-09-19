@@ -40,7 +40,7 @@ flowchart LR
 
 ## Quick start
 
-On Windows, build and run `./scripts/install.ps1 -InstallDir D:\Apps\MonicaCLI`. The installer adds `monica`, `monicapass`, and `monica-pass` to your user PATH. Open a new terminal, then run `monica`. Updating preserves the `data` directory; close Monica before updating.
+On Windows, first follow [Build from source](#build-from-source) to produce `target/release/monica-pass.exe`, then run `./scripts/install.ps1 -InstallDir D:\Apps\MonicaCLI`. The installer uses that build by default and accepts `-Source` for another executable; `-InstallDir` must be an absolute path and not a drive root, a non-empty target is only accepted when it is already a Monica portable install, and Monica must be closed before updating. The install writes `monica-pass.exe` plus `monica` and `monicapass` entry points, adds them to your user PATH, and keeps configuration, vault and logs in the `data/` directory beside them. Open a new terminal and run `monica`. The installed copy does not track the repository: if a recent command such as `monica refresh` is reported as unknown, the installed copy is behind the source and needs a rebuild and reinstall.
 
 The default home shows databases, nested categories, and entries:
 
@@ -302,6 +302,10 @@ WebDAV sync transfers the encrypted vault. Local AI grant files and operation lo
 
 ## Further reading
 
+- [Human usage guide](docs/human-guide.md) (Chinese): the full flow from creating a vault to connecting an AI client, plus the troubleshooting tables.
+- [AI usage guide](docs/ai-guide.md) (Chinese): paste-ready rules for an agent's project instructions, with the action for every error code.
+- [CLI automation](docs/automation.md) (Chinese): the `--secrets-stdin` protocol and stable JSON results.
+- [General service API proxy](docs/service-api.md) (Chinese): request format and limits for `api_read` / `api_write`.
 - [Security boundaries, grants, and recovery](SECURITY.md) (Chinese)
 - [TUI layout and interaction guide](docs/tui-design.md) (Chinese)
 - [Third-party licenses and acknowledgments](THIRD_PARTY_NOTICES.md); the terminal interface draws on [Yazi](https://github.com/sxyazi/yazi).
