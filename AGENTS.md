@@ -20,7 +20,7 @@ Keep one small Rust crate for Monica's local credential gateway, backed by MDBX3
 - WebDAV passwords are session-only. Use engine portable snapshots, bounded transfers and ETag conditional writes; never copy a live main database or overwrite a conflicting revision.
 - Drain and lock the broker before vault management/sync. Preserve old local files, reset grants on vault switches, and retain only matching credential bindings on a normal pull.
 - The default home browses databases and native nested categories; gateway administration lives in explicit settings. Preserve the current home/settings context after a mutation.
-- Zero grant expiry means indefinite authorization, not expiration. It still requires an unlocked broker and remains revocable. Never restore old grants when reopening a saved database.
+- No AI authorization is permanent: every created grant carries a bounded window (default 240, maximum 1440 minutes) plus an optional call budget persisted so broker restarts cannot reset it. `reauthorization_required` means a person must run `monica refresh <grant>`, which rotates the bearer so the closed client file stops authenticating. A zero window only survives in older config files, still requires an unlocked broker and remains revocable. Never restore old grants when reopening a saved database.
 - API tokens retain their native type, entry identity and encrypted token field across moves/sync. See docs/token-format.md before changing the payload contract.
 - API response bodies are untrusted service data. Preserve status and bounded payloads, reject token reflections, never follow redirects, and persist only write receipts rather than raw API responses in the idempotency journal.
 

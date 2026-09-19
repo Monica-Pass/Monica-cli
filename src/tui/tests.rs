@@ -218,6 +218,7 @@ fn manager_fixture(directory: &std::path::Path) -> App {
             issued_at: now - 60,
             expires_at: if index == 0 { now - 1 } else { now + 3600 },
             requests_per_minute: 60,
+            max_calls: 0,
             client_file: Some(directory.join(format!("{name}.client.json"))),
         });
     }

@@ -750,3 +750,217 @@ async fn gateway_inflight_writes_report_unknown_after_lock_or_revocation() {
         assert_eq!(fixture.upstream.requests().len(), 1);
     }
 }
+
+fn cap_calls(fixture: &Fixture, cap: u32) {
+    fixture
+        .store
+        .update(|config| {
+            let mut config = config.unwrap();
+            config.grants[0].max_calls = cap;
+            Ok((config, ()))
+        })
+        .unwrap();
+}
+
+#[tokio::test]
+async fn spent_call_budget_stops_upstream_traffic_without_a_refresh() {
+    let fixture = Fixture::new(
+        Provider::Github,
+        &[Operation::ListIssues],
+        vec![Reply::json(json!([])), Reply::json(json!([]))],
+    )
+    .await;
+    cap_calls(&fixture, 2);
+    let call = || fixture.call(Operation::ListIssues, json!({"repository":REPOSITORY}));
+    for _ in 0..2 {
+        fixture
+            .gateway
+            .call(&fixture.capability, call())
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        fixture
+            .gateway
+            .call(&fixture.capability, call())
+            .await
+            .unwrap_err(),
+        GatewayError::ReauthorizationRequired
+    );
+    assert_eq!(fixture.upstream.requests().len(), 2);
+    // Discovery is free, so a capped grant can still explain itself to the AI.
+    fixture
+        .gateway
+        .call(&fixture.capability, catalog_call())
+        .await
+        .unwrap();
+    fixture
+        .gateway
+        .discovery_access(&fixture.capability)
+        .await
+        .unwrap();
+    assert_eq!(fixture.upstream.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn a_rejected_upstream_call_still_spends_the_budget() {
+    let fixture = Fixture::new(Provider::Github, &[Operation::ListIssues], vec![]).await;
+    cap_calls(&fixture, 1);
+    let call = fixture.call(Operation::ListIssues, json!({"repository":REPOSITORY}));
+    assert_eq!(
+        fixture
+            .gateway
+            .call(&fixture.capability, call.clone())
+            .await
+            .unwrap_err(),
+        GatewayError::UpstreamRejected
+    );
+    assert_eq!(fixture.upstream.requests().len(), 1);
+    assert_eq!(
+        fixture
+            .gateway
+            .call(&fixture.capability, call)
+            .await
+            .unwrap_err(),
+        GatewayError::ReauthorizationRequired
+    );
+    assert_eq!(fixture.upstream.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn call_budget_survives_a_restart_and_replays_cost_nothing() {
+    let fixture = Fixture::new(
+        Provider::Github,
+        &[Operation::CreateIssue],
+        vec![Reply::json(issue(Provider::Github, 43))],
+    )
+    .await;
+    cap_calls(&fixture, 1);
+    let request_id = uuid::Uuid::new_v4();
+    let write = |id: uuid::Uuid| {
+        fixture.call(
+            Operation::CreateIssue,
+            json!({"connection":"work", "title":"Bounded", "request_id":id}),
+        )
+    };
+    let created = fixture
+        .gateway
+        .call(&fixture.capability, write(request_id))
+        .await
+        .unwrap();
+    // Retrying the same request must not be billed twice, even after a restart.
+    let fresh = fixture.rebuild();
+    assert_eq!(
+        fresh
+            .call(&fixture.capability, write(request_id))
+            .await
+            .unwrap(),
+        created
+    );
+    assert_eq!(fixture.upstream.requests().len(), 1);
+    assert_eq!(
+        fresh
+            .call(&fixture.capability, write(uuid::Uuid::new_v4()))
+            .await
+            .unwrap_err(),
+        GatewayError::ReauthorizationRequired
+    );
+    assert_eq!(fixture.upstream.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn a_rotated_capability_starts_with_a_fresh_budget() {
+    let fixture = Fixture::new(
+        Provider::Github,
+        &[Operation::ListIssues],
+        vec![Reply::json(json!([])), Reply::json(json!([]))],
+    )
+    .await;
+    cap_calls(&fixture, 1);
+    let call = || fixture.call(Operation::ListIssues, json!({"repository":REPOSITORY}));
+    fixture
+        .gateway
+        .call(&fixture.capability, call())
+        .await
+        .unwrap();
+    // What `monica refresh` does: the same grant gets a brand-new bearer.
+    let rotated = crate::config::new_capability();
+    fixture
+        .store
+        .update(|config| {
+            let mut config = config.unwrap();
+            config.grants[0].capability_hash = crate::config::capability_hash(&rotated);
+            Ok((config, ()))
+        })
+        .unwrap();
+    assert_eq!(
+        fixture
+            .gateway
+            .call(&fixture.capability, call())
+            .await
+            .unwrap_err(),
+        GatewayError::Unauthorized
+    );
+    let rebuilt = fixture.rebuild();
+    rebuilt
+        .call(&rotated, call())
+        .await
+        .expect("a new bearer must start with its full budget");
+    assert_eq!(
+        rebuilt.call(&rotated, call()).await.unwrap_err(),
+        GatewayError::ReauthorizationRequired
+    );
+    let usage: std::collections::BTreeMap<String, u32> =
+        crate::config::read_json(&fixture.store.usage_path(), 8 * 1024 * 1024).unwrap();
+    assert_eq!(
+        usage.keys().cloned().collect::<Vec<_>>(),
+        vec![crate::config::capability_hash(&rotated)],
+        "the spent budget of a dead bearer must not be carried forward"
+    );
+}
+
+#[tokio::test]
+async fn closed_window_asks_for_reauthorization_and_revocation_stays_unauthorized() {
+    let fixture = Fixture::new(
+        Provider::Github,
+        &[Operation::ListIssues],
+        vec![Reply::json(json!([]))],
+    )
+    .await;
+    let call = || fixture.call(Operation::ListIssues, json!({"repository":REPOSITORY}));
+    fixture
+        .store
+        .update(|config| {
+            let mut config = config.unwrap();
+            let now = chrono::Utc::now().timestamp();
+            config.grants[0].issued_at = now - 7200;
+            config.grants[0].expires_at = now - 3600;
+            Ok((config, ()))
+        })
+        .unwrap();
+    assert_eq!(
+        fixture
+            .gateway
+            .call(&fixture.capability, call())
+            .await
+            .unwrap_err(),
+        GatewayError::ReauthorizationRequired
+    );
+    fixture
+        .store
+        .update(|config| {
+            let mut config = config.unwrap();
+            config.grants.clear();
+            Ok((config, ()))
+        })
+        .unwrap();
+    assert_eq!(
+        fixture
+            .gateway
+            .call(&fixture.capability, call())
+            .await
+            .unwrap_err(),
+        GatewayError::Unauthorized
+    );
+    assert_eq!(fixture.upstream.requests().len(), 0);
+}

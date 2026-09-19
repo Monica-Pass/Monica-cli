@@ -6,6 +6,8 @@
 
 MCP bridge 不打开保险库，不读取主密码或服务 Token。它持有 256 位随机网关 capability，只能使用明确授予的连接、仓库、操作和有效期。broker 配置只保存 capability 的 SHA-256 摘要，并在每次请求和发送前重新校验授权。创建授权需要通过隐藏输入或可信管道提供保险库密码，MCP capability 不能代替管理凭据。
 
+AI 侧授权不会永久有效：每份授权都带到期时间，并可再设总调用次数上限，已用次数落盘保存，broker 五分钟锁定重启不会把它清零。窗口或次数耗尽后代理只返回 `reauthorization_required`，AI 无法自行延长或换发；只有输入保险库密码的人执行 `monica refresh` 才能续期，续期换发新 capability，旧 bearer 当场失效，MCP 客户端需重启才能继续。
+
 这不构成同一系统用户下的进程隔离。任意同用户 shell、可修改 broker 配置的文件工具、调试器、管理员、已失陷的操作系统或依赖可以绕过这一接口边界。Windows 文件 DACL 只允许 owner / SYSTEM；Unix 私有文件使用 0600、新状态目录使用 0700。这些权限不能隔离同一个系统用户。需要更强的隔离时，必须额外配置独立账户或系统沙箱，并只把受限客户端能力交给 AI。
 
 ## 凭据与请求
@@ -73,11 +75,12 @@ WebDAV 属于本地管理界面，没有 MCP 登录、下载、上传、同步�
 | `clients/*.client.json` | 受限的网关 capability 和 endpoint |
 | `clients/*.client.mcp.json` | TUI 生成的 MCP 启动配置，不含 capability 或上游 Token |
 | `gateway.operations.json` | 写入请求指纹及有限结果 |
+| `gateway.usage.json` | 各 capability 摘要已消耗的上游调用次数，不含秘密 |
 | `gateway.audit.jsonl` | 不含秘密或正文的审计事件 |
 | `gateway.locked` | 人工锁定标记 |
 | `gateway.config-lock` / `gateway.broker-lock` | OS 文件锁载体；文件存在本身不代表正在运行 |
 
-写入日志最多 4096 条，状态 / 审计读取边界为 8 MiB。容量耗尽会明确失败。轮换前先停止 broker、撤销相关旧授权并备份；核对所有结果未知的创建之后，再归档日志并发放新授权。不要保留可用的旧 capability 却删除其去重日志，否则会失去原有请求的防重放记录。
+写入日志最多 4096 条，状态 / 审计读取边界为 8 MiB。容量耗尽会明确失败。轮换前先停止 broker、撤销相关旧授权并备份；核对所有结果未知的创建之后，再归档日志并发放新授权。不要保留可用的旧 capability 却删除其去重日志，否则会失去原有请求的防重放记录。调用次数按 capability 摘要记账，因此 `refresh` 换发新 capability 后预算自动重新开始；已删除或已换发的摘要会在 broker 下次启动并写入该文件时被清理。
 
 保险库和配置应一起备份，持久日志也应保留。WebDAV 只上传加密保险库，不上传本地授权和操作日志。恢复后先核对连接、仓库范围、未知写入和授权到期时间，再启动 broker。应用没有主密码恢复入口。
 

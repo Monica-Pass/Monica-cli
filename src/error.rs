@@ -52,6 +52,10 @@ pub enum GatewayError {
     InvalidSecretInput,
     #[error("The gateway capability is invalid, expired or revoked.")]
     Unauthorized,
+    #[error(
+        "This AI authorization has reached its time limit or call limit. A person must run `monica refresh <grant>` locally with the vault password, then restart the MCP server."
+    )]
+    ReauthorizationRequired,
     #[error("This operation or repository is not permitted by the grant.")]
     PermissionDenied,
     #[error("The vault requires a fresh unlock. Use the TUI or the local CLI with secure input.")]

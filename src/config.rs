@@ -17,6 +17,10 @@ use crate::model::{
 
 const MAX_CONFIG_BYTES: u64 = 256 * 1024;
 pub const DEFAULT_PORT: u16 = 47831;
+pub const MAX_GRANT_CALLS: u32 = 100_000;
+/// A grant that asks for "no expiry" still gets this bounded lifetime, so an AI
+/// authorization always has to be re-requested by a human eventually.
+pub const DEFAULT_GRANT_TTL_MINUTES: u32 = 240;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -41,6 +45,9 @@ pub struct Grant {
     pub issued_at: i64,
     pub expires_at: i64,
     pub requests_per_minute: u32,
+    /// Upstream calls allowed before a human must re-authorize this grant. 0 means uncapped.
+    #[serde(default)]
+    pub max_calls: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_file: Option<PathBuf>,
 }
@@ -123,6 +130,7 @@ impl Config {
                 || grant.repositories.len() > 128
                 || grant.operations.is_empty()
                 || !(1..=600).contains(&grant.requests_per_minute)
+                || grant.max_calls > MAX_GRANT_CALLS
                 || grant
                     .client_file
                     .as_ref()
@@ -155,14 +163,18 @@ impl Config {
             return Err(GatewayError::Unauthorized);
         }
         let hash = capability_hash(capability);
-        self.grants
+        let grant = self
+            .grants
             .iter()
-            .find(|grant| {
-                bool::from(grant.capability_hash.as_bytes().ct_eq(hash.as_bytes()))
-                    && now >= grant.issued_at
-                    && (grant.expires_at == 0 || now < grant.expires_at)
-            })
-            .ok_or(GatewayError::Unauthorized)
+            .find(|grant| bool::from(grant.capability_hash.as_bytes().ct_eq(hash.as_bytes())))
+            .ok_or(GatewayError::Unauthorized)?;
+        if now < grant.issued_at {
+            return Err(GatewayError::Unauthorized);
+        }
+        if grant.expires_at != 0 && now >= grant.expires_at {
+            return Err(GatewayError::ReauthorizationRequired);
+        }
+        Ok(grant)
     }
 }
 
@@ -295,6 +307,11 @@ impl ConfigStore {
 
     pub fn journal_path(&self) -> PathBuf {
         self.path.with_extension("operations.json")
+    }
+
+    /// Spent-call counters that must survive the broker locking and restarting.
+    pub fn usage_path(&self) -> PathBuf {
+        self.path.with_extension("usage.json")
     }
 
     pub fn request_lock(&self) -> Result<()> {
@@ -477,6 +494,7 @@ mod tests {
             issued_at: 1000,
             expires_at: 2000,
             requests_per_minute: 60,
+            max_calls: 0,
             client_file: None,
         });
         config.connections.insert("work".to_owned(), connection);
@@ -501,6 +519,21 @@ mod tests {
         );
         restored.grants.clear();
         assert!(restored.authenticate(&capability, 1001).is_err());
+    }
+
+    #[test]
+    fn a_gateway_file_from_before_the_call_budget_still_loads() {
+        let directory = tempfile::tempdir().unwrap();
+        let (config, capability) = fixture(directory.path());
+        let mut legacy = serde_json::to_value(&config).unwrap();
+        let grants = legacy["grants"].as_array_mut().unwrap();
+        for grant in grants.iter_mut() {
+            grant.as_object_mut().unwrap().remove("max_calls");
+        }
+        let restored: Config = serde_json::from_value(legacy).unwrap();
+        restored.validate().unwrap();
+        assert_eq!(restored.grants[0].max_calls, 0);
+        assert!(restored.authenticate(&capability, 1500).is_ok());
     }
 
     #[test]

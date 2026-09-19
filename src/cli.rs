@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use monica_pass_cli::admin::{AddOptions, GrantOptions};
+use monica_pass_cli::admin::{AddOptions, GrantOptions, RefreshOptions};
 use monica_pass_cli::config::DEFAULT_PORT;
 use monica_pass_cli::i18n::LanguageChoice;
 use monica_pass_cli::model::Provider;
@@ -138,6 +138,9 @@ pub enum Command {
     /// Authorize exact repositories and operations. Requires the vault password.
     #[command(visible_alias = "g")]
     Grant(GrantOptions),
+    /// Re-authorize an existing grant with a fresh capability; the old one stops working.
+    #[command(visible_alias = "rf")]
+    Refresh(RefreshOptions),
     /// Execute a tool through an unlocked broker. Request file contains public ToolCall JSON.
     Call {
         /// Existing grant name.
@@ -226,6 +229,7 @@ impl Command {
             Self::Init { .. } => "init",
             Self::Connect { .. } => "connect",
             Self::Grant(_) => "grant",
+            Self::Refresh(_) => "refresh",
             Self::Revoke { .. } => "revoke",
             Self::Serve => "serve",
             Self::Lock => "lock",

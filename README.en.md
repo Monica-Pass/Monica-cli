@@ -21,7 +21,7 @@ Monica CLI stores service tokens in a local, encrypted MDBX3 vault. AI requests 
 | Local credential management | Encrypt tokens in MDBX3 and unlock them with a master password. Create connections in the TUI or from the command line. |
 | Service access for AI | Connect MCP-compatible AI clients to GitHub and GitLab through the standard MCP stdio interface. |
 | Calls by connection name | Give connections names such as `work-github` and public purpose notes. AI can discover their granted scope and call them by name. |
-| Permission controls | Set the connection, repositories, allowed operations, expiry, and request limit. Grants are read-only by default and can be revoked. |
+| Permission controls | Set the connection, repositories, allowed operations, expiry, per-minute limit, and total call budget. Grants are read-only by default, can be revoked, and are never permanent. |
 | Terminal manager | Browse a Yazi-style three-pane layout with Vim-style keys, filtering, detail previews, and a command browser. |
 | CLI automation | Short aliases, explicit parameters, secure non-interactive input, and stable JSON results let AI perform local management operations. |
 | Interface languages | Simplified Chinese and English across the TUI, forms, CLI help and human-facing messages, with automatic selection and saved preferences. |
@@ -63,7 +63,7 @@ The default home shows databases, nested categories, and entries:
 
 In edit forms, `Tab` moves between fields and `Ctrl+S` opens a separate database-password step. `Esc` in that step returns to the draft and clears the password. Each management operation unlocks the database only while it runs; summary metadata is cached for at most five minutes. This is separate from the AI broker's five-minute unlock session.
 
-In settings, press `c` for guided service setup, or `a` to configure an explicit grant. Grants have **no expiry by default**, and remain revocable. Leave the expiry field blank (CLI: `--ttl 0`) for indefinite authorization, or enter 1–1440 minutes. An indefinite grant still requires an active unlocked broker. Token replacement revokes existing grants for that connection.
+In settings, press `c` for guided service setup, or `a` to configure an explicit grant. Every authorization **expires**: the default lifetime is 240 minutes (`--ttl`, 1–1440; leaving the field blank no longer means forever), and `--max-calls` can additionally cap how many upstream calls that grant may make. Once the window or the call budget is spent the AI only receives `reauthorization_required`, and a person must run `monica refresh GRANT` locally — command line only for now, with no TUI key — which issues a new capability, so the MCP client must be restarted to pick it up. Grants stay revocable and still require an active unlocked broker. Token replacement revokes existing grants for that connection.
 
 Use a UTF-8 terminal at least **70 columns × 20 rows**. Settings retain `/` filtering, `1`–`5` page navigation and `:` commands.
 
@@ -133,7 +133,7 @@ monica-pass ck work-github
 | Quick add / save a connection | `add` / `connect` | `a` / `c` |
 | List connections / edit purpose | `list` / `note` | `ls` / `e` |
 | Create / open a local vault | `init` / `open` | `n` / `o` |
-| Issue / revoke a grant | `grant` / `revoke` | `g` / `rv` |
+| Issue / refresh / revoke a grant | `grant` / `refresh` / `revoke` | `g` / `rf` / `rv` |
 | Unlock and serve / lock | `serve` / `lock` | `u` / `lk` |
 | MCP settings / check discovery | `settings` / `check` | `m` / `ck` |
 | Status / WebDAV / command discovery | `status` / `webdav` / `commands` | `st` / `dav` / `cmds` |

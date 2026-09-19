@@ -37,6 +37,10 @@ struct RateWindow {
 struct ExecutionState {
     rates: BTreeMap<String, RateWindow>,
     journal: BTreeMap<String, WriteRecord>,
+    /// Calls already spent by each capped capability; the broker's 300 second
+    /// session ends and restarts far sooner than a grant window, so this cannot
+    /// live only in memory.
+    usage: BTreeMap<String, u32>,
 }
 
 #[derive(Serialize)]
@@ -79,6 +83,13 @@ impl Gateway {
         if journal.len() > MAX_JOURNAL_ENTRIES {
             return Err(GatewayError::JournalFull);
         }
+        let mut usage = load_call_usage(&store)?;
+        usage.retain(|hash, _| {
+            config
+                .grants
+                .iter()
+                .any(|grant| grant.max_calls != 0 && &grant.capability_hash == hash)
+        });
         Ok(Self {
             store,
             vault,
@@ -87,6 +98,7 @@ impl Gateway {
             http,
             state: Mutex::new(ExecutionState {
                 journal,
+                usage,
                 ..Default::default()
             }),
         })
@@ -176,6 +188,31 @@ impl Gateway {
             return Err(GatewayError::RateLimited);
         }
         window.requests += 1;
+        Ok(())
+    }
+
+    /// Spends one of the grant's allowed upstream calls. Reads and writes both
+    /// count; discovery and the connection catalog do not, so a cap measures real
+    /// service traffic. Uncapped grants are not recorded at all.
+    fn charge_calls(&self, state: &mut ExecutionState, grant: &Grant) -> Result<()> {
+        if grant.max_calls == 0 {
+            return Ok(());
+        }
+        let key = grant.capability_hash.clone();
+        let previous = state.usage.get(&key).copied();
+        if previous.unwrap_or(0) >= grant.max_calls {
+            return Err(GatewayError::ReauthorizationRequired);
+        }
+        // Charge before dispatch: a call the upstream rejects has still reached
+        // the upstream, and a budget the caller could refund would not bound it.
+        state.usage.insert(key, previous.unwrap_or(0) + 1);
+        if self.save_usage(state).is_err() {
+            match previous {
+                Some(count) => state.usage.insert(grant.capability_hash.clone(), count),
+                None => state.usage.remove(&grant.capability_hash),
+            };
+            return Err(GatewayError::StateUnavailable);
+        }
         Ok(())
     }
 
@@ -305,6 +342,9 @@ impl Gateway {
                 return Err(GatewayError::JournalFull);
             }
         }
+        // A replayed write returns above, so retrying an interrupted call never
+        // spends a second unit of the budget.
+        self.charge_calls(state, &grant)?;
         // Audit the decision durably before an external side effect.
         event.stage = "authorized";
         self.audit(event)?;
@@ -366,6 +406,15 @@ impl Gateway {
         write_json(&self.store.journal_path(), &state.journal, true)
     }
 
+    fn save_usage(&self, state: &ExecutionState) -> Result<()> {
+        let bytes =
+            serde_json::to_vec_pretty(&state.usage).map_err(|_| GatewayError::StateUnavailable)?;
+        if bytes.len() as u64 > MAX_STATE_BYTES {
+            return Err(GatewayError::StateUnavailable);
+        }
+        write_json(&self.store.usage_path(), &state.usage, true)
+    }
+
     fn audit(&self, event: &AuditEvent) -> Result<()> {
         let path = self.store.audit_path();
         let mut file = OpenOptions::new()
@@ -387,6 +436,15 @@ impl Gateway {
             .map_err(|_| GatewayError::StateUnavailable)?;
         file.sync_data().map_err(|_| GatewayError::StateUnavailable)
     }
+}
+
+/// Calls already spent by each capped capability, for local status reporting.
+pub fn load_call_usage(store: &ConfigStore) -> Result<BTreeMap<String, u32>> {
+    let path = store.usage_path();
+    if !path.exists() {
+        return Ok(BTreeMap::new());
+    }
+    read_json(&path, MAX_STATE_BYTES)
 }
 
 fn resolve_scope(grant: &Grant, mut value: Value) -> Result<Value> {

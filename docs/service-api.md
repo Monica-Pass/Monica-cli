@@ -11,7 +11,9 @@ monica grant gitlab-api --connection work-gitlab --repo "*" --operation api-read
 monica serve
 ```
 
-在本地终端输入数据库密码即可；AI 不需要 Token 或主密码。授权默认长期有效，代理解锁会话仍为五分钟。也可在设置的授权表单中填写相同范围与操作。只允许读取时仅添加 `api-read`。`api-write` 包括删除等完整写操作，具有 Token 本身的相应权限。
+在本地终端输入数据库密码即可；AI 不需要 Token 或主密码。授权不会永久有效：`--ttl-minutes` 指定 1–1440 分钟的有效期，省略时为默认 240 分钟；`--max-calls` 可再限制该授权最多发起多少次上游请求（省略为不限次数，限流仍按 `--rpm` 每分钟计算）。已用次数落盘保存，代理五分钟锁定重启不会把它清零。也可在设置的授权表单中填写相同范围与操作。只允许读取时仅添加 `api-read`。`api-write` 包括删除等完整写操作，具有 Token 本身的相应权限。
+
+时间或次数用尽后，代理返回 `reauthorization_required`，AI 只能停下请求人工续期：由人在本地终端执行 `monica refresh 授权名`（可加 `--ttl-minutes` / `--max-calls`，省略即沿用上次的窗口与次数），随后重启 MCP 服务。续期会换发新的 capability，旧的客户端文件立即失效，授权名称、连接与范围保持不变。
 
 自动化管理仍使用既有 `--secrets-stdin` 可信输入协议。不要把 Token、密码写入参数、请求文件或 MCP 配置。`--allow-write` 快速添加选项继续仅开放 Issue 创建，不会隐式给予完整 API 权限。
 

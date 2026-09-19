@@ -323,6 +323,20 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             )?;
             output.note(tr!(lang, CliClientSaved, path = path.display()));
         }
+        Command::Refresh(options) => {
+            validate_name(&options.name)?;
+            let password = input.take(SecretField::Password, tr!(lang, PromptGrantPassword))?;
+            admin::lock_broker(&store).await?;
+            let path = admin::refresh_grant(&store, &options, &password)?;
+            drop(password);
+            let settings = admin::mcp_settings(&options.name, &path)?;
+            output.result(
+                "refresh",
+                json!({"name":options.name, "client_file":path, "mcp":settings}),
+                Some(&settings),
+            )?;
+            output.note(tr!(lang, CliGrantRefreshed, name = options.name));
+        }
         Command::Revoke { name } => {
             admin::revoke(&store, &name)?;
             output.result("revoke", json!({"name":name, "revoked":true}), None)?;

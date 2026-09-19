@@ -35,7 +35,8 @@ Global options work before or after subcommands. With no subcommand, normal mode
 | Save a connection only | `c work -p github -n "Project purpose"` | `password`, `token` |
 | List / inspect connections | `ls` / `show work` | None |
 | Edit a purpose note | `e work "Updated purpose"` | `password` |
-| Issue a grant | `g reader -c work -r org/repo -t 60` | `password` |
+| Issue a grant | `g reader -c work -r org/repo -t 60 --max-calls 200` | `password` |
+| Re-authorize a grant (new capability) | `rf reader` / `rf reader -t 60 --max-calls 50` | `password` |
 | Revoke a grant | `rv reader` | None |
 | Get and save MCP settings | `m reader` | None |
 | Verify MCP discovery | `ck reader` or `check --client FILE` | None; the broker must be unlocked |
@@ -50,7 +51,9 @@ Global options work before or after subcommands. With no subcommand, normal mode
 | Show WebDAV configuration | `dav st` | None |
 | Save a language preference | `lang en` | None |
 
-Names must match exactly. `show` selects a connection; `m`, `ck`, and `rv` select a grant. Unknown names never fall back to another record. Quick add uses the same name for the connection and grant, with read-only access for 60 minutes by default. `-w` / `--allow-write` explicitly enables Issue creation. Detailed grants use `--op create-issue` to allow writes.
+Names must match exactly. `show` selects a connection; `m`, `ck`, `rv`, and `rf` select a grant. Unknown names never fall back to another record. Quick add uses the same name for the connection and grant, with read-only access for 240 minutes by default; `--ttl` takes 1–1440 minutes and `--max-calls` can cap upstream calls. No authorization is indefinite. `-w` / `--allow-write` explicitly enables Issue creation. Detailed grants use `--op create-issue` to allow writes.
+
+Both `grant` and `refresh` stop the broker first and leave it locked afterwards. Unlock it again with `u`, and restart the AI client's MCP entry so it reads the newly issued capability.
 
 ## Secret input contract
 
@@ -109,7 +112,7 @@ Failures return `ok: false`, `error.code`, and `error.message`. Missing secrets 
 
 `serve` / `u` stays running. It emits `event: "ready"` immediately after startup and `event: "stopped"` on shutdown, each on its own flushed JSON line. `add --serve` emits its creation result before broker events. If broker startup subsequently fails, the created connection and grant still exist; handle the completed step separately.
 
-Management that accesses the vault, including sync, requests a broker lock and waits for in-flight operations to drain. Failure to acquire the lock is explicit. The broker stays locked after these operations; `a -s` starts it immediately after adding. Metadata queries and revocation do not stop the broker. Unlock sessions last five minutes and do not extend grants.
+Management that accesses the vault, including sync, requests a broker lock and waits for in-flight operations to drain. Failure to acquire the lock is explicit. The broker stays locked after these operations; `a -s` starts it immediately after adding. Metadata queries and revocation do not stop the broker. Unlock sessions last five minutes and do not extend grants. Once a grant's window or call budget is spent, the proxy answers `reauthorization_required` and only a human `rf GRANT` restores it; `st` reports each grant's `calls_used`, `max_calls`, `expired`, and `refresh_required`.
 
 WebDAV passwords do not persist across CLI processes. Supply the password for each network operation; command exit ends that session. TUI `:logout` ends only its own WebDAV session. URLs and usernames can be saved and inspected with `dav st`.
 

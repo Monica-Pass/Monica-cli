@@ -214,6 +214,7 @@ impl Language {
             GatewayError::SecretInputRequired => Message::ErrorSecretInputRequired,
             GatewayError::InvalidSecretInput => Message::ErrorInvalidSecretInput,
             GatewayError::Unauthorized => Message::ErrorUnauthorized,
+            GatewayError::ReauthorizationRequired => Message::ErrorReauthorizationRequired,
             GatewayError::PermissionDenied => Message::ErrorPermissionDenied,
             GatewayError::UnlockRequired => Message::ErrorUnlockRequired,
             GatewayError::CredentialUnavailable => Message::ErrorCredentialUnavailable,

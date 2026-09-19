@@ -10,8 +10,9 @@ use serde_json::{Value, json};
 use zeroize::Zeroizing;
 
 use crate::config::{
-    ClientConfig, Config, ConfigStore, Grant, capability_hash, connection_fingerprint,
-    ensure_parent, new_capability, write_json,
+    ClientConfig, Config, ConfigStore, Connection, DEFAULT_GRANT_TTL_MINUTES, Grant,
+    MAX_GRANT_CALLS, capability_hash, connection_fingerprint, ensure_parent, new_capability,
+    write_json,
 };
 use crate::error::{GatewayError, Result};
 use crate::gateway::Gateway;
@@ -33,13 +34,28 @@ pub struct GrantOptions {
     /// Read-only Issue tools by default. Explicit api-read/api-write grants enable service API access.
     #[arg(long = "operation", visible_alias = "op", value_enum, default_values = ["list-issues", "get-issue"])]
     pub operations: Vec<Operation>,
-    #[arg(short = 't', long, visible_alias = "ttl", default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=1440))]
+    #[arg(short = 't', long, visible_alias = "ttl", default_value_t = DEFAULT_GRANT_TTL_MINUTES, value_parser = clap::value_parser!(u32).range(0..=1440))]
     pub ttl_minutes: u32,
     #[arg(long, visible_alias = "rpm", default_value_t = 60, value_parser = clap::value_parser!(u32).range(1..=600))]
     pub requests_per_minute: u32,
+    /// Upstream calls this grant may make before a person refreshes it; 0 is uncapped.
+    #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=MAX_GRANT_CALLS as i64))]
+    pub max_calls: u32,
     /// A new capability file. Existing files are never overwritten.
     #[arg(short = 'o', long, value_name = "NEW_CLIENT_FILE")]
     pub out: Option<PathBuf>,
+}
+
+#[derive(Clone, clap::Args)]
+pub struct RefreshOptions {
+    /// Existing grant to re-authorize with a fresh capability.
+    pub name: String,
+    /// New window in minutes. Omit to reuse the window this grant was issued with.
+    #[arg(short = 't', long = "ttl-minutes", visible_alias = "ttl", value_parser = clap::value_parser!(u32).range(1..=1440))]
+    pub window: Option<u32>,
+    /// New call cap. Omit to keep the cap this grant was issued with.
+    #[arg(long = "max-calls", value_parser = clap::value_parser!(u32).range(0..=MAX_GRANT_CALLS as i64))]
+    pub call_cap: Option<u32>,
 }
 
 #[derive(Clone, clap::Args)]
@@ -60,7 +76,7 @@ pub struct AddOptions {
     /// Also authorize creating Issues. Omit for read-only access.
     #[arg(short = 'w', long)]
     pub allow_write: bool,
-    #[arg(short = 't', long, visible_alias = "ttl", default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=1440))]
+    #[arg(short = 't', long, visible_alias = "ttl", default_value_t = DEFAULT_GRANT_TTL_MINUTES, value_parser = clap::value_parser!(u32).range(0..=1440))]
     pub ttl_minutes: u32,
 }
 
@@ -98,6 +114,7 @@ impl AddOptions {
             operations,
             ttl_minutes: self.ttl_minutes,
             requests_per_minute: 60,
+            max_calls: 0,
             out: None,
         }
     }
@@ -389,6 +406,37 @@ pub fn update_token(
     result.map(|_| ())
 }
 
+/// "No expiry" is not offered to an AI anymore: an unset window falls back to a
+/// bounded one so every grant eventually has to be re-requested by a person.
+fn window_minutes(ttl_minutes: u32) -> u32 {
+    if ttl_minutes == 0 {
+        DEFAULT_GRANT_TTL_MINUTES
+    } else {
+        ttl_minutes
+    }
+}
+
+/// Proves a person holding the master password authorized this scope, and that
+/// no AI-visible field carries that password or the upstream token.
+fn confirm_scope<R: serde::Serialize>(
+    config: &Config,
+    binding: &Connection,
+    name: &str,
+    connection: &str,
+    repositories: &R,
+    password: &str,
+) -> Result<()> {
+    let vault = Vault::open(&config.vault, password)?;
+    // A human must prove that this binding is an available credential.
+    let credential = vault.credential(binding, chrono::Utc::now().timestamp())?;
+    check_public(
+        &json!([name, connection, repositories]),
+        &[password, &credential.token],
+    )?;
+    drop(credential);
+    vault.lock()
+}
+
 fn prepare_grant(
     config: &mut Config,
     options: &GrantOptions,
@@ -415,12 +463,9 @@ fn prepare_grant(
             .collect::<BTreeSet<_>>(),
         operations: options.operations.iter().copied().collect(),
         issued_at: now,
-        expires_at: if options.ttl_minutes == 0 {
-            0
-        } else {
-            now + i64::from(options.ttl_minutes) * 60
-        },
+        expires_at: now + i64::from(window_minutes(options.ttl_minutes)) * 60,
         requests_per_minute: options.requests_per_minute,
+        max_calls: options.max_calls,
         client_file: Some(output.to_owned()),
     });
     config.validate()?;
@@ -437,6 +482,7 @@ pub fn issue_grant(store: &ConfigStore, options: &GrantOptions, password: &str) 
     validate_name(&options.name)?;
     if !(0..=1440).contains(&options.ttl_minutes)
         || !(1..=600).contains(&options.requests_per_minute)
+        || options.max_calls > MAX_GRANT_CALLS
         || options.operations.is_empty()
         || options.repositories.is_empty()
     {
@@ -466,15 +512,14 @@ pub fn issue_grant(store: &ConfigStore, options: &GrantOptions, password: &str) 
             &options.operations,
             binding.provider,
         )?;
-        let vault = Vault::open(&config.vault, password)?;
-        // A human must prove that this binding is an available credential.
-        let credential = vault.credential(binding, chrono::Utc::now().timestamp())?;
-        check_public(
-            &json!([&options.name, &options.connection, &options.repositories]),
-            &[password, &credential.token],
+        confirm_scope(
+            &config,
+            binding,
+            &options.name,
+            &options.connection,
+            &options.repositories,
+            password,
         )?;
-        drop(credential);
-        vault.lock()?;
         let client = prepare_grant(&mut config, options, &capability, &output)?;
         write_json(&output, &client, false)?;
         client_written = true;
@@ -485,6 +530,81 @@ pub fn issue_grant(store: &ConfigStore, options: &GrantOptions, password: &str) 
     }
     result?;
     Ok(output)
+}
+
+/// Re-authorize an existing grant with a brand-new capability. The previous
+/// bearer stops authenticating immediately, so a closed AI session has to be
+/// re-requested instead of staying usable; the name and client file stay put.
+pub fn refresh_grant(
+    store: &ConfigStore,
+    options: &RefreshOptions,
+    password: &str,
+) -> Result<PathBuf> {
+    validate_name(&options.name)?;
+    if options.window.is_some_and(|ttl| !(1..=1440).contains(&ttl))
+        || options
+            .call_cap
+            .is_some_and(|calls| calls > MAX_GRANT_CALLS)
+    {
+        return Err(GatewayError::InvalidRequest);
+    }
+    let _guard = store.acquire_broker_lock()?;
+    let capability = new_capability();
+    store.update(|config| {
+        let mut config = config.ok_or(GatewayError::NotFound)?;
+        let position = config
+            .grants
+            .iter()
+            .position(|grant| grant.name == options.name)
+            .ok_or(GatewayError::NotFound)?;
+        let previous = config.grants[position].clone();
+        let binding = config
+            .connections
+            .get(&previous.connection)
+            .ok_or(GatewayError::NotFound)?
+            .clone();
+        if previous.connection_fingerprint != connection_fingerprint(&binding) {
+            return Err(GatewayError::CredentialUnavailable);
+        }
+        confirm_scope(
+            &config,
+            &binding,
+            &previous.name,
+            &previous.connection,
+            &previous.repositories,
+            password,
+        )?;
+        // Absent choices reuse the previous session, so refreshing a grant that
+        // was created with a cap and a window does not silently widen either.
+        let minutes = options.window.unwrap_or_else(|| {
+            if previous.expires_at == 0 {
+                DEFAULT_GRANT_TTL_MINUTES
+            } else {
+                ((previous.expires_at - previous.issued_at) / 60).clamp(1, 1440) as u32
+            }
+        });
+        let output = match previous.client_file.clone() {
+            Some(path) => path,
+            None => client_path(store, &previous.name)?,
+        };
+        let now = chrono::Utc::now().timestamp();
+        config.grants[position] = Grant {
+            capability_hash: capability_hash(&capability),
+            issued_at: now,
+            expires_at: now + i64::from(window_minutes(minutes)) * 60,
+            max_calls: options.call_cap.unwrap_or(previous.max_calls),
+            ..previous
+        };
+        config.validate()?;
+        let client = ClientConfig {
+            version: 1,
+            endpoint: format!("http://{}/", config.listen),
+            capability: capability.as_str().to_owned(),
+        };
+        client.validate()?;
+        write_json(&output, &client, true)?;
+        Ok((config, output))
+    })
 }
 
 pub fn client_path(store: &ConfigStore, name: &str) -> Result<PathBuf> {
@@ -604,11 +724,23 @@ pub fn status(store: &ConfigStore) -> Result<Value> {
             })
         })
         .collect();
-    let grants: Vec<_> = config.grants.iter().map(|grant| json!({
-        "name": grant.name, "connection": grant.connection, "repositories": grant.repositories,
-        "operations": grant.operations, "expires_at_unix": grant.expires_at,
-        "expired": grant.expires_at != 0 && chrono::Utc::now().timestamp() >= grant.expires_at,
-    })).collect();
+    let usage = crate::gateway::load_call_usage(store)?;
+    let now = chrono::Utc::now().timestamp();
+    let grants: Vec<_> = config
+        .grants
+        .iter()
+        .map(|grant| {
+            let expired = grant.expires_at != 0 && now >= grant.expires_at;
+            let used = usage.get(&grant.capability_hash).copied().unwrap_or(0);
+            let exhausted = grant.max_calls != 0 && used >= grant.max_calls;
+            json!({
+                "name": grant.name, "connection": grant.connection, "repositories": grant.repositories,
+                "operations": grant.operations, "expires_at_unix": grant.expires_at,
+                "expired": expired, "max_calls": grant.max_calls, "calls_used": used,
+                "refresh_required": expired || exhausted,
+            })
+        })
+        .collect();
     Ok(
         json!({"config":store.path, "vault":config.vault, "listen":config.listen, "webdav":config.webdav,
         "safe_remote_replace":config.webdav.as_ref().map(|binding| binding.etag.is_some()),
@@ -1123,6 +1255,7 @@ mod tests {
             operations: vec![Operation::GetIssue],
             ttl_minutes: 30,
             requests_per_minute: 10,
+            max_calls: 0,
             out: None,
         };
         assert!(matches!(
@@ -1157,5 +1290,116 @@ mod tests {
                     .any(|window| window == password.as_bytes())
             );
         }
+    }
+
+    fn grant_store() -> (tempfile::TempDir, ConfigStore) {
+        use crate::test_support::{PASSWORD, TOKEN};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("vault.mdbx");
+        let vault = Vault::create(&path, PASSWORD, TigaMode::Multi).unwrap();
+        vault.lock().unwrap();
+        drop(vault);
+        let store = ConfigStore::new(directory.path().join("gateway.json"));
+        store.update(|_| Ok((Config::new(path), ()))).unwrap();
+        add_connection(
+            &store,
+            "work",
+            Provider::Github,
+            Provider::Github.default_api_base(),
+            "",
+            PASSWORD,
+            Zeroizing::new(TOKEN.to_owned()),
+        )
+        .unwrap();
+        (directory, store)
+    }
+
+    #[test]
+    fn issued_grants_always_close_and_a_refresh_rotates_the_bearer() {
+        use crate::test_support::PASSWORD;
+        let (_directory, store) = grant_store();
+        let output = issue_grant(
+            &store,
+            &GrantOptions {
+                name: "agent".to_owned(),
+                connection: "work".to_owned(),
+                repositories: vec!["example/project".to_owned()],
+                operations: vec![Operation::GetIssue],
+                ttl_minutes: 0,
+                requests_per_minute: 10,
+                max_calls: 3,
+                out: None,
+            },
+            PASSWORD,
+        )
+        .unwrap();
+        let config = store.load().unwrap();
+        let grant = &config.grants[0];
+        let client: ClientConfig = crate::config::read_json(&output, 16 * 1024).unwrap();
+        assert_eq!(capability_hash(&client.capability), grant.capability_hash);
+        assert_ne!(grant.expires_at, 0, "no grant may be perpetual");
+        assert_eq!(
+            (grant.expires_at - grant.issued_at) / 60,
+            i64::from(DEFAULT_GRANT_TTL_MINUTES)
+        );
+        assert!(matches!(
+            config.authenticate(&client.capability, grant.expires_at),
+            Err(GatewayError::ReauthorizationRequired)
+        ));
+
+        let refreshed = refresh_grant(
+            &store,
+            &RefreshOptions {
+                name: "agent".to_owned(),
+                window: Some(15),
+                call_cap: None,
+            },
+            PASSWORD,
+        )
+        .unwrap();
+        assert_eq!(refreshed, output, "the MCP client path must stay put");
+        let config = store.load().unwrap();
+        let grant = &config.grants[0];
+        let rotated: ClientConfig = crate::config::read_json(&output, 16 * 1024).unwrap();
+        assert_ne!(rotated.capability, client.capability);
+        assert_eq!(capability_hash(&rotated.capability), grant.capability_hash);
+        assert_eq!(
+            (grant.expires_at - grant.issued_at) / 60,
+            15,
+            "an explicit window replaces the default"
+        );
+        assert_eq!(grant.max_calls, 3, "a refresh must not widen the call cap");
+        let now = chrono::Utc::now().timestamp();
+        assert!(matches!(
+            config.authenticate(&client.capability, now),
+            Err(GatewayError::Unauthorized)
+        ));
+        assert_eq!(
+            config.authenticate(&rotated.capability, now).unwrap().name,
+            "agent"
+        );
+        assert_eq!(config.grants.len(), 1);
+        assert_eq!(config.grants[0].connection, "work");
+        assert_eq!(config.grants[0].repositories.len(), 1);
+        assert!(config.grants[0].repositories.contains("example/project"));
+        assert_eq!(config.grants[0].operations.len(), 1);
+        assert!(config.grants[0].operations.contains(&Operation::GetIssue));
+
+        refresh_grant(
+            &store,
+            &RefreshOptions {
+                name: "agent".to_owned(),
+                window: None,
+                call_cap: None,
+            },
+            PASSWORD,
+        )
+        .unwrap();
+        let grant = &store.load().unwrap().grants[0];
+        assert_eq!(
+            (grant.expires_at - grant.issued_at) / 60,
+            15,
+            "an omitted window reuses the previous session instead of widening it"
+        );
     }
 }

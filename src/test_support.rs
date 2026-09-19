@@ -273,6 +273,7 @@ impl Fixture {
             issued_at: now,
             expires_at: now + 3600,
             requests_per_minute: 60,
+            max_calls: 0,
             client_file: None,
         });
         config.connections.insert("work".to_owned(), connection);
@@ -290,6 +291,18 @@ impl Fixture {
             broker_listener: Some(broker_listener),
             _directory: directory,
         }
+    }
+
+    /// A fresh Gateway over the same store, like restarting the broker after a lock.
+    pub fn rebuild(&self) -> Arc<Gateway> {
+        Arc::new(
+            Gateway::with_client(
+                self.store.clone(),
+                self.vault.clone(),
+                self.upstream.client.clone(),
+            )
+            .unwrap(),
+        )
     }
 
     pub fn call(&self, operation: Operation, arguments: Value) -> ToolCall {
