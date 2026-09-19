@@ -1,5 +1,6 @@
 use super::*;
 use ratatui::backend::TestBackend;
+use ratatui::layout::Rect;
 
 #[test]
 fn editing_defers_database_password_and_escape_preserves_draft() {
@@ -31,7 +32,7 @@ fn editing_defers_database_password_and_escape_preserves_draft() {
 }
 
 #[test]
-fn database_picker_targets_selected_database_without_empty_fallback() {
+fn database_rail_moves_and_targets_the_selected_database() {
     let directory = tempfile::tempdir().unwrap();
     let mut app = App::new(
         ConfigStore::new(directory.path().join("gateway.json")),
@@ -51,7 +52,8 @@ fn database_picker_targets_selected_database_without_empty_fallback() {
             current: false,
         },
     ];
-    app.database_picker = true;
+    app.key(key(KeyCode::Char('d')));
+    assert_eq!(app.focus, Focus::Navigation);
     app.key(key(KeyCode::Down));
     let screen = render(&mut app, 100, 30).replace(' ', "");
     assert!(screen.contains("个人") && screen.contains("工作"));
@@ -66,7 +68,7 @@ fn database_picker_targets_selected_database_without_empty_fallback() {
 }
 
 #[test]
-fn home_browses_nested_categories_and_opens_settings_explicitly() {
+fn home_browses_categories_and_entries_as_one_tree() {
     let directory = tempfile::tempdir().unwrap();
     let mut app = App::new(
         ConfigStore::new(directory.path().join("gateway.json")),
@@ -93,14 +95,23 @@ fn home_browses_nested_categories_and_opens_settings_explicitly() {
             kind: "api-token".into(),
         }],
     }));
+    // A category is the header of its own subtree, so the entry below it is
+    // reachable without opening the folder first.
+    let ids: Vec<String> = app
+        .home_rows()
+        .iter()
+        .map(|row| row.id().to_owned())
+        .collect();
+    assert_eq!(ids, ["root", "child", "token"]);
     app.key(key(KeyCode::Enter));
     assert_eq!(app.category.as_deref(), Some("root"));
     app.key(key(KeyCode::Enter));
     assert_eq!(app.category.as_deref(), Some("child"));
+    assert_eq!(app.selected_home_row().unwrap().id(), "token");
     for (width, height) in [(70, 20), (100, 30), (150, 40)] {
         let screen = render(&mut app, width, height);
-        assert!(screen.contains("GitLab"));
-        assert!(screen.contains("Token"));
+        assert!(screen.contains("GitLab"), "{width}x{height}");
+        assert!(screen.contains("api-token"), "{width}x{height}");
         assert!(!screen.contains("create-issue"));
         capture_buffer(
             &format!("home-{width}x{height}"),
@@ -109,39 +120,319 @@ fn home_browses_nested_categories_and_opens_settings_explicitly() {
     }
     app.key(key(KeyCode::Char('h')));
     assert_eq!(app.category.as_deref(), Some("root"));
-    app.key(key(KeyCode::F(3)));
-    assert!(!app.home);
-    app.key(key(KeyCode::F(3)));
-    assert!(app.home);
     app.key(key(KeyCode::Tab));
-    assert!(app.home_tree_focus);
-    app.key(key(KeyCode::Down));
-    app.key(key(KeyCode::Down));
+    assert_eq!(app.focus, Focus::Preview);
+    app.key(key(KeyCode::Char('h')));
+    assert_eq!(app.focus, Focus::List);
     app.key(key(KeyCode::Char('e')));
     assert!(
         matches!(&app.mode, Mode::Form(Form { kind: Kind::RenameCategory { id, .. }, .. }) if id == "child")
     );
     app.mode = Mode::Normal;
-    app.key(key(KeyCode::Enter));
-    assert_eq!(app.category.as_deref(), Some("child"));
-    assert!(!app.home_tree_focus);
-    app.home_restore = Some((
-        Some("child".into()),
-        Some("token".into()),
-        Some("child".into()),
-    ));
+    app.key(key(KeyCode::Char('n')));
+    assert!(
+        matches!(&app.mode, Mode::Form(Form { kind: Kind::Category(parent), .. })
+            if parent.as_deref() == Some("child"))
+    );
+    app.mode = Mode::Normal;
+    app.key(key(KeyCode::F(3)));
+    assert!(!app.home);
+    app.key(key(KeyCode::F(3)));
+    assert!(app.home);
     let mut updated = app.library.clone().unwrap();
     updated.categories[1].title = "新分类名".into();
     updated.categories.reverse();
+    app.home_restore = Some((Some("child".into()), Some("token".into())));
     app.apply(Outcome::Library(updated));
     assert_eq!(app.category.as_deref(), Some("child"));
-    assert_eq!(app.home_rows()[app.home_selected].0, "token");
-    assert_eq!(
-        app.library.as_ref().unwrap().category_tree()[app.home_tree_selected - 1]
-            .0
-            .id,
-        "child"
+    assert_eq!(app.selected_home_row().unwrap().id(), "token");
+}
+
+#[test]
+fn rails_stay_on_the_layout_columns_across_widths_languages_and_panes() {
+    for language in [Language::En, Language::ZhCn] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut app = App::new(
+            ConfigStore::new(directory.path().join("gateway.json")),
+            language,
+        );
+        app.nerd_font = true;
+        app.databases = crowded_databases(directory.path());
+        app.apply(Outcome::Library(crowded_library()));
+        app.databases = crowded_databases(directory.path());
+        let other = tempfile::tempdir().unwrap();
+        let mut browser = manager_fixture(other.path());
+        browser.language = language;
+        browser.databases = crowded_databases(other.path());
+        for width in 70..=140 {
+            let home = assert_rails(&mut app, width, 24);
+            let manager = assert_rails(&mut browser, width, 24);
+            assert_eq!(home, manager, "screens disagree on rails at {width}x24");
+        }
+        for (width, height) in [(69, 24), (70, 19)] {
+            assert!(
+                !render(&mut app, width, height).contains('│'),
+                "{width}x{height}"
+            );
+        }
+    }
+}
+
+#[test]
+fn home_keybar_drops_hint_groups_whole_not_mid_binding() {
+    for language in [Language::En, Language::ZhCn] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut app = App::new(
+            ConfigStore::new(directory.path().join("gateway.json")),
+            language,
+        );
+        app.nerd_font = true;
+        app.databases = crowded_databases(directory.path());
+        app.apply(Outcome::Library(crowded_library()));
+        app.databases = crowded_databases(directory.path());
+        let primary = match language {
+            Language::En => "Enter open",
+            _ => "Enter 进入",
+        };
+        for width in 70..=140 {
+            let footer = text(&mut app, width, 24)
+                .lines()
+                .last()
+                .unwrap_or_default()
+                .to_owned();
+            assert!(
+                !footer.contains('…') && footer.contains(primary),
+                "{language:?} {width}x24: {footer}"
+            );
+        }
+    }
+}
+
+#[test]
+fn home_states_render_the_tree_search_and_detail() {
+    for language in [Language::En, Language::ZhCn] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut app = App::new(
+            ConfigStore::new(directory.path().join("gateway.json")),
+            language,
+        );
+        app.nerd_font = true;
+        app.databases = crowded_databases(directory.path());
+        let tag = if language == Language::En { "en" } else { "zh" };
+        // A locked database still offers selectable actions, not a wall of hints,
+        // and the first action depends on whether a gateway config is registered.
+        let locked = text(&mut app, 100, 30);
+        assert!(locked.contains(language.text(Message::NewDatabaseRow)));
+        assert!(locked.contains(language.text(Message::OpenLocalRow)));
+        capture_buffer(&format!("home-{tag}-locked"), &draw(&mut app, 100, 30));
+        app.config = Some(Config::new(directory.path().join("synthetic.mdbx")));
+        let registered = text(&mut app, 100, 30);
+        assert!(registered.contains(language.text(Message::OpenDatabaseRow)));
+        capture_buffer(&format!("home-{tag}-registered"), &draw(&mut app, 100, 30));
+        app.apply(Outcome::Library(crowded_library()));
+        // `apply` reloads the registry from disk, which a temp store does not have.
+        app.databases = crowded_databases(directory.path());
+        capture_buffer(&format!("home-{tag}-tree"), &draw(&mut app, 100, 30));
+        let tree = text(&mut app, 100, 30);
+        assert!(tree.contains("工作项目"));
+        assert!(tree.contains("GitLab"));
+        if language == Language::En {
+            assert!(
+                tree.contains("0 tokens") && !tree.contains("1 tokens"),
+                "{tree}"
+            );
+        } else {
+            assert!(tree.contains("1 个 Token"), "{tree}");
+        }
+        app.key(key(KeyCode::Char('d')));
+        assert_eq!(app.focus, Focus::Navigation);
+        capture_buffer(&format!("home-{tag}-rail"), &draw(&mut app, 100, 30));
+        app.key(key(KeyCode::Tab));
+        app.key(key(KeyCode::Char('/')));
+        for ch in "令牌".chars() {
+            app.key(key(KeyCode::Char(ch)));
+        }
+        let ids: Vec<String> = app
+            .home_rows()
+            .iter()
+            .map(|row| row.id().to_owned())
+            .collect();
+        assert_eq!(ids, ["token"]);
+        let search = text(&mut app, 100, 30);
+        assert!(search.contains("GitLab") && !search.contains("no-category-entry"));
+        capture_buffer(&format!("home-{tag}-search"), &draw(&mut app, 100, 30));
+        app.key(key(KeyCode::Esc));
+        assert!(app.home_filter.is_empty());
+        for _ in 0..3 {
+            app.key(key(KeyCode::Enter));
+        }
+        assert_eq!(app.focus, Focus::Preview);
+        let detail = render(&mut app, 100, 30);
+        assert!(detail.contains("••••••••"));
+        assert!(detail.contains("monica-pass"));
+        capture_buffer(&format!("home-{tag}-detail"), &draw(&mut app, 100, 30));
+    }
+}
+
+#[test]
+fn home_docs_screen_is_captured_for_the_readme() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = App::new(
+        ConfigStore::new(directory.path().join("gateway.json")),
+        Language::ZhCn,
     );
+    app.nerd_font = true;
+    app.databases = docs_databases(directory.path());
+    app.apply(Outcome::Library(docs_library()));
+    // `apply` reloads the registry from disk, which a temp store does not have.
+    app.databases = docs_databases(directory.path());
+    for _ in 0..8 {
+        if app
+            .selected_home_row()
+            .is_some_and(|row| row.id() == "gitlab")
+        {
+            break;
+        }
+        app.key(key(KeyCode::Char('j')));
+    }
+    assert_eq!(
+        app.selected_home_row().map(|row| row.id().to_owned()),
+        Some("gitlab".into())
+    );
+    assert_rails(&mut app, 100, 30);
+    let screen = text(&mut app, 100, 30);
+    assert!(
+        screen.contains("GitLab") && screen.contains("monica-pass"),
+        "{screen}"
+    );
+    capture_buffer("home-docs", &draw(&mut app, 100, 30));
+}
+
+fn docs_databases(directory: &std::path::Path) -> Vec<crate::databases::Database> {
+    [
+        ("personal", "个人库", true),
+        ("work", "工作", false),
+        ("lab", "实验室", false),
+    ]
+    .into_iter()
+    .map(|(id, name, current)| crate::databases::Database {
+        id: id.into(),
+        name: name.into(),
+        path: directory.join(format!("{id}.mdbx")),
+        current,
+    })
+    .collect()
+}
+
+fn docs_library() -> crate::library::Library {
+    crate::library::Library {
+        categories: vec![
+            crate::library::Category {
+                id: "dev".into(),
+                parent: None,
+                title: "开发".into(),
+            },
+            crate::library::Category {
+                id: "pass".into(),
+                parent: Some("dev".into()),
+                title: "monica-pass".into(),
+            },
+            crate::library::Category {
+                id: "life".into(),
+                parent: None,
+                title: "日常".into(),
+            },
+        ],
+        entries: vec![
+            crate::library::Entry {
+                id: "gitlab".into(),
+                category: "pass".into(),
+                title: "GitLab 内部实例".into(),
+                kind: "api-token".into(),
+            },
+            crate::library::Entry {
+                id: "aws".into(),
+                category: "dev".into(),
+                title: "AWS 控制台".into(),
+                kind: "login".into(),
+            },
+            crate::library::Entry {
+                id: "netflix".into(),
+                category: "life".into(),
+                title: "Netflix".into(),
+                kind: "login".into(),
+            },
+        ],
+    }
+}
+
+fn crowded_databases(directory: &std::path::Path) -> Vec<crate::databases::Database> {
+    [
+        ("personal", "个人库 · 主用", true),
+        ("work", "工作项目 work 🔐", false),
+    ]
+    .into_iter()
+    .map(|(id, name, current)| crate::databases::Database {
+        id: id.into(),
+        name: name.into(),
+        path: directory.join(format!("{id}.mdbx")),
+        current,
+    })
+    .collect()
+}
+
+fn crowded_library() -> crate::library::Library {
+    crate::library::Library {
+        categories: vec![
+            crate::library::Category {
+                id: "root".into(),
+                parent: None,
+                title: "工作项目".into(),
+            },
+            crate::library::Category {
+                id: "child".into(),
+                parent: Some("root".into()),
+                title: "monica-pass 🔐".into(),
+            },
+        ],
+        entries: vec![
+            crate::library::Entry {
+                id: "token".into(),
+                category: "child".into(),
+                title: "GitLab 内部实例访问令牌".into(),
+                kind: "api-token".into(),
+            },
+            crate::library::Entry {
+                id: "loose".into(),
+                category: "missing".into(),
+                title: "no-category-entry".into(),
+                kind: "login".into(),
+            },
+        ],
+    }
+}
+
+fn assert_rails(app: &mut App, width: u16, height: u16) -> Vec<u16> {
+    let screen = view::chrome(Rect::new(0, 0, width, height));
+    let rails = [screen.columns[1].x, screen.columns[1].right() - 1];
+    let buffer = draw(app, width, height);
+    for row in 0..screen.body.height {
+        let y = screen.body.y + row;
+        let found: Vec<u16> = (0..width)
+            .filter(|x| buffer[(*x, y)].symbol() == "│")
+            .collect();
+        assert_eq!(
+            found,
+            rails.to_vec(),
+            "rails drifted at {width}x{height} row {row}"
+        );
+    }
+    assert_eq!(
+        buffer,
+        draw(app, width, height),
+        "a redraw differs from a clean frame at {width}x{height}"
+    );
+    rails.to_vec()
 }
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -158,6 +449,29 @@ fn render(app: &mut App, width: u16, height: u16) -> String {
         .iter()
         .map(|cell| cell.symbol())
         .collect()
+}
+
+/// Screen text with the pad half of every wide glyph dropped, so translated
+/// CJK labels stay contiguous instead of reading "工 作 项 目". Rows are kept
+/// apart by newlines, so a match cannot span two of them.
+fn text(app: &mut App, width: u16, height: u16) -> String {
+    let buffer = draw(app, width, height);
+    let width = width as usize;
+    let mut skip = 0;
+    let mut screen = String::new();
+    for (index, cell) in buffer.content.iter().enumerate() {
+        if index % width == 0 {
+            screen.push('\n');
+        }
+        if skip > 0 {
+            skip -= 1;
+            continue;
+        }
+        let symbol = cell.symbol();
+        skip = ratatui::text::Line::raw(symbol).width().saturating_sub(1);
+        screen.push_str(symbol);
+    }
+    screen
 }
 
 fn manager_fixture(directory: &std::path::Path) -> App {

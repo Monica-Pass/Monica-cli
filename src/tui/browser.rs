@@ -11,7 +11,7 @@ use crate::tr;
 
 pub(super) const QUICK_COMMANDS: [&str; 5] = ["add", "open", "login", "grant", "unlock"];
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Focus {
     Navigation,
     List,
@@ -280,7 +280,11 @@ impl App {
             }
             Mode::Filter(mut filter) => {
                 filter.input.insert(text);
-                self.update_filter(&filter.input.value);
+                if self.home {
+                    self.update_home_filter(&filter.input.value);
+                } else {
+                    self.update_filter(&filter.input.value);
+                }
                 self.mode = Mode::Filter(filter);
             }
             mode => self.mode = mode,

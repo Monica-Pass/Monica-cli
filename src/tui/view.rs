@@ -12,10 +12,10 @@ use super::{App, COMMANDS, Mode, Page, Popup, preview};
 use crate::i18n::{Language, Message};
 use crate::tr;
 
-const BG: Color = Color::Rgb(40, 44, 52);
+pub(super) const BG: Color = Color::Rgb(40, 44, 52);
 const PANEL: Color = Color::Rgb(33, 37, 43);
-const FG: Color = Color::Rgb(171, 178, 191);
-const LIGHT: Color = Color::Rgb(215, 218, 224);
+pub(super) const FG: Color = Color::Rgb(171, 178, 191);
+pub(super) const LIGHT: Color = Color::Rgb(215, 218, 224);
 pub(super) const DIM: Color = Color::Rgb(127, 132, 142);
 pub(super) const ACCENT: Color = Color::Rgb(97, 175, 239);
 pub(super) const CYAN: Color = Color::Rgb(86, 182, 194);
@@ -24,7 +24,7 @@ pub(super) const GREEN: Color = Color::Rgb(152, 195, 121);
 pub(super) const ERROR: Color = Color::Rgb(224, 108, 117);
 
 #[derive(Clone, Copy)]
-enum Icon {
+pub(super) enum Icon {
     Folder,
     OpenFolder,
     Github,
@@ -38,7 +38,7 @@ enum Icon {
 }
 
 impl Icon {
-    fn text(self, nerd_font: bool) -> &'static str {
+    pub(super) fn text(self, nerd_font: bool) -> &'static str {
         match (self, nerd_font) {
             (Self::Folder, true) => "\u{f07b}",
             (Self::OpenFolder, true) => "\u{f07c}",
@@ -64,11 +64,11 @@ impl Icon {
     }
 }
 
-struct Record {
-    name: String,
-    suffix: String,
-    icon: Icon,
-    color: Color,
+pub(super) struct Record {
+    pub(super) name: String,
+    pub(super) suffix: String,
+    pub(super) icon: Icon,
+    pub(super) color: Color,
 }
 
 pub(super) fn clean(value: &str) -> String {
@@ -79,7 +79,7 @@ pub(super) fn clean(value: &str) -> String {
 }
 
 // Clip terminal cells, not bytes or characters; never split a CJK/emoji grapheme.
-fn clipped(value: &str, width: usize, from_left: bool) -> String {
+pub(super) fn clipped(value: &str, width: usize, from_left: bool) -> String {
     let value = clean(value).replace('\n', " ");
     let line = Line::raw(value.as_str());
     if line.width() <= width {
@@ -146,6 +146,68 @@ fn clear_modal(frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(Clear, area);
 }
 
+/// One chrome for both screens: a path row, three proportional columns with a
+/// single continuous rail on each side of the middle column, and a status row.
+pub(super) struct Chrome {
+    pub(super) header: Rect,
+    pub(super) body: Rect,
+    pub(super) footer: Rect,
+    pub(super) columns: [Rect; 3],
+}
+
+fn columns(body: Rect) -> [Rect; 3] {
+    let split = Layout::horizontal([
+        Constraint::Ratio(1, 8),
+        Constraint::Ratio(4, 8),
+        Constraint::Ratio(3, 8),
+    ])
+    .split(body);
+    [split[0], split[1], split[2]]
+}
+
+pub(super) fn chrome(area: Rect) -> Chrome {
+    let root = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Fill(1),
+        Constraint::Length(1),
+    ])
+    .split(area);
+    Chrome {
+        header: root[0],
+        body: root[1],
+        footer: root[2],
+        columns: columns(root[1]),
+    }
+}
+
+// Rails are placed by the layout alone, so no content, language or terminal
+// width can move them onto a neighbouring column.
+pub(super) fn rails(frame: &mut Frame<'_>, body: Rect) {
+    let columns = columns(body);
+    for x in [columns[1].x, columns[1].right() - 1] {
+        frame.render_widget(
+            Paragraph::new(vec![Line::raw("│"); body.height as usize])
+                .style(Style::default().fg(FG)),
+            Rect {
+                x,
+                width: 1,
+                ..body
+            },
+        );
+    }
+}
+
+pub(super) fn path_line(frame: &mut Frame<'_>, area: Rect, text: &str) {
+    frame.render_widget(
+        Paragraph::new(format!(
+            " {}",
+            clipped(text, area.width.saturating_sub(1) as usize, true)
+        ))
+        .style(Style::default().fg(CYAN).bold()),
+        area,
+    );
+}
+
 pub(super) fn render(frame: &mut Frame<'_>, app: &mut App) {
     let lang = app.language;
     let area = frame.area();
@@ -174,19 +236,9 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &mut App) {
         }
         return;
     }
-    let root = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Fill(1),
-        Constraint::Length(1),
-    ])
-    .split(area);
-    let columns = Layout::horizontal([
-        Constraint::Ratio(1, 8),
-        Constraint::Ratio(4, 8),
-        Constraint::Ratio(3, 8),
-    ])
-    .split(root[1]);
-    header(frame, app, root[0]);
+    let screen = chrome(area);
+    let columns = screen.columns;
+    header(frame, app, screen.header);
     navigation(frame, app, columns[0]);
     let current = Rect {
         x: columns[1].x + 1,
@@ -196,18 +248,8 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &mut App) {
     app.page_size = current.height.max(1) as usize;
     records(frame, app, current);
     details(frame, app, columns[2]);
-    for x in [columns[1].x, columns[1].right() - 1] {
-        frame.render_widget(
-            Paragraph::new(vec![Line::raw("│"); root[1].height as usize])
-                .style(Style::default().fg(FG)),
-            Rect {
-                x,
-                width: 1,
-                ..root[1]
-            },
-        );
-    }
-    footer(frame, app, root[2]);
+    rails(frame, screen.body);
+    footer(frame, app, screen.footer);
     match &mut app.mode {
         Mode::Form(form) => render_form(
             frame,
@@ -239,14 +281,7 @@ fn header(frame: &mut Frame<'_>, app: &App, area: Rect) {
     if !query.is_empty() {
         path.push_str(&tr!(lang, FilterPathSuffix, query = query.as_str()));
     }
-    frame.render_widget(
-        Paragraph::new(format!(
-            " {}",
-            clipped(&path, area.width.saturating_sub(1) as usize, true)
-        ))
-        .style(Style::default().fg(CYAN).bold()),
-        area,
-    );
+    path_line(frame, area, &path);
 }
 
 fn navigation(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -372,7 +407,7 @@ fn record(app: &App, index: usize) -> Option<Record> {
     })
 }
 
-fn draw_record(
+pub(super) fn draw_record(
     frame: &mut Frame<'_>,
     area: Rect,
     record: &Record,
@@ -506,7 +541,7 @@ fn records(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 }
 
 // Wrap before scrolling so the final lines of long CJK notes and paths remain reachable.
-fn wrapped_lines(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
+pub(super) fn wrapped_lines(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
     if width == 0 {
         return Vec::new();
     }
@@ -586,7 +621,7 @@ fn details(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     }
 }
 
-fn broker_status(app: &App) -> (String, Color) {
+pub(super) fn broker_status(app: &App) -> (String, Color) {
     let lang = app.language;
     if let Some(broker) = &app.broker {
         let seconds = broker.remaining_seconds();
@@ -606,7 +641,7 @@ fn broker_status(app: &App) -> (String, Color) {
     }
 }
 
-fn capsule_edge(text: &'static str, color: Color, background: Color) -> Span<'static> {
+pub(super) fn capsule_edge(text: &'static str, color: Color, background: Color) -> Span<'static> {
     Span::styled(text, Style::default().fg(color).bg(background))
 }
 
@@ -769,7 +804,7 @@ fn footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     );
 }
 
-fn position(index: usize, last: usize, lang: Language) -> String {
+pub(super) fn position(index: usize, last: usize, lang: Language) -> String {
     if index == 0 {
         tr!(lang, PositionTop).to_owned()
     } else if index >= last {
@@ -779,7 +814,7 @@ fn position(index: usize, last: usize, lang: Language) -> String {
     }
 }
 
-fn render_input(frame: &mut Frame<'_>, input: &Input, prefix: &str, area: Rect) {
+pub(super) fn render_input(frame: &mut Frame<'_>, input: &Input, prefix: &str, area: Rect) {
     let cursor = prefix.len() + Line::raw(clean(&input.value[..input.cursor])).width();
     let scroll = cursor.saturating_sub(area.width.saturating_sub(1) as usize);
     frame.render_widget(

@@ -242,16 +242,16 @@ enum Mode {
 
 struct App {
     databases: Vec<crate::databases::Database>,
-    database_picker: bool,
-    database_selected: usize,
     home: bool,
+    home_rail_selected: usize,
+    home_rail_offset: usize,
+    home_offset: usize,
+    home_filter: Zeroizing<String>,
     library: Option<crate::library::Library>,
     library_loaded: Option<Instant>,
     category: Option<String>,
     home_selected: usize,
-    home_tree_focus: bool,
-    home_tree_selected: usize,
-    home_restore: Option<(Option<String>, Option<String>, Option<String>)>,
+    home_restore: Option<(Option<String>, Option<String>)>,
     store: ConfigStore,
     language: Language,
     config: Option<Config>,
@@ -285,15 +285,15 @@ impl App {
         let lang = language;
         let mut app = Self {
             databases: Vec::new(),
-            database_picker: false,
-            database_selected: 0,
             home: true,
+            home_rail_selected: 0,
+            home_rail_offset: 0,
+            home_offset: 0,
+            home_filter: Zeroizing::new(String::new()),
             library: None,
             library_loaded: None,
             category: None,
             home_selected: 0,
-            home_tree_focus: false,
-            home_tree_selected: 0,
             home_restore: None,
             store,
             language,
@@ -428,13 +428,8 @@ impl App {
                 let row = self
                     .home_rows()
                     .get(self.home_selected)
-                    .map(|(id, _, _)| id.clone());
-                let tree = self.library.as_ref().and_then(|l| {
-                    self.home_tree_selected
-                        .checked_sub(1)
-                        .and_then(|i| l.category_tree().get(i).map(|(c, _)| c.id.clone()))
-                });
-                self.home_restore = Some((self.category.clone(), row, tree));
+                    .map(|row| row.id().to_owned());
+                self.home_restore = Some((self.category.clone(), row));
             } else {
                 self.home_restore = None;
             }
@@ -501,6 +496,16 @@ impl App {
 
     fn show_help(&mut self) {
         let lang = self.language;
+        let mut lines = Vec::new();
+        if self.home {
+            lines.extend([
+                tr!(lang, HelpHomeRail).to_owned(),
+                tr!(lang, HelpHomeEnter).to_owned(),
+                tr!(lang, HelpHomeSearch).to_owned(),
+                tr!(lang, HelpHomeNew).to_owned(),
+                tr!(lang, HelpHomeEdit).to_owned(),
+            ]);
+        }
         let commands: &[&str] = match self.page {
             Page::Dashboard => &["add", "open", "login", "grant", "unlock"],
             Page::Connections => &["add", "note", "grant", "connect", "unlock", "lock"],
@@ -508,25 +513,34 @@ impl App {
             Page::WebDav => &["login", "publish", "sync", "refresh", "logout"],
             Page::Help => &["commands", "message", "icons"],
         };
-        let mut lines = Vec::new();
-        for name in commands {
-            if let Some(command) = COMMANDS.iter().find(|command| command.command == *name) {
-                let key = if command.key.is_empty() {
-                    format!(":{}", command.command)
-                } else {
-                    command.key.to_owned()
-                };
-                lines.push(format!("{key:<10} {}", lang.text(command.description)));
+        if !self.home {
+            for name in commands {
+                if let Some(command) = COMMANDS.iter().find(|command| command.command == *name) {
+                    let key = if command.key.is_empty() {
+                        format!(":{}", command.command)
+                    } else {
+                        command.key.to_owned()
+                    };
+                    lines.push(format!("{key:<10} {}", lang.text(command.description)));
+                }
             }
         }
         lines.extend([
             String::new(),
-            tr!(lang, HelpEnter).to_owned(),
+            if self.home {
+                tr!(lang, HelpHomeManage).to_owned()
+            } else {
+                tr!(lang, HelpEnter).to_owned()
+            },
             tr!(lang, HelpPanes).to_owned(),
             tr!(lang, HelpMove).to_owned(),
             tr!(lang, HelpPaging).to_owned(),
             tr!(lang, HelpTab).to_owned(),
-            tr!(lang, HelpSections).to_owned(),
+            if self.home {
+                tr!(lang, HelpHomeEscape).to_owned()
+            } else {
+                tr!(lang, HelpSections).to_owned()
+            },
             tr!(lang, HelpSearch).to_owned(),
             tr!(lang, HelpCommand).to_owned(),
             tr!(lang, HelpMessage).to_owned(),
@@ -538,7 +552,16 @@ impl App {
             tr!(lang, HelpLanguage).to_owned(),
         ]);
         self.mode = Mode::Popup(Popup {
-            title: tr!(lang, HelpTitle, page = self.page.label(lang)),
+            title: tr!(
+                lang,
+                HelpTitle,
+                page = if self.home {
+                    lang.text(Message::PageHome)
+                } else {
+                    self.page.label(lang)
+                }
+            )
+            .to_owned(),
             lines,
             scroll: 0,
             max_scroll: 0,
@@ -763,13 +786,22 @@ impl App {
         match mode {
             Mode::Filter(mut filter) => match key.code {
                 KeyCode::Esc => {
-                    self.update_filter(&filter.previous);
-                    self.restore_selection(self.page, filter.selection.as_deref());
+                    if self.home {
+                        self.update_home_filter(&filter.previous);
+                        self.restore_home_selection(filter.selection.as_deref());
+                    } else {
+                        self.update_filter(&filter.previous);
+                        self.restore_selection(self.page, filter.selection.as_deref());
+                    }
                 }
                 KeyCode::Enter => {}
                 _ => {
                     filter.input.key(key);
-                    self.update_filter(&filter.input.value);
+                    if self.home {
+                        self.update_home_filter(&filter.input.value);
+                    } else {
+                        self.update_filter(&filter.input.value);
+                    }
                     self.mode = Mode::Filter(filter);
                 }
             },
@@ -954,31 +986,20 @@ impl App {
         }
         match outcome {
             Outcome::Library(library) => {
-                self.database_picker = false;
                 self.library = Some(library);
                 self.library_loaded = Some(Instant::now());
                 self.category = None;
                 self.home_selected = 0;
-                if let Some((category, row, tree)) = self.home_restore.take() {
+                self.home_offset = 0;
+                self.focus = Focus::List;
+                self.preview_scroll = 0;
+                if let Some((category, row)) = self.home_restore.take() {
                     self.category = category.filter(|id| {
                         self.library
                             .as_ref()
                             .is_some_and(|l| l.categories.iter().any(|c| &c.id == id))
                     });
-                    self.home_selected = self
-                        .home_rows()
-                        .iter()
-                        .position(|(id, _, _)| Some(id) == row.as_ref())
-                        .unwrap_or(0);
-                    self.home_tree_selected = self
-                        .library
-                        .as_ref()
-                        .and_then(|l| {
-                            l.category_tree()
-                                .iter()
-                                .position(|(c, _)| Some(&c.id) == tree.as_ref())
-                        })
-                        .map_or(0, |i| i + 1);
+                    self.restore_home_selection(row.as_deref());
                 }
                 self.message_at = None;
             }

@@ -66,6 +66,10 @@ def rgb(value, fallback):
 def font_role(text):
     if any(0x2190 <= ord(char) <= 0x21FF for char in text):
         return "symbols"
+    # The mono font has no glyphs above this block, but U+2500-U+257F stays on
+    # the mono grid so box drawing keeps lining up with the rails.
+    if any(0x2580 <= ord(char) <= 0x25FF for char in text):
+        return "symbols"
     if any(0x1F000 <= ord(char) <= 0x1FAFF for char in text):
         return "emoji"
     if any(0x2E80 <= ord(char) <= 0x9FFF or 0xF900 <= ord(char) <= 0xFAFF or

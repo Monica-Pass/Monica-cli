@@ -10,15 +10,15 @@ use crate::i18n::{Language, Message};
 use crate::model::Provider;
 use crate::tr;
 
-fn heading(text: impl AsRef<str>) -> Line<'static> {
+pub(super) fn heading(text: impl AsRef<str>) -> Line<'static> {
     Line::styled(clean(text.as_ref()), Style::default().fg(ACCENT).bold())
 }
 
-fn label(text: impl AsRef<str>) -> Line<'static> {
+pub(super) fn label(text: impl AsRef<str>) -> Line<'static> {
     Line::styled(clean(text.as_ref()), Style::default().fg(DIM))
 }
 
-fn field(lines: &mut Vec<Line<'static>>, name: &str, value: impl AsRef<str>) {
+pub(super) fn field(lines: &mut Vec<Line<'static>>, name: &str, value: impl AsRef<str>) {
     let prefix = format!("{name}  ");
     let indent = " ".repeat(Line::raw(prefix.as_str()).width());
     for (index, value) in clean(value.as_ref()).lines().enumerate() {
@@ -146,7 +146,7 @@ fn connection(app: &App) -> Vec<Line<'static>> {
     lines
 }
 
-fn scope_title(grant: &Grant, lang: Language) -> Line<'static> {
+pub(super) fn scope_title(grant: &Grant, lang: Language) -> Line<'static> {
     let status = lang.text(grant_status(grant));
     Line::from(vec![
         Span::styled(clean(&grant.name), Style::default().fg(ACCENT)),
