@@ -1,0 +1,4 @@
+# src/keys/manage.rs compares an exported armor file with the fixture byte for byte, and the
+# CLI always writes armor with LF. With core.autocrlf=true a fresh Windows clone would check the
+# fixtures out as CRLF and that assertion would fail on line endings alone.
+*.asc text eol=lf

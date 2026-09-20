@@ -1,6 +1,15 @@
 use super::*;
+use home::public_field;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
+
+/// Private material has no reason to be drawn anywhere on screen: forms mask it, and
+/// previews read a summary that never carries it.
+const KEY_MATERIAL: [&str; 3] = [
+    "-----BEGIN OPENSSH PRIVATE KEY-----",
+    "-----BEGIN RSA PRIVATE KEY-----",
+    "-----BEGIN PGP PRIVATE KEY BLOCK-----",
+];
 
 #[test]
 fn editing_defers_database_password_and_escape_preserves_draft() {
@@ -75,7 +84,7 @@ fn home_browses_categories_and_entries_as_one_tree() {
         Language::ZhCn,
     );
     assert!(app.home);
-    app.apply(Outcome::Library(crate::library::Library {
+    app.apply(browsed(crate::library::Library {
         categories: vec![
             crate::library::Category {
                 id: "root".into(),
@@ -143,7 +152,7 @@ fn home_browses_categories_and_entries_as_one_tree() {
     updated.categories[1].title = "新分类名".into();
     updated.categories.reverse();
     app.home_restore = Some((Some("child".into()), Some("token".into())));
-    app.apply(Outcome::Library(updated));
+    app.apply(browsed(updated));
     assert_eq!(app.category.as_deref(), Some("child"));
     assert_eq!(app.selected_home_row().unwrap().id(), "token");
 }
@@ -158,7 +167,7 @@ fn rails_stay_on_the_layout_columns_across_widths_languages_and_panes() {
         );
         app.nerd_font = true;
         app.databases = crowded_databases(directory.path());
-        app.apply(Outcome::Library(crowded_library()));
+        app.apply(browsed(crowded_library()));
         app.databases = crowded_databases(directory.path());
         let other = tempfile::tempdir().unwrap();
         let mut browser = manager_fixture(other.path());
@@ -188,7 +197,7 @@ fn home_keybar_drops_hint_groups_whole_not_mid_binding() {
         );
         app.nerd_font = true;
         app.databases = crowded_databases(directory.path());
-        app.apply(Outcome::Library(crowded_library()));
+        app.apply(browsed(crowded_library()));
         app.databases = crowded_databases(directory.path());
         let primary = match language {
             Language::En => "Enter open",
@@ -206,6 +215,430 @@ fn home_keybar_drops_hint_groups_whole_not_mid_binding() {
             );
         }
     }
+}
+
+#[test]
+fn home_lists_key_rows_and_previews_public_metadata_only() {
+    for language in [Language::En, Language::ZhCn] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut app = App::new(
+            ConfigStore::new(directory.path().join("gateway.json")),
+            language,
+        );
+        app.nerd_font = true;
+        app.databases = crowded_databases(directory.path());
+        app.apply(browsed_keys(
+            docs_library(),
+            vec![ssh_summary(), gpg_summary()],
+        ));
+        app.databases = crowded_databases(directory.path());
+        let rows = app.home_rows();
+        // A key entry is an ordinary `login` row until the read says otherwise, so
+        // it must appear exactly once and never as a second, token-shaped row.
+        for id in ["aws", "netflix"] {
+            assert_eq!(rows.iter().filter(|row| row.id() == id).count(), 1);
+        }
+        app.home_selected = rows.iter().position(|row| row.id() == "aws").unwrap();
+        let ssh = text(&mut app, 120, 30);
+        assert!(ssh.contains("ED25519 256"), "{ssh}");
+        assert!(ssh.contains(language.text(Message::KeyFingerprintHeading)));
+        assert!(ssh.contains("SHA256:sshmockfingerprint"), "{ssh}");
+        assert!(ssh.contains("joey@work"), "{ssh}");
+        assert!(ssh.contains("ssh-ed25519 AAAAMOCKPUBLIC"), "{ssh}");
+        assert!(ssh.contains(language.text(Message::KeyPrivateHeading)));
+        for banner in KEY_MATERIAL {
+            assert!(!ssh.contains(banner), "key text leaked");
+        }
+        assert!(
+            text(&mut app, 120, 30)
+                .lines()
+                .last()
+                .unwrap_or_default()
+                .contains(language.text(Message::KeysSshEntry)),
+            "a key row must not offer the token bindings"
+        );
+        capture_buffer(
+            &format!("home-{}-ssh", language.choice().code()),
+            &draw(&mut app, 120, 30),
+        );
+        assert_rails(&mut app, 120, 30);
+        app.home_selected = rows.iter().position(|row| row.id() == "netflix").unwrap();
+        let gpg = text(&mut app, 120, 30);
+        assert!(gpg.contains("RSA 3072"), "{gpg}");
+        assert!(gpg.contains(language.text(Message::KeyUidHeading)), "{gpg}");
+        assert!(gpg.contains("Joyin Joester"), "{gpg}");
+        assert!(gpg.contains(language.text(Message::KeyChunksHeading)));
+        // A public ring still has no private half, and the preview says so.
+        assert!(gpg.contains(language.text(Message::KeyValueNo)), "{gpg}");
+        // The keybar names the field y copies, and a GPG row has no public key line.
+        assert!(gpg.contains(language.text(Message::KeysGpgEntry)), "{gpg}");
+        assert!(!gpg.contains(language.text(Message::KeysSshEntry)), "{gpg}");
+        capture_buffer(
+            &format!("home-{}-gpg", language.choice().code()),
+            &draw(&mut app, 120, 30),
+        );
+        // The plaintext kind of both rows is `login`, so the search has to carry
+        // the key words itself.
+        for (word, kept) in [("ssh", "aws"), ("gpg", "netflix"), ("ed25519", "aws")] {
+            filter(&mut app, word);
+            let found = app
+                .home_rows()
+                .iter()
+                .map(|row| row.id().to_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(found, vec![kept.to_owned()], "{word}");
+        }
+    }
+}
+
+#[test]
+fn the_clipboard_only_reaches_public_metadata() {
+    let ssh = ssh_summary();
+    let gpg = gpg_summary();
+    // Exactly the four values y and Y may hand over, proven without a real copy.
+    assert_eq!(public_field(&ssh, false), ssh.public_key.as_str());
+    assert_eq!(public_field(&ssh, true), ssh.fingerprint.as_str());
+    assert_eq!(public_field(&gpg, false), gpg.comment.as_str());
+    assert_eq!(public_field(&gpg, true), gpg.fingerprint.as_str());
+    for banner in KEY_MATERIAL {
+        for key in [&ssh, &gpg] {
+            for fingerprint in [false, true] {
+                assert!(!public_field(key, fingerprint).contains(banner));
+            }
+        }
+        // The summary has no field that could hold key text even by accident.
+        assert!(!format!("{ssh:?} {gpg:?}").contains(banner));
+    }
+    // A token row is not a key row, so y stops before the clipboard: the gateway
+    // token never becomes copy text on any path that does not select a key first.
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = App::new(
+        ConfigStore::new(directory.path().join("gateway.json")),
+        Language::En,
+    );
+    app.apply(browsed_keys(docs_library(), vec![ssh.clone(), gpg.clone()]));
+    let rows = app.home_rows();
+    app.home_selected = rows.iter().position(|row| row.id() == "gitlab").unwrap();
+    for fingerprint in [false, true] {
+        app.copy_public_field(fingerprint);
+        assert_eq!(app.message, app.language.text(Message::ClipboardEmpty));
+        assert!(app.failed, "the refusal has to stay on screen");
+    }
+}
+
+/// The whole chain with nothing mocked out: a real vault on disk, a real generated
+/// Ed25519 pair and a real imported ring, the real keystrokes, the real Win32 clipboard,
+/// and a read-back from a separate process. Opt-in because it overwrites whatever the
+/// developer last copied.
+#[test]
+#[cfg(windows)]
+fn the_real_copy_keys_put_exactly_the_listed_public_field_on_the_clipboard() {
+    use crate::keys::manage;
+    use crate::vault::Vault;
+    use mdbx_core::tiga::TigaMode;
+
+    if std::env::var("MONICA_CLIPBOARD_TEST").as_deref() != Ok("1") {
+        eprintln!("set MONICA_CLIPBOARD_TEST=1 to write the real clipboard");
+        return;
+    }
+    let password = crate::test_support::PASSWORD;
+    let directory = tempfile::tempdir().unwrap();
+    let vault_path = directory.path().join("clipboard-keys.mdbx");
+    Vault::create(&vault_path, password, TigaMode::Multi)
+        .unwrap()
+        .lock()
+        .unwrap();
+    let store = ConfigStore::new(directory.path().join("gateway.json"));
+    store
+        .update(|_| Ok((Config::new(vault_path.clone()), ())))
+        .unwrap();
+    manage::generate_ssh(
+        &store,
+        password,
+        "跳板机 key",
+        "验收",
+        None,
+        "ed25519",
+        "joey@interop",
+    )
+    .unwrap();
+    manage::import_gpg_text(
+        &store,
+        password,
+        "归档 ring",
+        "验收",
+        None,
+        include_str!("../../tests/fixtures/gpg/rsa2048-secret.asc"),
+    )
+    .unwrap();
+    // What `keys list --json` reports is the reference for every assertion below.
+    let listed = manage::list(&store, password).unwrap();
+    assert_eq!(listed.len(), 2, "{listed:?}");
+    let (library, keys) = crate::library::read_with_keys(&store, password).unwrap();
+    assert_eq!(keys, listed, "the TUI must read the same fields as the CLI");
+
+    let mut app = App::new(ConfigStore::new(store.path.clone()), Language::En);
+    app.apply(browsed_keys(library, keys));
+    for name in ["跳板机 key", "归档 ring"] {
+        let entry = listed.iter().find(|key| key.title == name).unwrap();
+        let rows = app.home_rows();
+        app.home_selected = rows
+            .iter()
+            .position(|row| row.id() == entry.entry_id)
+            .unwrap_or_else(|| panic!("{name} is not a visible row"));
+        let ssh = entry.login_type == crate::keys::payload::LOGIN_TYPE_SSH;
+        app.key(key(KeyCode::Char('y')));
+        assert_eq!(
+            app.message,
+            app.language.text(if ssh {
+                Message::CopiedPublicKey
+            } else {
+                Message::CopiedUid
+            })
+        );
+        let public = read_clipboard().expect("PowerShell could not read the clipboard");
+        app.key(key(KeyCode::Char('Y')));
+        assert_eq!(app.message, app.language.text(Message::CopiedFingerprint));
+        let fingerprint = read_clipboard().expect("PowerShell could not read the clipboard");
+        let expected: &str = if ssh {
+            &entry.public_key
+        } else {
+            &entry.comment
+        };
+        assert_eq!(public, expected);
+        assert_eq!(fingerprint, entry.fingerprint.as_str());
+        for banner in KEY_MATERIAL {
+            assert!(!public.contains(banner) && !fingerprint.contains(banner));
+        }
+        let screen = text(&mut app, 120, 30);
+        for banner in KEY_MATERIAL {
+            assert!(!screen.contains(banner), "rendered frame leaked {banner}");
+        }
+        capture_buffer(&format!("clipboard-{name}"), &draw(&mut app, 120, 30));
+        eprintln!("clipboard after y: {public}\nclipboard after Y: {fingerprint}");
+    }
+}
+
+#[cfg(windows)]
+fn read_clipboard() -> Option<String> {
+    // A separate process, so nothing in this crate's own memory vouches for the write.
+    let output = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "[Console]::OutputEncoding=[Text.Encoding]::UTF8;Get-Clipboard",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .trim_end_matches(['\r', '\n'])
+            .to_owned(),
+    )
+}
+
+#[test]
+fn search_puts_the_word_start_match_first_even_against_a_tree_order() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = App::new(
+        ConfigStore::new(directory.path().join("gateway.json")),
+        Language::En,
+    );
+    app.library = Some(ranking_library(&[
+        ("openssh", "openssh-server"),
+        ("sshkey", "ssh-key"),
+    ]));
+    // Both hold `ssh`, so an old substring search would have shown both in tree
+    // order; ranking has to move the one that starts the word up.
+    filter(&mut app, "ssh");
+    assert_eq!(ids(&app), vec!["sshkey", "openssh"]);
+}
+
+#[test]
+fn equally_good_matches_stay_in_tree_order() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = App::new(
+        ConfigStore::new(directory.path().join("gateway.json")),
+        Language::En,
+    );
+    app.library = Some(ranking_library(&[
+        ("tasklist", "task-list"),
+        ("tabletop", "table-top"),
+    ]));
+    // Same anchor, same run, same gap, so the names break the tie instead.
+    filter(&mut app, "ta");
+    assert_eq!(ids(&app), vec!["tabletop", "tasklist"]);
+}
+
+#[test]
+fn ranking_a_crowded_tree_leaves_the_cursor_on_the_same_record() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = App::new(
+        ConfigStore::new(directory.path().join("gateway.json")),
+        Language::En,
+    );
+    app.library = Some(crate::library::Library {
+        categories: (0..12)
+            .map(|index| crate::library::Category {
+                id: format!("cat-{index}"),
+                parent: None,
+                title: format!("分类 {index} team"),
+            })
+            .collect(),
+        entries: (0..5_000)
+            .map(|index| crate::library::Entry {
+                id: format!("entry-{index}"),
+                category: format!("cat-{}", index % 12),
+                title: format!("service {index} 令牌 token"),
+                kind: "login".into(),
+            })
+            .collect(),
+    });
+    let rows = app.home_rows();
+    assert_eq!(rows.len(), 5_012, "every category and entry is one row");
+    app.home_selected = rows
+        .iter()
+        .position(|row| row.id() == "entry-1234")
+        .unwrap();
+    // Typed one character at a time, which is the path a keystroke actually takes.
+    app.key(key(KeyCode::Char('/')));
+    let started = Instant::now();
+    for code in "token".chars() {
+        app.key(key(KeyCode::Char(code)));
+    }
+    let broad = started.elapsed();
+    for code in " 12".chars() {
+        app.key(key(KeyCode::Char(code)));
+    }
+    let narrowed = started.elapsed();
+    app.key(key(KeyCode::Enter));
+    let found: Vec<_> = app
+        .home_rows()
+        .iter()
+        .map(|row| row.id().to_owned())
+        .collect();
+    // Every row matched the first term, so this list is entirely the second term's
+    // doing: `12` right after a separator and run together has to lead.
+    assert_eq!(
+        found.first().map(String::as_str),
+        Some("entry-12"),
+        "{found:?}"
+    );
+    assert!(found.contains(&"entry-1234".to_owned()));
+    // Re-ranking must not hand the cursor to another record.
+    assert_eq!(app.selected_home_row().unwrap().id(), "entry-1234");
+    let started = Instant::now();
+    let screen = text(&mut app, 120, 30);
+    let drawn = started.elapsed();
+    assert!(screen.contains("service 12"), "{screen}");
+    eprintln!(
+        "5,012 rows: 5 keystrokes over every row {broad:?}, 8 keystrokes {narrowed:?}, \
+         one 120x30 frame {drawn:?}"
+    );
+}
+
+fn ranking_library(entries: &[(&str, &str)]) -> crate::library::Library {
+    crate::library::Library {
+        categories: vec![crate::library::Category {
+            id: "dev".into(),
+            parent: None,
+            title: "开发".into(),
+        }],
+        entries: entries
+            .iter()
+            .map(|(id, title)| crate::library::Entry {
+                id: (*id).into(),
+                category: "dev".into(),
+                title: (*title).into(),
+                kind: "login".into(),
+            })
+            .collect(),
+    }
+}
+
+fn ids(app: &App) -> Vec<String> {
+    app.home_rows()
+        .iter()
+        .map(|row| row.id().to_owned())
+        .collect()
+}
+
+#[test]
+fn key_commands_stop_at_the_database_they_need() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = App::new(
+        ConfigStore::new(directory.path().join("gateway.json")),
+        Language::En,
+    );
+    // Without a gateway config there is no database to write into at all.
+    for command in ["ssh", "sshimport", "gpg"] {
+        app.invoke(command);
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(app.pending.is_none());
+    }
+    app.config = Some(Config::new(directory.path().join("synthetic.mdbx")));
+    for command in ["ssh", "sshimport", "gpg"] {
+        app.invoke(command);
+        assert!(
+            matches!(&app.mode, Mode::Form(form) if matches!(form.kind, Kind::Library)),
+            "{command} skipped the unlock"
+        );
+        assert_eq!(
+            app.message,
+            app.language.text(Message::KeyNeedsOpenedDatabase)
+        );
+        app.mode = Mode::Normal;
+    }
+    app.library = Some(docs_library());
+    for (command, kind) in [("ssh", true), ("sshimport", false)] {
+        app.invoke(command);
+        let Mode::Form(form) = &app.mode else {
+            panic!("{command} opened no form")
+        };
+        assert_eq!(matches!(form.kind, Kind::AddSsh { generate: true }), kind);
+        app.mode = Mode::Normal;
+    }
+    app.invoke("gpg");
+    assert!(matches!(&app.mode, Mode::Form(form) if matches!(form.kind, Kind::AddGpg)));
+}
+
+#[test]
+fn pasted_armor_stays_masked_and_reports_only_its_line_count() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = App::new(
+        ConfigStore::new(directory.path().join("gateway.json")),
+        Language::ZhCn,
+    );
+    app.config = Some(Config::new(directory.path().join("synthetic.mdbx")));
+    app.library = Some(docs_library());
+    app.invoke("sshimport");
+    {
+        let Mode::Form(form) = &mut app.mode else {
+            panic!("import opened no form")
+        };
+        form.fields[0].input.insert("跳板机");
+        form.selected = 1;
+        form.paste("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAAbW9jaw==\n-----END OPENSSH PRIVATE KEY-----\n");
+    }
+    let screen = text(&mut app, 100, 30);
+    for banner in KEY_MATERIAL {
+        assert!(!screen.contains(banner), "key text reached the screen");
+    }
+    assert!(!screen.contains("b3BlbnNzaC1r"), "{screen}");
+    // The masked field still proves the paste was not truncated.
+    assert!(screen.contains("已粘贴 3 行"), "{screen}");
+    assert!(screen.contains('*'), "{screen}");
+    capture_buffer("form-ssh-paste-zh", &draw(&mut app, 120, 30));
+    app.key(key(KeyCode::Enter));
+    let Mode::Form(form) = &app.mode else {
+        panic!("Enter submitted the key form")
+    };
+    assert!(app.pending.is_none());
+    assert_eq!(form.fields[1].input.lines(), 4);
+    assert_modal_survives_resize(&mut app);
 }
 
 #[test]
@@ -229,7 +662,7 @@ fn home_states_render_the_tree_search_and_detail() {
         let registered = text(&mut app, 100, 30);
         assert!(registered.contains(language.text(Message::OpenDatabaseRow)));
         capture_buffer(&format!("home-{tag}-registered"), &draw(&mut app, 100, 30));
-        app.apply(Outcome::Library(crowded_library()));
+        app.apply(browsed(crowded_library()));
         // `apply` reloads the registry from disk, which a temp store does not have.
         app.databases = crowded_databases(directory.path());
         capture_buffer(&format!("home-{tag}-tree"), &draw(&mut app, 100, 30));
@@ -283,7 +716,7 @@ fn home_docs_screen_is_captured_for_the_readme() {
     );
     app.nerd_font = true;
     app.databases = docs_databases(directory.path());
-    app.apply(Outcome::Library(docs_library()));
+    app.apply(browsed(docs_library()));
     // `apply` reloads the registry from disk, which a temp store does not have.
     app.databases = docs_databases(directory.path());
     for _ in 0..8 {
@@ -322,6 +755,21 @@ fn docs_databases(directory: &std::path::Path) -> Vec<crate::databases::Database
         current,
     })
     .collect()
+}
+
+fn browsed(library: crate::library::Library) -> Outcome {
+    browsed_keys(library, Vec::new())
+}
+
+fn browsed_keys(
+    library: crate::library::Library,
+    keys: Vec<crate::vault::KeyEntrySummary>,
+) -> Outcome {
+    Outcome::Library {
+        library,
+        keys,
+        saved: None,
+    }
 }
 
 fn docs_library() -> crate::library::Library {
@@ -409,6 +857,42 @@ fn crowded_library() -> crate::library::Library {
                 kind: "login".into(),
             },
         ],
+    }
+}
+
+fn ssh_summary() -> crate::vault::KeyEntrySummary {
+    crate::vault::KeyEntrySummary {
+        entry_id: "aws".into(),
+        logical_id: "password:22222222-2222-4222-8222-222222222222".into(),
+        collection_id: "dev".into(),
+        title: "AWS 控制台".into(),
+        login_type: crate::keys::payload::LOGIN_TYPE_SSH.into(),
+        algorithm: "ED25519".into(),
+        key_size: Some(256),
+        fingerprint: "SHA256:sshmockfingerprint".into(),
+        comment: "joey@work".into(),
+        public_key: "ssh-ed25519 AAAAMOCKPUBLIC joey@work".into(),
+        notes: String::new(),
+        has_secret: true,
+        chunk_count: 0,
+    }
+}
+
+fn gpg_summary() -> crate::vault::KeyEntrySummary {
+    crate::vault::KeyEntrySummary {
+        entry_id: "netflix".into(),
+        logical_id: "password:33333333-3333-4333-8333-333333333333".into(),
+        collection_id: "life".into(),
+        title: "Netflix".into(),
+        login_type: crate::keys::payload::LOGIN_TYPE_GPG.into(),
+        algorithm: "RSA".into(),
+        key_size: Some(3072),
+        fingerprint: "0123456789abcdef0123456789abcdef01234567".into(),
+        comment: "Joyin Joester <joyin@example.com>".into(),
+        public_key: String::new(),
+        notes: String::new(),
+        has_secret: false,
+        chunk_count: 2,
     }
 }
 
@@ -676,7 +1160,24 @@ fn tui_both_languages_cover_all_pages_forms_and_responsive_borders() {
             Kind::Unlock,
             Kind::Sync,
             Kind::Revoke,
+            Kind::AddSsh { generate: true },
+            Kind::AddSsh { generate: false },
+            Kind::AddGpg,
+            Kind::EditKey {
+                entry_id: "aws".to_owned(),
+                login_type: crate::keys::payload::LOGIN_TYPE_SSH.to_owned(),
+                title: "AWS 控制台".to_owned(),
+                comment: "joey@work".to_owned(),
+                notes: String::new(),
+            },
         ] {
+            let capture = match &kind {
+                Kind::AddSsh { generate: true } => Some("form-ssh-generate"),
+                Kind::AddSsh { generate: false } => Some("form-ssh-import"),
+                Kind::AddGpg => Some("form-gpg-import"),
+                Kind::EditKey { .. } => Some("form-key-edit"),
+                _ => None,
+            };
             app.show_form(kind);
             let Mode::Form(form) = &app.mode else {
                 unreachable!()
@@ -696,6 +1197,12 @@ fn tui_both_languages_cover_all_pages_forms_and_responsive_borders() {
                 }
             }
             assert_modal_survives_resize(&mut app);
+            if let Some(name) = capture {
+                capture_buffer(
+                    &format!("{name}-{}", language.choice().code()),
+                    &draw(&mut app, 120, 30),
+                );
+            }
         }
         app.show_form(Kind::Login);
         capture_buffer(
@@ -759,6 +1266,14 @@ async fn tui_filtered_records_bind_edit_grant_and_revoke_to_visible_names() {
             .collect::<Vec<_>>(),
         ["docs-read", "work-read"]
     );
+    // The exact-name row is gone and the cursor moves to the next best match, which
+    // a subsequence search keeps listed.
+    assert_eq!(app.selected_index(Page::Grants), Some(1));
+    assert_eq!(
+        app.selected_grant().map(|grant| grant.name.as_str()),
+        Some("work-read")
+    );
+    filter(&mut app, "qqzzxx");
     assert!(app.selected_grant().is_none());
     for command in ['x', 'm', 'p'] {
         app.key(key(KeyCode::Char(command)));
@@ -959,7 +1474,7 @@ fn the_home_tree_routes_to_the_grant_list_without_unlocking() {
         assert!(!app.home);
 
         app.key(key(KeyCode::F(3)));
-        app.apply(Outcome::Library(crowded_library()));
+        app.apply(browsed(crowded_library()));
         let tree: Vec<String> = app
             .home_rows()
             .iter()
@@ -1207,6 +1722,7 @@ fn tui_manager_previews_are_private_responsive_and_fully_scrollable() {
             grant.connection_fingerprint.clone(),
         ]
     }));
+    private.extend(KEY_MATERIAL.iter().map(|value| (*value).to_owned()));
     app.webdav = Some(
         WebDavClient::new(
             WebDavProfile::new("https://dav.example.test/monica/", "monica-demo").unwrap(),

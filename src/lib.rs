@@ -1,9 +1,11 @@
 pub mod admin;
+pub mod clipboard;
 pub mod config;
 pub mod databases;
 pub mod error;
 pub mod gateway;
 pub mod i18n;
+pub mod keys;
 pub mod model;
 pub mod protocol;
 pub mod service_api;

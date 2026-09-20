@@ -77,6 +77,35 @@ pub(super) enum Action {
         options: GrantOptions,
         password: Zeroizing<String>,
     },
+    GenerateSsh {
+        category: Option<String>,
+        title: String,
+        algorithm: String,
+        comment: String,
+        note: String,
+        password: Zeroizing<String>,
+    },
+    ImportSsh {
+        category: Option<String>,
+        title: String,
+        note: String,
+        material: Zeroizing<String>,
+        password: Zeroizing<String>,
+    },
+    ImportGpg {
+        category: Option<String>,
+        title: String,
+        note: String,
+        material: Zeroizing<String>,
+        password: Zeroizing<String>,
+    },
+    EditKey {
+        entry_id: String,
+        title: String,
+        comment: Option<String>,
+        note: String,
+        password: Zeroizing<String>,
+    },
     Revoke(String),
     Unlock(Zeroizing<String>),
     Lock,
@@ -114,6 +143,10 @@ impl Action {
                 | Self::OpenLocal { .. }
                 | Self::Connect { .. }
                 | Self::Grant { .. }
+                | Self::GenerateSsh { .. }
+                | Self::ImportSsh { .. }
+                | Self::ImportGpg { .. }
+                | Self::EditKey { .. }
                 | Self::Unlock(_)
                 | Self::Lock
                 | Self::OpenRemote { .. }
@@ -137,6 +170,10 @@ impl Action {
             Self::OpenLocal { .. } | Self::OpenRemote { .. } => Message::PendingOpen,
             Self::Connect { .. } => Message::PendingConnect,
             Self::Grant { .. } => Message::PendingGrant,
+            Self::GenerateSsh { .. }
+            | Self::ImportSsh { .. }
+            | Self::ImportGpg { .. }
+            | Self::EditKey { .. } => Message::PendingKey,
             Self::Revoke(_) => Message::PendingRevoke,
             Self::Unlock(_) => Message::PendingUnlock,
             Self::Lock => Message::PendingLock,
@@ -150,7 +187,14 @@ impl Action {
 }
 
 pub(super) enum Outcome {
-    Library(crate::library::Library),
+    Library {
+        library: crate::library::Library,
+        /// Key entries read in the same unlock, so a tree row can be marked as a key.
+        keys: Vec<crate::vault::KeyEntrySummary>,
+        /// A key form just wrote this entry: the summary and whether it was created. Boxed
+        /// so the arm stays the size of the tree it refreshes.
+        saved: Option<Box<(crate::vault::KeyEntrySummary, bool)>>,
+    },
     Added {
         name: String,
         path: PathBuf,
@@ -191,86 +235,68 @@ pub(super) async fn perform(
         admin::lock_broker(&store).await?;
     }
     match action {
-        Action::SwitchDatabase { id, password } => {
-            let library = tokio::task::spawn_blocking(move || {
-                crate::databases::switch(&store, &id, &password)?;
-                crate::library::read(&store, &password)
-            })
-            .await
-            .map_err(|_| GatewayError::StateUnavailable)??;
-            Ok(Outcome::Library(library))
-        }
+        Action::SwitchDatabase { id, password } => Ok(tokio::task::spawn_blocking(move || {
+            crate::databases::switch(&store, &id, &password)?;
+            browse(&store, &password)
+        })
+        .await
+        .map_err(|_| GatewayError::StateUnavailable)??),
         Action::Token {
             name,
             password,
             token,
-        } => {
-            let library = tokio::task::spawn_blocking(move || {
-                admin::update_token(&store, &name, &password, token)?;
-                crate::library::read(&store, &password)
-            })
-            .await
-            .map_err(|_| GatewayError::StateUnavailable)??;
-            Ok(Outcome::Library(library))
-        }
+        } => Ok(tokio::task::spawn_blocking(move || {
+            admin::update_token(&store, &name, &password, token)?;
+            browse(&store, &password)
+        })
+        .await
+        .map_err(|_| GatewayError::StateUnavailable)??),
         Action::RenameCategory {
             id,
             title,
             password,
-        } => {
-            let library = tokio::task::spawn_blocking(move || {
-                crate::library::rename_category(&store, &password, &id, &title)?;
-                crate::library::read(&store, &password)
-            })
-            .await
-            .map_err(|_| GatewayError::StateUnavailable)??;
-            Ok(Outcome::Library(library))
-        }
+        } => Ok(tokio::task::spawn_blocking(move || {
+            crate::library::rename_category(&store, &password, &id, &title)?;
+            browse(&store, &password)
+        })
+        .await
+        .map_err(|_| GatewayError::StateUnavailable)??),
         Action::RenameEntry {
             name,
             title,
             password,
-        } => {
-            let library = tokio::task::spawn_blocking(move || {
-                admin::rename_entry(&store, &name, &title, &password)?;
-                crate::library::read(&store, &password)
-            })
-            .await
-            .map_err(|_| GatewayError::StateUnavailable)??;
-            Ok(Outcome::Library(library))
-        }
+        } => Ok(tokio::task::spawn_blocking(move || {
+            admin::rename_entry(&store, &name, &title, &password)?;
+            browse(&store, &password)
+        })
+        .await
+        .map_err(|_| GatewayError::StateUnavailable)??),
         Action::Category {
             title,
             parent,
             password,
-        } => {
-            let library = tokio::task::spawn_blocking(move || {
-                crate::library::create_category(&store, &password, &title, parent.as_deref())?;
-                crate::library::read(&store, &password)
-            })
-            .await
-            .map_err(|_| GatewayError::StateUnavailable)??;
-            Ok(Outcome::Library(library))
-        }
+        } => Ok(tokio::task::spawn_blocking(move || {
+            crate::library::create_category(&store, &password, &title, parent.as_deref())?;
+            browse(&store, &password)
+        })
+        .await
+        .map_err(|_| GatewayError::StateUnavailable)??),
         Action::Move {
             id,
             target,
             password,
-        } => {
-            let library = tokio::task::spawn_blocking(move || {
-                crate::library::move_item(&store, &password, &id, &target)?;
-                crate::library::read(&store, &password)
-            })
-            .await
-            .map_err(|_| GatewayError::StateUnavailable)??;
-            Ok(Outcome::Library(library))
-        }
+        } => Ok(tokio::task::spawn_blocking(move || {
+            crate::library::move_item(&store, &password, &id, &target)?;
+            browse(&store, &password)
+        })
+        .await
+        .map_err(|_| GatewayError::StateUnavailable)??),
         Action::Library(password) => {
-            let library =
-                tokio::task::spawn_blocking(move || crate::library::read(&store, &password))
+            Ok(
+                tokio::task::spawn_blocking(move || browse(&store, &password))
                     .await
-                    .map_err(|_| GatewayError::StateUnavailable)??;
-            Ok(Outcome::Library(library))
+                    .map_err(|_| GatewayError::StateUnavailable)??,
+            )
         }
         Action::Add {
             options,
@@ -338,7 +364,7 @@ pub(super) async fn perform(
             token,
             password,
         } => {
-            let library = tokio::task::spawn_blocking(move || {
+            let (library, keys) = tokio::task::spawn_blocking(move || {
                 admin::add_connection_in_category(
                     &store,
                     admin::NewConnection {
@@ -352,11 +378,93 @@ pub(super) async fn perform(
                     &password,
                     token,
                 )?;
-                crate::library::read(&store, &password)
+                crate::library::read_with_keys(&store, &password)
             })
             .await
             .map_err(|_| GatewayError::StateUnavailable)??;
-            Ok(Outcome::Library(library))
+            Ok(Outcome::Library {
+                library,
+                keys,
+                saved: None,
+            })
+        }
+        Action::GenerateSsh {
+            category,
+            title,
+            algorithm,
+            comment,
+            note,
+            password,
+        } => {
+            keyed(store, password, true, move |store, password| {
+                crate::keys::manage::generate_ssh(
+                    store,
+                    password,
+                    &title,
+                    &note,
+                    category.as_deref(),
+                    &algorithm,
+                    &comment,
+                )
+            })
+            .await
+        }
+        Action::ImportSsh {
+            category,
+            title,
+            note,
+            material,
+            password,
+        } => {
+            keyed(store, password, true, move |store, password| {
+                crate::keys::manage::import_ssh_text(
+                    store,
+                    password,
+                    &title,
+                    &note,
+                    category.as_deref(),
+                    &material,
+                )
+            })
+            .await
+        }
+        Action::ImportGpg {
+            category,
+            title,
+            note,
+            material,
+            password,
+        } => {
+            keyed(store, password, true, move |store, password| {
+                crate::keys::manage::import_gpg_text(
+                    store,
+                    password,
+                    &title,
+                    &note,
+                    category.as_deref(),
+                    &material,
+                )
+            })
+            .await
+        }
+        Action::EditKey {
+            entry_id,
+            title,
+            comment,
+            note,
+            password,
+        } => {
+            keyed(store, password, false, move |store, password| {
+                crate::keys::manage::edit_entry(
+                    store,
+                    password,
+                    &entry_id,
+                    Some(&title),
+                    Some(&note),
+                    comment.as_deref(),
+                )
+            })
+            .await
         }
         Action::Grant { options, password } => {
             let name = options.name.clone();
@@ -424,4 +532,40 @@ pub(super) async fn perform(
 
 fn opened(count: usize) -> Outcome {
     Outcome::Opened(count)
+}
+
+/// The tree and its key rows always travel together: `login_type` lives inside the encrypted
+/// payload, so a plain summary cannot say whether a `login` row is a key.
+fn browse(store: &ConfigStore, password: &str) -> Result<Outcome> {
+    let (library, keys) = crate::library::read_with_keys(store, password)?;
+    Ok(Outcome::Library {
+        library,
+        keys,
+        saved: None,
+    })
+}
+
+/// One key write followed by the same read the browser needs, in a single blocking job so the
+/// row the person just created is already there when the form closes.
+async fn keyed<F>(
+    store: ConfigStore,
+    password: Zeroizing<String>,
+    created: bool,
+    act: F,
+) -> Result<Outcome>
+where
+    F: FnOnce(&ConfigStore, &str) -> Result<crate::vault::KeyEntrySummary> + Send + 'static,
+{
+    let (summary, library, keys) = tokio::task::spawn_blocking(move || {
+        let summary = act(&store, &password)?;
+        let (library, keys) = crate::library::read_with_keys(&store, &password)?;
+        Ok::<_, GatewayError>((summary, library, keys))
+    })
+    .await
+    .map_err(|_| GatewayError::StateUnavailable)??;
+    Ok(Outcome::Library {
+        library,
+        keys,
+        saved: Some(Box::new((summary, created))),
+    })
 }

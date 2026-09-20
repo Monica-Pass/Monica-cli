@@ -10,6 +10,7 @@ use crate::config::DEFAULT_PORT;
 use crate::error::{GatewayError, Result};
 use crate::model::{
     Operation, Provider, validate_api_base, validate_name, validate_note, validate_repository,
+    validate_title,
 };
 use crate::tr;
 use crate::webdav::{WebDavProfile, normalize_path};
@@ -18,12 +19,14 @@ pub(super) struct Input {
     pub value: Zeroizing<String>,
     pub cursor: usize,
     pub limit: usize,
+    /// Key material is pasted as armor or PEM, where the line breaks belong to the value.
+    pub multiline: bool,
 }
 
 impl Input {
     pub fn new(value: &str, limit: usize) -> Self {
         let mut text = String::with_capacity(limit);
-        text.extend(value.chars().filter(|ch| !ch.is_control()));
+        text.extend(value.chars().filter(|ch| *ch != '\n' && !ch.is_control()));
         while text.len() > limit {
             text.pop();
         }
@@ -31,16 +34,30 @@ impl Input {
             cursor: text.len(),
             value: Zeroizing::new(text),
             limit,
+            multiline: false,
         }
     }
 
     pub fn insert(&mut self, text: &str) {
-        for ch in text.chars().filter(|ch| !ch.is_control()) {
+        let multiline = self.multiline;
+        for ch in text
+            .chars()
+            .filter(|ch| (multiline && *ch == '\n') || !ch.is_control())
+        {
             if self.value.len() + ch.len_utf8() > self.limit {
                 break;
             }
             self.value.insert(self.cursor, ch);
             self.cursor += ch.len_utf8();
+        }
+    }
+
+    /// How many lines landed, so a masked field can still prove the paste was not truncated.
+    pub fn lines(&self) -> usize {
+        if self.multiline {
+            self.value.lines().count()
+        } else {
+            0
         }
     }
 
@@ -51,6 +68,7 @@ impl Input {
                 self.value.zeroize();
                 self.cursor = 0;
             }
+            KeyCode::Enter if self.multiline => self.insert("\n"),
             KeyCode::Char(ch)
                 if !key
                     .modifiers
@@ -111,6 +129,17 @@ impl Field {
             input: Input::new("", 4096),
         }
     }
+    /// Pasted armor or PEM: masked like a password, but it keeps the line breaks it arrives with.
+    fn key_text(label: &'static str, hint: &'static str) -> Self {
+        let mut input = Input::new("", crate::keys::limits::MAX_KEY_INPUT_BYTES);
+        input.multiline = true;
+        Self {
+            label,
+            hint,
+            secret: true,
+            input,
+        }
+    }
     pub fn display(&self) -> String {
         if self.secret {
             "*".repeat(self.input.value.chars().count())
@@ -122,14 +151,25 @@ impl Field {
 
 #[derive(Clone)]
 pub(super) enum Kind {
-    SwitchDatabase { id: String, name: String },
+    SwitchDatabase {
+        id: String,
+        name: String,
+    },
     Token(String),
-    RenameCategory { id: String, title: String },
-    RenameEntry { name: String, title: String },
+    RenameCategory {
+        id: String,
+        title: String,
+    },
+    RenameEntry {
+        name: String,
+        title: String,
+    },
     Category(Option<String>),
     Move(String),
     Library,
-    Add { new_vault: bool },
+    Add {
+        new_vault: bool,
+    },
     Note,
     Init,
     OpenLocal,
@@ -141,6 +181,17 @@ pub(super) enum Kind {
     Unlock,
     Sync,
     Revoke,
+    AddSsh {
+        generate: bool,
+    },
+    AddGpg,
+    EditKey {
+        entry_id: String,
+        login_type: String,
+        title: String,
+        comment: String,
+        notes: String,
+    },
 }
 
 pub(super) enum FormEvent {
@@ -513,9 +564,84 @@ impl Form {
                     tr!(lang, RevokeHint),
                 )],
             ),
+            Kind::AddSsh { generate } => {
+                let mut fields = vec![Field::text(
+                    tr!(lang, KeyNameLabel),
+                    "",
+                    tr!(lang, KeyNameHint),
+                )];
+                let (notice, title) = if *generate {
+                    fields.extend([
+                        Field::text(
+                            tr!(lang, KeyAlgorithmLabel),
+                            "ed25519",
+                            tr!(lang, KeyAlgorithmHint),
+                        ),
+                        Field::text(tr!(lang, KeyCommentLabel), "", tr!(lang, KeyCommentHint)),
+                    ]);
+                    (
+                        tr!(lang, KeyGenerateNotice).to_owned(),
+                        tr!(lang, AddSshTitle),
+                    )
+                } else {
+                    fields.push(Field::key_text(
+                        tr!(lang, KeyPrivateLabel),
+                        tr!(lang, KeyPrivateHint),
+                    ));
+                    (
+                        tr!(lang, KeyImportNotice).to_owned(),
+                        tr!(lang, ImportSshTitle),
+                    )
+                };
+                fields.extend([
+                    Field::text(tr!(lang, KeyNoteLabel), "", tr!(lang, KeyNoteHint)),
+                    Field::secret(tr!(lang, MasterPasswordLabel)),
+                ]);
+                (title, notice, fields)
+            }
+            Kind::AddGpg => (
+                tr!(lang, AddGpgTitle),
+                tr!(lang, KeyGpgNotice).to_owned(),
+                vec![
+                    Field::text(tr!(lang, KeyNameLabel), "", tr!(lang, KeyNameHint)),
+                    Field::key_text(tr!(lang, KeyArmorLabel), tr!(lang, KeyArmorHint)),
+                    Field::text(tr!(lang, KeyNoteLabel), "", tr!(lang, KeyNoteHint)),
+                    Field::secret(tr!(lang, MasterPasswordLabel)),
+                ],
+            ),
+            Kind::EditKey {
+                login_type,
+                title,
+                comment,
+                notes,
+                ..
+            } => {
+                let mut fields = vec![Field::text(
+                    tr!(lang, KeyNameLabel),
+                    title,
+                    tr!(lang, KeyNameHint),
+                )];
+                if login_type == crate::keys::payload::LOGIN_TYPE_SSH {
+                    fields.push(Field::text(
+                        tr!(lang, KeyCommentLabel),
+                        comment,
+                        tr!(lang, KeyCommentHint),
+                    ));
+                }
+                fields.extend([
+                    Field::text(tr!(lang, KeyNoteLabel), notes, tr!(lang, KeyNoteHint)),
+                    Field::secret(tr!(lang, MasterPasswordLabel)),
+                ]);
+                (
+                    tr!(lang, EditKeyTitle),
+                    tr!(lang, KeyEditNotice).to_owned(),
+                    fields,
+                )
+            }
         };
         for field in &mut fields {
-            if field.secret {
+            // A pasted armor keeps its own instructions; the hidden-input note is for passwords.
+            if field.secret && !field.input.multiline {
                 field.hint = tr!(lang, HiddenInputHint);
             }
         }
@@ -530,6 +656,9 @@ impl Form {
             | Kind::Connect
             | Kind::Grant
             | Kind::Publish
+            | Kind::AddSsh { .. }
+            | Kind::AddGpg
+            | Kind::EditKey { .. }
             | Kind::OpenLocal => Some(fields.len() - 1),
             _ => None,
         };
@@ -587,6 +716,9 @@ impl Form {
             }
             KeyCode::Esc if self.insert => self.insert = false,
             KeyCode::Esc => return FormEvent::Cancel,
+            KeyCode::Enter if self.insert && self.fields[self.selected].input.multiline => {
+                self.fields[self.selected].input.key(key);
+            }
             KeyCode::Tab | KeyCode::Down => self.selected = indices[(position + 1) % indices.len()],
             KeyCode::BackTab | KeyCode::Up => {
                 self.selected = indices[position.checked_sub(1).unwrap_or(indices.len() - 1)]
@@ -838,6 +970,58 @@ impl Form {
             Kind::Revoke => {
                 validate_name(self.text(0))?;
                 Action::Revoke(self.text(0).to_owned())
+            }
+            Kind::AddSsh { generate } => {
+                let category = if app.home { app.category.clone() } else { None };
+                validate_title(self.text(0))?;
+                if *generate {
+                    validate_note(self.text(3))?;
+                    Action::GenerateSsh {
+                        category,
+                        title: self.text(0).to_owned(),
+                        algorithm: self.text(1).to_owned(),
+                        comment: self.text(2).to_owned(),
+                        note: self.text(3).to_owned(),
+                        password: self.secret(4),
+                    }
+                } else {
+                    validate_note(self.text(2))?;
+                    Action::ImportSsh {
+                        category,
+                        title: self.text(0).to_owned(),
+                        note: self.text(2).to_owned(),
+                        material: self.secret(1),
+                        password: self.secret(3),
+                    }
+                }
+            }
+            Kind::AddGpg => {
+                validate_title(self.text(0))?;
+                validate_note(self.text(2))?;
+                Action::ImportGpg {
+                    category: if app.home { app.category.clone() } else { None },
+                    title: self.text(0).to_owned(),
+                    note: self.text(2).to_owned(),
+                    material: self.secret(1),
+                    password: self.secret(3),
+                }
+            }
+            Kind::EditKey {
+                entry_id,
+                login_type,
+                ..
+            } => {
+                let ssh = login_type == crate::keys::payload::LOGIN_TYPE_SSH;
+                validate_title(self.text(0))?;
+                let note = if ssh { 2 } else { 1 };
+                validate_note(self.text(note))?;
+                Action::EditKey {
+                    entry_id: entry_id.clone(),
+                    title: self.text(0).to_owned(),
+                    comment: ssh.then(|| self.text(1).to_owned()),
+                    note: self.text(note).to_owned(),
+                    password: self.secret(if ssh { 3 } else { 2 }),
+                }
             }
         })
     }

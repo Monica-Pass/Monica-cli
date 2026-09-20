@@ -3,6 +3,7 @@
 use zeroize::Zeroizing;
 
 use super::form::Input;
+use super::fuzzy;
 use super::{App, COMMANDS, CommandHelp, Mode, Page};
 use crate::config::{Grant, GrantState};
 use crate::i18n::{Language, Message};
@@ -83,87 +84,94 @@ impl App {
     }
 
     pub(super) fn visible_rows(&self, page: Page) -> Vec<usize> {
-        let lang = self.language;
         let query = self.filters[page.index()].to_lowercase();
         if query.trim().is_empty() {
             return (0..self.total_rows(page)).collect();
         }
-        // Explicit public fields only. Do not serialize Connection/Grant: their
-        // internal IDs and capability hashes are not browsing/search content.
-        (0..self.total_rows(page))
-            .filter(|index| {
-                let text = match page {
-                    Page::Dashboard | Page::Help => {
-                        let command = if page == Page::Dashboard {
-                            quick_command(*index)
-                        } else {
-                            COMMANDS.get(*index)
-                        };
-                        command.map_or_else(String::new, |command| {
-                            format!(
-                                "{} {} {} {}",
-                                command.command,
-                                command.key,
-                                lang.text(command.description),
-                                lang.text(command.cli)
-                            )
-                        })
-                    }
-                    Page::Connections => self
-                        .config
-                        .as_ref()
-                        .and_then(|config| config.connections.iter().nth(*index))
-                        .map_or_else(String::new, |(name, connection)| {
-                            format!(
-                                "{name} {} {} {}",
-                                connection.provider.prefix(),
-                                connection.note,
-                                connection.api_base
-                            )
-                        }),
-                    Page::Grants => self
-                        .config
-                        .as_ref()
-                        .and_then(|config| config.grants.get(*index))
-                        .map_or_else(String::new, |grant| {
-                            let state = self.grant_state(grant);
-                            format!(
-                                "{} {} {} {} {} {} {}",
-                                grant.name,
-                                grant.connection,
-                                grant
-                                    .repositories
-                                    .iter()
-                                    .cloned()
-                                    .collect::<Vec<_>>()
-                                    .join(" "),
-                                grant
-                                    .operations
-                                    .iter()
-                                    .map(|operation| operation.name().replace('_', "-"))
-                                    .collect::<Vec<_>>()
-                                    .join(" "),
-                                lang.text(grant_status(&state)),
-                                lang.text(grant_access(grant)),
-                                grant_calls(grant, &state, lang)
-                            )
-                        }),
-                    Page::WebDav => self.entries.get(*index).map_or_else(String::new, |entry| {
-                        format!(
-                            "{} {}",
-                            entry.path,
-                            if entry.is_directory {
-                                tr!(lang, SearchFolder)
-                            } else {
-                                tr!(lang, SearchFile)
-                            }
-                        )
-                    }),
-                }
-                .to_lowercase();
-                query.split_whitespace().all(|part| text.contains(part))
+        let mut rows: Vec<_> = (0..self.total_rows(page))
+            .filter_map(|index| {
+                fuzzy::score(&self.row_text(page, index).to_lowercase(), &query)
+                    .map(|score| (score, index))
             })
-            .collect()
+            .collect();
+        // Best match first. The sort is stable, so rows with the same score keep the
+        // order the page itself lays out.
+        rows.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+        rows.into_iter().map(|(_, index)| index).collect()
+    }
+
+    /// Explicit public fields only. Do not serialize Connection/Grant: their internal
+    /// IDs and capability hashes are not browsing/search content.
+    fn row_text(&self, page: Page, index: usize) -> String {
+        let lang = self.language;
+        match page {
+            Page::Dashboard | Page::Help => {
+                let command = if page == Page::Dashboard {
+                    quick_command(index)
+                } else {
+                    COMMANDS.get(index)
+                };
+                command.map_or_else(String::new, |command| {
+                    format!(
+                        "{} {} {} {}",
+                        command.command,
+                        command.key,
+                        lang.text(command.description),
+                        lang.text(command.cli)
+                    )
+                })
+            }
+            Page::Connections => self
+                .config
+                .as_ref()
+                .and_then(|config| config.connections.iter().nth(index))
+                .map_or_else(String::new, |(name, connection)| {
+                    format!(
+                        "{name} {} {} {}",
+                        connection.provider.prefix(),
+                        connection.note,
+                        connection.api_base
+                    )
+                }),
+            Page::Grants => self
+                .config
+                .as_ref()
+                .and_then(|config| config.grants.get(index))
+                .map_or_else(String::new, |grant| {
+                    let state = self.grant_state(grant);
+                    format!(
+                        "{} {} {} {} {} {} {}",
+                        grant.name,
+                        grant.connection,
+                        grant
+                            .repositories
+                            .iter()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                        grant
+                            .operations
+                            .iter()
+                            .map(|operation| operation.name().replace('_', "-"))
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                        lang.text(grant_status(&state)),
+                        lang.text(grant_access(grant)),
+                        grant_calls(grant, &state, lang)
+                    )
+                }),
+            Page::WebDav => self.entries.get(index).map_or_else(String::new, |entry| {
+                format!(
+                    "{} {}",
+                    entry.path,
+                    if entry.is_directory {
+                        tr!(lang, SearchFolder)
+                    } else {
+                        tr!(lang, SearchFile)
+                    }
+                )
+            }),
+        }
     }
 
     pub(super) fn selected_index(&self, page: Page) -> Option<usize> {

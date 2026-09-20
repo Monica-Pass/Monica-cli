@@ -9,6 +9,10 @@ use serde_json::{Value, json};
 const PASSWORD: &str = "Synthetic CLI test password 8392!";
 const TOKEN: &str = "synthetic-cli-service-token-42";
 
+/// Any private half showing up in a stream is the same class of leak as a password, and
+/// `success`/`failure` check every command's stdout and stderr for these markers.
+const KEY_MATERIAL: &[&str] = &["PRIVATE KEY", "Proc-Type: 4,ENCRYPTED"];
+
 fn command(directory: &Path, args: &[&str]) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_monica-pass"));
     command
@@ -41,6 +45,9 @@ fn no_secrets(output: &Output) {
         let text = String::from_utf8_lossy(stream);
         for secret in [PASSWORD, TOKEN] {
             assert!(!text.contains(secret), "secret in command output");
+        }
+        for marker in KEY_MATERIAL {
+            assert!(!text.contains(marker), "key material in command output");
         }
     }
 }
@@ -708,4 +715,259 @@ fn service_api_grant_requires_explicit_wide_scope_and_call_is_discoverable() {
     assert_eq!(grant.repositories, ["*".to_owned()].into());
     let command = success(cli(directory.path(), &["commands", "call", "--json"], None));
     assert_eq!(command["secret_input"]["required"], json!([]));
+}
+
+#[test]
+fn key_entries_generate_import_edit_export_and_stay_out_of_the_gateway() {
+    let directory = tempfile::tempdir().unwrap();
+    add(directory.path());
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gpg");
+    let secret_ring = fixtures.join("ed25519-secret.asc");
+    let secret_armor = std::fs::read_to_string(&secret_ring).unwrap();
+
+    let ssh = success(cli(
+        directory.path(),
+        &[
+            "keys",
+            "ssh",
+            "laptop",
+            "--generate",
+            "ed25519",
+            "--comment",
+            "cli-fixture",
+            "-n",
+            "work laptop",
+            "-j",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    ));
+    let generated = &ssh["key"];
+    assert_eq!(generated["login_type"], "SSH_KEY");
+    assert_eq!(generated["algorithm"], "ED25519");
+    assert_eq!(generated["key_size"], 256);
+    assert_eq!(generated["comment"], "cli-fixture");
+    assert_eq!(generated["notes"], "work laptop");
+    assert_eq!(generated["has_secret"], true);
+    assert_eq!(generated["chunk_count"], 0);
+    assert!(
+        generated["fingerprint"]
+            .as_str()
+            .unwrap()
+            .starts_with("SHA256:")
+    );
+    assert!(
+        generated["public_key"]
+            .as_str()
+            .unwrap()
+            .starts_with("ssh-ed25519 AAAA")
+    );
+    let logical_id = generated["logical_id"].as_str().unwrap();
+    assert!(logical_id.starts_with("password:"), "{logical_id}");
+    assert_eq!(logical_id.len(), "password:".len() + 36);
+    // Android derives the physical id with UUID.nameUUIDFromBytes, which is a v3 UUID.
+    assert_eq!(
+        generated["entry_id"].as_str().unwrap().chars().nth(14),
+        Some('3')
+    );
+
+    let gpg = success(cli(
+        directory.path(),
+        &[
+            "keys",
+            "gpg",
+            "signing",
+            "--private-key",
+            secret_ring.to_str().unwrap(),
+            "-j",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    ));
+    let imported = &gpg["key"];
+    assert_eq!(imported["login_type"], "GPG_KEY");
+    assert_eq!(imported["algorithm"], "EDDSA");
+    assert_eq!(
+        imported["fingerprint"],
+        "837A7DFF0F73A85EAE2D04E6B0B4C3983F688DA1"
+    );
+    assert_eq!(imported["comment"], "Cli Fixture <cli-fixture@example.com>");
+    assert_eq!(imported["has_secret"], true);
+    assert_eq!(imported["chunk_count"], 1);
+    assert_eq!(
+        imported["entry_id"].as_str().unwrap().chars().nth(14),
+        Some('3')
+    );
+
+    let list = success(cli(
+        directory.path(),
+        &["keys", "-j", "--secrets-stdin"],
+        Some(&password()),
+    ));
+    assert_eq!(
+        list["keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["title"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["laptop", "signing"]
+    );
+
+    let private_path = directory.path().join("id_ed25519");
+    let exported = success(cli(
+        directory.path(),
+        &[
+            "keys",
+            "export",
+            "laptop",
+            "--private",
+            "-o",
+            private_path.to_str().unwrap(),
+            "-j",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    ));
+    assert_eq!(exported["name"], "laptop");
+    assert_eq!(exported["private"], true);
+    assert_eq!(
+        exported["path"].as_str().unwrap(),
+        private_path.display().to_string()
+    );
+    let text = std::fs::read_to_string(&private_path).unwrap();
+    assert_eq!(
+        text.len() as u64,
+        exported["bytes"].as_u64().unwrap(),
+        "reported size differs from the file"
+    );
+    assert!(text.starts_with("-----BEGIN OPENSSH PRIVATE KEY-----"));
+    // ssh-keygen refuses a truncated PEM, and Android compares the text byte for byte.
+    assert!(text.ends_with('\n'));
+    failure(
+        cli(
+            directory.path(),
+            &[
+                "keys",
+                "export",
+                "laptop",
+                "--private",
+                "-o",
+                private_path.to_str().unwrap(),
+                "-j",
+                "--secrets-stdin",
+            ],
+            Some(&password()),
+        ),
+        "already_exists",
+    );
+
+    let ring_path = directory.path().join("signing.asc");
+    success(cli(
+        directory.path(),
+        &[
+            "keys",
+            "export",
+            "signing",
+            "--private",
+            "-o",
+            ring_path.to_str().unwrap(),
+            "-j",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    ));
+    assert_eq!(std::fs::read_to_string(&ring_path).unwrap(), secret_armor);
+
+    let public_path = directory.path().join("id_ed25519.pub");
+    let public = success(cli(
+        directory.path(),
+        &[
+            "keys",
+            "export",
+            "laptop",
+            "-o",
+            public_path.to_str().unwrap(),
+            "--force",
+            "-j",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    ));
+    assert_eq!(public["private"], false);
+    assert_eq!(
+        std::fs::read_to_string(&public_path).unwrap(),
+        format!("{}\n", generated["public_key"].as_str().unwrap())
+    );
+
+    let edited = success(cli(
+        directory.path(),
+        &[
+            "keys",
+            "edit",
+            "laptop",
+            "--title",
+            "work-laptop",
+            "--comment",
+            "cli-fixture-renamed",
+            "-j",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    ));
+    assert_eq!(edited["key"]["title"], "work-laptop");
+    assert_eq!(edited["key"]["comment"], "cli-fixture-renamed");
+    assert_eq!(edited["key"]["entry_id"], generated["entry_id"]);
+    assert_eq!(edited["key"]["fingerprint"], generated["fingerprint"]);
+    assert_eq!(edited["key"]["notes"], generated["notes"]);
+
+    let library = success(cli(
+        directory.path(),
+        &["library", "-j", "--secrets-stdin"],
+        Some(&password()),
+    ));
+    let rows: Vec<&Value> = library["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["kind"] == "login")
+        .collect();
+    assert_eq!(rows.len(), 2);
+    assert!(
+        rows.iter()
+            .all(|entry| entry["category"] == generated["collection_id"])
+    );
+
+    // The AI-facing credential surface only ever lists api tokens, so a key entry cannot be
+    // disclosed, bound to a grant, or decrypted through it.
+    let credentials = success(cli(directory.path(), &["list", "-j"], None));
+    let text = serde_json::to_string(&credentials).unwrap();
+    for marker in ["work-laptop", "signing", "SHA256:", "EDDSA"] {
+        assert!(!text.contains(marker), "key entry in the credential list");
+    }
+}
+
+#[test]
+fn key_administration_is_absent_from_the_ai_visible_discovery_surface() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = success(cli(directory.path(), &["cmds", "-j"], None));
+    let text = serde_json::to_string(&root).unwrap();
+    for marker in [
+        "keys",
+        "ssh",
+        "gpg",
+        "export",
+        "--generate",
+        "private_key",
+        "fingerprint",
+    ] {
+        assert!(
+            !text.contains(marker),
+            "key grammar in discovery output: {marker}"
+        );
+    }
+    failure(
+        cli(directory.path(), &["cmds", "keys", "-j"], None),
+        "invalid_request",
+    );
 }

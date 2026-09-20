@@ -3,6 +3,7 @@
 mod actions;
 mod browser;
 mod form;
+mod fuzzy;
 mod home;
 mod preview;
 mod view;
@@ -114,6 +115,24 @@ const COMMANDS: &[CommandHelp] = &[
         key: "C",
         description: Message::CommandConnectDescription,
         cli: Message::CommandConnectCli,
+    },
+    CommandHelp {
+        command: "ssh",
+        key: "S",
+        description: Message::CommandSshDescription,
+        cli: Message::CommandSshCli,
+    },
+    CommandHelp {
+        command: "sshimport",
+        key: "I",
+        description: Message::CommandSshImportDescription,
+        cli: Message::CommandSshImportCli,
+    },
+    CommandHelp {
+        command: "gpg",
+        key: "A",
+        description: Message::CommandGpgDescription,
+        cli: Message::CommandGpgCli,
     },
     CommandHelp {
         command: "grant",
@@ -248,6 +267,7 @@ struct App {
     home_offset: usize,
     home_filter: Zeroizing<String>,
     library: Option<crate::library::Library>,
+    keys: Vec<crate::vault::KeyEntrySummary>,
     library_loaded: Option<Instant>,
     category: Option<String>,
     home_selected: usize,
@@ -292,6 +312,7 @@ impl App {
             home_offset: 0,
             home_filter: Zeroizing::new(String::new()),
             library: None,
+            keys: Vec::new(),
             library_loaded: None,
             category: None,
             home_selected: 0,
@@ -390,6 +411,12 @@ impl App {
         self.message_at = Some(Instant::now());
         self.failed = false;
     }
+    /// A plain message that stays on the status line, the way an error does.
+    fn warning(&mut self, message: impl Into<String>) {
+        self.message = message.into();
+        self.message_at = Some(Instant::now());
+        self.failed = true;
+    }
     fn selected_connection(&self) -> Option<String> {
         if self.page == Page::Grants {
             if let Some(grant) = self.selected_grant() {
@@ -463,6 +490,7 @@ impl App {
                 self.home_restore = None;
             }
             self.library = None;
+            self.keys.clear();
             self.library_loaded = None;
         }
         self.pending_label = action.label();
@@ -533,6 +561,8 @@ impl App {
                 tr!(lang, HelpHomeSearch).to_owned(),
                 tr!(lang, HelpHomeNew).to_owned(),
                 tr!(lang, HelpHomeEdit).to_owned(),
+                tr!(lang, HelpHomeKeys).to_owned(),
+                tr!(lang, HelpHomeCopy).to_owned(),
             ]);
         }
         let commands: &[&str] = match self.page {
@@ -649,12 +679,20 @@ impl App {
                 }
             }
             "open" => self.show_form(Kind::OpenLocal),
-            "connect" | "note" | "grant" | "unlock" | "publish" | "sync"
+            "connect" | "note" | "grant" | "unlock" | "publish" | "sync" | "ssh" | "sshimport"
+            | "gpg"
                 if self.config.is_none() =>
             {
                 self.error(GatewayError::NotFound)
             }
+            "ssh" | "sshimport" | "gpg" if self.library.is_none() => {
+                self.info(tr!(lang, KeyNeedsOpenedDatabase));
+                self.show_form(Kind::Library);
+            }
             "connect" => self.show_form(Kind::Connect),
+            "ssh" => self.show_form(Kind::AddSsh { generate: true }),
+            "sshimport" => self.show_form(Kind::AddSsh { generate: false }),
+            "gpg" => self.show_form(Kind::AddGpg),
             "note" if !matches!(self.page, Page::Connections | Page::Grants) => {
                 self.set_page(Page::Connections);
                 self.info(tr!(lang, SelectConnectionToEdit));
@@ -1014,14 +1052,35 @@ impl App {
             Err(error) => self.error(error),
         }
         match outcome {
-            Outcome::Library(library) => {
+            Outcome::Library {
+                library,
+                keys,
+                saved,
+            } => {
                 self.library = Some(library);
+                self.keys = keys;
                 self.library_loaded = Some(Instant::now());
                 self.category = None;
                 self.home_selected = 0;
                 self.home_offset = 0;
                 self.focus = Focus::List;
                 self.preview_scroll = 0;
+                if let Some(saved) = saved {
+                    let (summary, created) = *saved;
+                    self.home_restore = Some((Some(summary.collection_id), Some(summary.entry_id)));
+                    let name = summary.title;
+                    self.info(if created {
+                        tr!(
+                            lang,
+                            CliKeyStored,
+                            name = name,
+                            fingerprint = summary.fingerprint
+                        )
+                    } else {
+                        tr!(lang, CliKeyEdited, name = name)
+                    });
+                    return;
+                }
                 if let Some((category, row)) = self.home_restore.take() {
                     self.category = category.filter(|id| {
                         self.library
@@ -1118,6 +1177,7 @@ impl App {
             .is_some_and(|time| time.elapsed() >= Duration::from_secs(300))
         {
             self.library = None;
+            self.keys.clear();
             self.library_loaded = None;
         }
         let lang = self.language;

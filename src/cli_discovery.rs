@@ -18,6 +18,7 @@ pub fn run(topic: &[String], language: Language, output: Output) -> Result<()> {
     for name in topic {
         let child = command
             .get_subcommands()
+            .filter(|child| !child.is_hide_set())
             .find(|child| {
                 child.get_name() == name || child.get_all_aliases().any(|alias| alias == name)
             })
@@ -67,7 +68,7 @@ fn describe(command: &Command, path: &[String]) -> Value {
     }).collect();
     let children: Vec<_> = command
         .get_subcommands()
-        .filter(|child| child.get_name() != "help")
+        .filter(|child| child.get_name() != "help" && !child.is_hide_set())
         .map(|child| {
             let mut path = path.to_vec();
             path.push(child.get_name().to_owned());

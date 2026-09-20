@@ -448,6 +448,55 @@ pub fn private_file(path: &Path) -> Result<()> {
 }
 
 #[cfg(windows)]
+fn owner_sid(path: &Path) -> Result<String> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertSidToStringSidW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
+    };
+    use windows_sys::Win32::Security::{OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID};
+    let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut owner: PSID = ptr::null_mut();
+    let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
+    // SAFETY: `name` is NUL terminated and outlives both calls; Windows allocates the
+    // descriptor and the SID text, which are freed exactly once on every path below.
+    unsafe {
+        let status = GetNamedSecurityInfoW(
+            name.as_ptr(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            &mut owner,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut descriptor,
+        );
+        if status != 0 || owner.is_null() {
+            LocalFree(descriptor);
+            return Err(GatewayError::StateUnavailable);
+        }
+        let mut text: *mut u16 = ptr::null_mut();
+        if ConvertSidToStringSidW(owner, &mut text) == 0 {
+            LocalFree(descriptor);
+            return Err(GatewayError::StateUnavailable);
+        }
+        let end = (0..2048).find(|i| *text.add(*i) == 0).unwrap_or(0);
+        let sid = String::from_utf16_lossy(std::slice::from_raw_parts(text, end));
+        LocalFree(text.cast());
+        LocalFree(descriptor);
+        if sid.starts_with("S-1-") {
+            Ok(sid)
+        } else {
+            Err(GatewayError::StateUnavailable)
+        }
+    }
+}
+
+/// Grants access to the owning account and SYSTEM only. The SDDL `OW` trustee is the
+/// `OWNER RIGHTS` special identity rather than the owning account, and Windows OpenSSH
+/// refuses to load a private key whose DACL names it, so the resolved owner SID is used.
+#[cfg(windows)]
 pub fn private_file(path: &Path) -> Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use std::ptr;
@@ -457,14 +506,14 @@ pub fn private_file(path: &Path) -> Result<()> {
         DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, SetFileSecurityW,
     };
     let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let owner = owner_sid(path)?;
     // Protected DACL: the owner and SYSTEM can access the file; inherited access is removed.
-    let descriptor: Vec<u16> = if path.is_dir() {
-        "D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)\0"
+    let descriptor = if path.is_dir() {
+        format!("D:P(A;OICI;FA;;;{owner})(A;OICI;FA;;;SY)")
     } else {
-        "D:P(A;;FA;;;OW)(A;;FA;;;SY)\0"
-    }
-    .encode_utf16()
-    .collect();
+        format!("D:P(A;;FA;;;{owner})(A;;FA;;;SY)")
+    };
+    let descriptor: Vec<u16> = descriptor.encode_utf16().chain(Some(0)).collect();
     let mut security = ptr::null_mut();
     // SAFETY: both strings are NUL terminated; Windows allocates the descriptor, which is
     // freed exactly once after SetFileSecurityW completes. No pointer escapes this block.

@@ -3,8 +3,10 @@
 
 use chrono::{Local, TimeZone};
 use monica_pass_cli::i18n::Language;
+use monica_pass_cli::keys::payload::LOGIN_TYPE_SSH;
 use monica_pass_cli::model::Provider;
 use monica_pass_cli::tr;
+use monica_pass_cli::vault::KeyEntrySummary;
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
@@ -262,10 +264,53 @@ pub fn render_status(status: &Value, lang: Language) -> String {
     out.trim_end().to_string()
 }
 
+/// One line per key entry. `KeyEntrySummary` is already the public projection, so no cell here
+/// can carry key material; the private column only says whether the vault holds one.
+pub fn render_keys(entries: &[KeyEntrySummary], lang: Language) -> String {
+    if entries.is_empty() {
+        return tr!(lang, ListNoKeys).to_string();
+    }
+    let headers = [
+        tr!(lang, TableColumnKey),
+        tr!(lang, TableColumnKind),
+        tr!(lang, TableColumnAlgorithm),
+        tr!(lang, TableColumnFingerprint),
+        tr!(lang, TableColumnSecret),
+    ];
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let kind = if entry.login_type == LOGIN_TYPE_SSH {
+            "SSH"
+        } else {
+            "GPG"
+        };
+        let algorithm = match entry.key_size {
+            Some(bits) => format!("{} {}", entry.algorithm, bits),
+            None => entry.algorithm.clone(),
+        };
+        rows.push(vec![
+            entry.title.clone(),
+            kind.to_string(),
+            algorithm,
+            entry.fingerprint.clone(),
+            if entry.has_secret {
+                tr!(lang, KeyValueYes).to_string()
+            } else {
+                tr!(lang, KeyValueNo).to_string()
+            },
+        ]);
+    }
+    render_table(&headers, &rows)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Value, render_connection_detail, render_connections, render_status};
+    use super::{
+        KeyEntrySummary, Value, render_connection_detail, render_connections, render_keys,
+        render_status,
+    };
     use monica_pass_cli::i18n::Language;
+    use monica_pass_cli::keys::payload::{LOGIN_TYPE_GPG, LOGIN_TYPE_SSH};
     use serde_json::json;
 
     #[test]
@@ -298,6 +343,72 @@ mod tests {
             render_connections(&json!([]), Language::En),
             "No connections yet."
         );
+    }
+
+    fn key_entry(
+        title: &str,
+        login_type: &str,
+        algorithm: &str,
+        key_size: Option<i64>,
+        fingerprint: &str,
+        has_secret: bool,
+    ) -> KeyEntrySummary {
+        KeyEntrySummary {
+            entry_id: "11111111-1111-1111-1111-111111111111".to_owned(),
+            logical_id: "password:22222222-2222-2222-2222-222222222222".to_owned(),
+            collection_id: "33333333-3333-3333-3333-333333333333".to_owned(),
+            title: title.to_owned(),
+            login_type: login_type.to_owned(),
+            algorithm: algorithm.to_owned(),
+            key_size,
+            fingerprint: fingerprint.to_owned(),
+            comment: "comment-never-shown".to_owned(),
+            public_key: "ssh-ed25519 AAAAC3NzaC1l never-shown".to_owned(),
+            notes: "notes-never-shown".to_owned(),
+            has_secret,
+            chunk_count: 3,
+        }
+    }
+
+    #[test]
+    fn keys_table_projects_only_public_metadata() {
+        let entries = vec![
+            key_entry(
+                "工作机",
+                LOGIN_TYPE_SSH,
+                "ed25519",
+                None,
+                "SHA256:aaaa",
+                true,
+            ),
+            key_entry(
+                "laptop",
+                LOGIN_TYPE_GPG,
+                "RSA",
+                Some(2048),
+                "1234ABCD5678EF90",
+                false,
+            ),
+        ];
+        let out = render_keys(&entries, Language::En);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(
+            lines[0],
+            "Key     Type  Algorithm  Fingerprint       Private"
+        );
+        assert_eq!(lines[1], "工作机  SSH   ed25519    SHA256:aaaa       yes");
+        assert_eq!(lines[2], "laptop  GPG   RSA 2048   1234ABCD5678EF90  no");
+        assert_eq!(render_keys(&[], Language::En), "No key entries yet.");
+
+        let zh = render_keys(&entries, Language::ZhCn);
+        assert!(zh.contains("有"), "{zh}");
+        assert!(zh.contains("无"), "{zh}");
+        for material in ["never-shown", "comment-never", "notes-never"] {
+            assert!(
+                !out.contains(material) && !zh.contains(material),
+                "{material}"
+            );
+        }
     }
 
     #[test]

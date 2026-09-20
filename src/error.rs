@@ -124,6 +124,20 @@ pub enum GatewayError {
         "No WebDAV vault is connected. Open a remote MDBX file or publish the local vault first."
     )]
     RemoteNotConfigured,
+    #[error(
+        "The key entry payload exceeds the supported size limit. Re-export a smaller key certificate."
+    )]
+    KeyPayloadTooLarge,
+    #[error("The entry is not a key entry of the requested kind, or it was not created as one.")]
+    KeyEntryTypeMismatch,
+    #[error(
+        "The key material could not be read. Supported: OpenSSH Ed25519 or RSA PEM, and OpenPGP v4 ASCII armor."
+    )]
+    InvalidKeyMaterial,
+    #[error(
+        "This key entry stores no private material. Import the secret ring or the private PEM first."
+    )]
+    KeySecretMissing,
 }
 
 impl GatewayError {

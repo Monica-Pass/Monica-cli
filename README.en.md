@@ -30,10 +30,11 @@ Monica CLI stores service tokens in a local, encrypted MDBX3 vault. AI requests 
 | Service access for AI | Connect MCP-compatible AI clients to GitHub and GitLab through the standard MCP stdio interface. |
 | Calls by connection name | Give connections names such as `work-github` and public purpose notes. AI can discover their granted scope and call them by name. |
 | Permission controls | Set the connection, repositories, allowed operations, expiry, per-minute limit, and total call budget. Grants are read-only by default, can be revoked, and are never permanent. |
-| Terminal manager | Browse a Yazi-style three-pane layout with Vim-style keys, filtering, detail previews, and a command browser. |
+| Terminal manager | Browse a Yazi-style three-pane layout with Vim-style keys, fuzzy search, detail previews, one-key copy of public key fields, and a command browser. |
 | CLI automation | Short aliases, explicit parameters, secure non-interactive input, and stable JSON results let AI perform local management operations. |
 | Interface languages | Simplified Chinese and English across the TUI, forms, CLI help and human-facing messages, with automatic selection and saved preferences. |
 | WebDAV vaults | Sign in to WebDAV, browse remote MDBX files, open local copies, and manually sync encrypted vaults. |
+| SSH / GPG key entries | Keep SSH private keys and OpenPGP certificates in the same encrypted vault, stored in exactly the format Monica for Android uses. Generate Ed25519 and RSA, import PEM and armor, and export to a file explicitly. The AI never sees these entries. |
 
 **GitHub / GitLab service API proxying is available alongside repository-scoped Issue tools.** Explicit service-wide grants support branches, commits, MR/PRs, comments, pipelines and other API endpoints without adding new Monica tools. See [service API usage](docs/service-api.md). Both hosted services and manually configured HTTPS API endpoints for self-hosted installations are supported.
 
@@ -64,14 +65,18 @@ While the database is locked, the middle pane lists selectable action rows (open
 | Move / first and last / page | `j`/`k` / `g`/`G` / `PgUp`/`PgDn` |
 | Open category / parent | `Enter` / `h`, `Backspace` or `Left` |
 | Cycle the database, list and detail panes | `Tab` / `Shift+Tab` |
-| Search categories and entries across the database | `/` |
+| Search categories and entries across the database (subsequence match) | `/` |
 | New category / service Token | `n` / `c` |
+| New SSH key / import a private key / import OpenPGP | `S` / `I` / `A` |
+| Copy the public line or user id / copy the fingerprint (key rows) | `y` / `Y` |
 | Rename category / replace Token | `e` |
 | Move to another category | `m` |
 | Open an MDBX file | `o` |
 | Help / last message / commands (e.g. `:lock`) | `?` / `!` / `:` |
 | Home / settings | `F3` or `,` |
 | Language / quit | `F2` / `q` |
+
+`/` matches a subsequence and ranks by relevance: `sk` finds `ssh-key`, spaces still narrow term by term, and the closest hit stays at the top. `y` and `Y` write only a key entry's public fields to the clipboard (the public key line, the user id, the fingerprint); Tokens and private key material have no path to the clipboard, and the command line never writes it either.
 
 In edit forms, `Tab` moves between fields and `Ctrl+S` opens a separate database-password step. `Esc` in that step returns to the draft and clears the password. Each management operation unlocks the database only while it runs; summary metadata is cached for at most five minutes. This is separate from the AI broker's five-minute unlock session.
 
@@ -270,6 +275,7 @@ MDBX3 is the runtime version; native vaults currently carry the `MDBX-2` format 
 - **AI receives specific permissions.** Each grant limits the connection, exact repositories, operations, lifetime, and request rate. Grants are read-only by default; writes require explicit permission. Press `x` on the grants page or use `revoke` to revoke a grant.
 - **Public metadata is separate from secrets.** Authorized AI clients can see connection names and purpose notes; do not put passwords or tokens in notes. Client grant files do not contain service tokens, but they still confer access and must be protected.
 - **MCP exposes the supported service operations.** There are no tools for reading credentials, requesting arbitrary URLs, supplying arbitrary authorization headers, or executing shell commands. Service requests use HTTPS and do not follow redirects.
+- **Key entries are human-only.** SSH / GPG keys live in the same encrypted vault as Tokens, in the format Monica for Android uses, so both ends read the same entry after a sync. Create, import, edit and export them with the `monica keys` commands or the TUI's `S` / `I` / `A`; this command family is absent from the AI-visible discovery surface and key entries never reach the catalog or MCP tools. The only way key text leaves the vault is `monica keys export`, run explicitly by a person: public material by default, private material needs `--private`, and an existing file is never overwritten.
 - **You control when the gateway is available.** Use `u` / `serve` to unlock and `L` / `lock` to lock. Exiting the terminal that unlocked the gateway stops its gateway process. Remote actions already sent cannot be undone.
 
 This isolation applies to the MCP and gateway interfaces. A program running as the same OS user with arbitrary file modification or process debugging access is outside this boundary. Use separate OS accounts or a sandbox when stronger isolation is required. See [SECURITY.md](SECURITY.md) for details (in Chinese).

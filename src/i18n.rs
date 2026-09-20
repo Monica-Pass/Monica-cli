@@ -241,6 +241,10 @@ impl Language {
             GatewayError::ExternalBlobsUnsupported => Message::ErrorExternalBlobsUnsupported,
             GatewayError::VaultConnectionsInvalid => Message::ErrorVaultConnectionsInvalid,
             GatewayError::RemoteNotConfigured => Message::ErrorRemoteNotConfigured,
+            GatewayError::KeyPayloadTooLarge => Message::ErrorKeyPayloadTooLarge,
+            GatewayError::KeyEntryTypeMismatch => Message::ErrorKeyEntryTypeMismatch,
+            GatewayError::InvalidKeyMaterial => Message::ErrorInvalidKeyMaterial,
+            GatewayError::KeySecretMissing => Message::ErrorKeySecretMissing,
         })
     }
 

@@ -35,6 +35,8 @@ pub(super) enum Icon {
     Command,
     Cloud,
     Unlock,
+    Key,
+    Gpg,
 }
 
 impl Icon {
@@ -50,6 +52,8 @@ impl Icon {
             (Self::Command, true) => "\u{f120}",
             (Self::Cloud, true) => "\u{f0c2}",
             (Self::Unlock, true) => "\u{f09c}",
+            (Self::Key, true) => "\u{f084}",
+            (Self::Gpg, true) => "\u{f132}",
             (Self::Folder, false) => "+",
             (Self::OpenFolder, false) => "-",
             (Self::Github, false) => "G",
@@ -60,6 +64,8 @@ impl Icon {
             (Self::Command, false) => ":",
             (Self::Cloud, false) => "~",
             (Self::Unlock, false) => "o",
+            (Self::Key, false) => "s",
+            (Self::Gpg, false) => "g",
         }
     }
 }
@@ -933,14 +939,23 @@ fn render_form(
             ..split[1]
         };
         let active = index == form.selected;
+        let lines = field.input.lines();
         let label = format!(
             "{} {}{}",
             if active { "›" } else { " " },
             field.label,
             if field.secret {
-                tr!(lang, HiddenSuffix)
+                format!(
+                    "{}{}",
+                    tr!(lang, HiddenSuffix),
+                    if lines > 1 {
+                        tr!(lang, KeyLineSuffix, count = lines)
+                    } else {
+                        String::new()
+                    }
+                )
             } else {
-                ""
+                String::new()
             }
         );
         frame.render_widget(

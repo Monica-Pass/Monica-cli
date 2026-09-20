@@ -11,7 +11,7 @@ use monica_pass_cli::webdav::{WebDavClient, WebDavProfile};
 use serde_json::json;
 use zeroize::Zeroizing;
 
-use crate::cli::{Cli, Command, WebDavCommand};
+use crate::cli::{Cli, Command, KeysCommand, WebDavCommand};
 use crate::cli_input::{SecretField, SecretInput, required_fields};
 use crate::cli_output::Output;
 use crate::cli_table;
@@ -122,6 +122,9 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             monica_pass_cli::library::move_item(&store, &password, &id, &target)?;
             let data = json!({"id":id,"target":target});
             output.result("move", data.clone(), Some(&data))?;
+        }
+        Command::Keys { command } => {
+            return keys_command(store, command, lang, &mut input, output).await;
         }
         Command::Tui => return monica_pass_cli::tui::run(store, lang).await,
         Command::Language { language } => {
@@ -490,6 +493,150 @@ async fn webdav_command(
             }
         }
         WebDavCommand::Status => unreachable!("status does not need a login"),
+    }
+    Ok(())
+}
+
+/// SSH and GPG entries are managed locally: the vault is unlocked, the work is done through
+/// `keys::manage`, and only public projections or export bookkeeping reach the response.
+async fn keys_command(
+    store: ConfigStore,
+    command: Option<KeysCommand>,
+    lang: Language,
+    input: &mut SecretInput,
+    output: Output,
+) -> Result<()> {
+    use monica_pass_cli::keys::manage;
+    let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+    admin::lock_broker(&store).await?;
+    let Some(command) = command else {
+        let entries = manage::list(&store, &password)?;
+        let human = (!output.json).then(|| cli_table::render_keys(&entries, lang));
+        return output.result_text("keys", json!({"keys": entries}), human);
+    };
+    match command {
+        KeysCommand::Ssh {
+            key_name,
+            generate,
+            private_key,
+            comment,
+            category,
+            purpose,
+        } => {
+            let saved = match (generate, private_key) {
+                (Some(algorithm), None) => manage::generate_ssh(
+                    &store,
+                    &password,
+                    &key_name,
+                    &purpose,
+                    category.as_deref(),
+                    &algorithm,
+                    comment.as_deref().unwrap_or_default(),
+                )?,
+                (None, Some(path)) => manage::import_ssh(
+                    &store,
+                    &password,
+                    &key_name,
+                    &purpose,
+                    category.as_deref(),
+                    &absolute(&path)?,
+                )?,
+                _ => unreachable!("the material group accepts exactly one source"),
+            };
+            output.result("keys ssh", json!({"key": &saved}), None)?;
+            output.note(tr!(
+                lang,
+                CliKeyStored,
+                name = saved.title,
+                fingerprint = saved.fingerprint
+            ));
+        }
+        KeysCommand::Gpg {
+            key_name,
+            public_key,
+            private_key,
+            category,
+            purpose,
+        } => {
+            let public = public_key.as_ref().map(|path| absolute(path)).transpose()?;
+            let secret = private_key
+                .as_ref()
+                .map(|path| absolute(path))
+                .transpose()?;
+            let saved = manage::import_gpg(
+                &store,
+                &password,
+                &key_name,
+                &purpose,
+                category.as_deref(),
+                public.as_deref(),
+                secret.as_deref(),
+            )?;
+            output.result("keys gpg", json!({"key": &saved}), None)?;
+            output.note(tr!(
+                lang,
+                CliKeyStored,
+                name = saved.title,
+                fingerprint = saved.fingerprint
+            ));
+        }
+        KeysCommand::Edit {
+            entry,
+            new_title,
+            purpose,
+            comment,
+        } => {
+            let saved = manage::edit(
+                &store,
+                &password,
+                &entry,
+                new_title.as_deref(),
+                purpose.as_deref(),
+                comment.as_deref(),
+            )?;
+            output.result("keys edit", json!({"key": saved}), None)?;
+            output.note(tr!(lang, CliKeyEdited, name = saved.title));
+        }
+        KeysCommand::Export {
+            entry,
+            output: destination,
+            private,
+            force,
+        } => {
+            let exported = manage::export(
+                &store,
+                &password,
+                &entry,
+                &absolute(&destination)?,
+                private,
+                force,
+            )?;
+            output.result(
+                "keys export",
+                json!({
+                    "name": exported.summary.title,
+                    "path": exported.path,
+                    "bytes": exported.bytes,
+                    "private": exported.private,
+                }),
+                None,
+            )?;
+            output.note(if exported.private {
+                tr!(
+                    lang,
+                    CliKeyExportedPrivate,
+                    bytes = exported.bytes,
+                    path = exported.path.display()
+                )
+            } else {
+                tr!(
+                    lang,
+                    CliKeyExportedPublic,
+                    bytes = exported.bytes,
+                    path = exported.path.display()
+                )
+            });
+        }
     }
     Ok(())
 }

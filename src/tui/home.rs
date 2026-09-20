@@ -11,16 +11,20 @@ use zeroize::Zeroizing;
 
 use super::browser::{Filter, Focus};
 use super::form::{Input, Kind};
+use super::fuzzy;
 use super::preview::{field, heading, label, scope_title};
 use super::view::{
-    ACCENT, BG, DIM, ERROR, FG, GREEN, Icon, LIGHT, Record, WARNING, broker_status, capsule_edge,
-    chrome, clean, clipped, draw_record, path_line, position, rails, render_input, wrapped_lines,
+    ACCENT, BG, CYAN, DIM, ERROR, FG, GREEN, Icon, LIGHT, Record, WARNING, broker_status,
+    capsule_edge, chrome, clean, clipped, draw_record, path_line, position, rails, render_input,
+    wrapped_lines,
 };
 use super::{App, KeyCode, KeyEvent, Mode, Page};
 use crate::i18n::{Language, Message};
+use crate::keys::payload::LOGIN_TYPE_SSH;
 use crate::library::Library;
 use crate::model::Provider;
 use crate::tr;
+use crate::vault::KeyEntrySummary;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum HomeAction {
@@ -212,10 +216,7 @@ impl App {
     }
 
     fn home_matches(&self, library: &Library, query: &str) -> Vec<HomeRow> {
-        let hits = |haystack: String| {
-            let haystack = haystack.to_lowercase();
-            query.split_whitespace().all(|part| haystack.contains(part))
-        };
+        let hits = |haystack: String| fuzzy::score(&haystack, query);
         let owned = |id: &str| {
             library
                 .categories
@@ -223,48 +224,67 @@ impl App {
                 .find(|c| c.id == id)
                 .map_or_else(String::new, |c| path_of(library, &c.id))
         };
-        let mut rows: Vec<_> = library
+        let mut scored: Vec<_> = library
             .categories
             .iter()
-            .filter(|c| hits(format!("{} {}", owned(&c.id), c.title)))
-            .map(|c| HomeRow::Category {
-                id: c.id.clone(),
-                title: c.title.clone(),
-                path: owned(&c.id),
-                depth: 0,
-                entries: library
-                    .entries
-                    .iter()
-                    .filter(|e| e.category == c.id)
-                    .count(),
-                subs: library
-                    .categories
-                    .iter()
-                    .filter(|sub| sub.parent.as_deref() == Some(c.id.as_str()))
-                    .count(),
+            .filter_map(|c| {
+                let score = hits(format!("{} {}", owned(&c.id), c.title))?;
+                Some((
+                    score,
+                    HomeRow::Category {
+                        id: c.id.clone(),
+                        title: c.title.clone(),
+                        path: owned(&c.id),
+                        depth: 0,
+                        entries: library
+                            .entries
+                            .iter()
+                            .filter(|e| e.category == c.id)
+                            .count(),
+                        subs: library
+                            .categories
+                            .iter()
+                            .filter(|sub| sub.parent.as_deref() == Some(c.id.as_str()))
+                            .count(),
+                    },
+                ))
             })
             .collect();
-        rows.extend(
-            library
-                .entries
-                .iter()
-                .filter(|e| {
-                    let path = owned(&e.category);
-                    hits(format!("{path} {} {}", e.title, e.kind))
-                })
-                .map(|e| HomeRow::Entry {
+        scored.extend(library.entries.iter().filter_map(|e| {
+            let path = owned(&e.category);
+            let score = match self.keys.iter().find(|key| key.entry_id == e.id) {
+                Some(key) => hits(format!(
+                    "{path} {} {} {} {}",
+                    e.title,
+                    if key.login_type == LOGIN_TYPE_SSH {
+                        "ssh"
+                    } else {
+                        "gpg"
+                    },
+                    key_label(key, self.language),
+                    key.fingerprint
+                ))?,
+                None => hits(format!("{path} {} {}", e.title, e.kind))?,
+            };
+            Some((
+                score,
+                HomeRow::Entry {
                     id: e.id.clone(),
                     title: e.title.clone(),
                     kind: e.kind.clone(),
                     category: e.category.clone(),
-                    path: owned(&e.category),
+                    path,
                     depth: 0,
-                }),
-        );
-        rows.sort_by_key(sort_key);
+                },
+            ))
+        }));
+        // Best match first, tree order within one score. Cached so the tie-break key is
+        // built once per row; a plain comparator would rebuild it on every comparison.
+        scored.sort_by_cached_key(|(score, row)| (std::cmp::Reverse(*score), sort_key(row)));
+        let mut rows: Vec<_> = scored.into_iter().map(|(_, row)| row).collect();
         if let Some(row) = self.grants_row() {
             let title = self.language.text(Message::PageGrants);
-            if hits(title.to_owned()) {
+            if fuzzy::score(title, query).is_some() {
                 rows.insert(0, row);
             }
         }
@@ -454,6 +474,12 @@ impl App {
                 self.show_form(Kind::Category(parent))
             }
             KeyCode::Char('c') if self.library.is_some() => self.show_form(Kind::Connect),
+            KeyCode::Char('S') => self.invoke("ssh"),
+            KeyCode::Char('I') => self.invoke("sshimport"),
+            KeyCode::Char('A') => self.invoke("gpg"),
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                self.copy_public_field(key.code == KeyCode::Char('Y'))
+            }
             KeyCode::Char('m') | KeyCode::Char('e') if self.library.is_some() => {
                 let Some(row) = self.selected_home_row() else {
                     return;
@@ -470,6 +496,17 @@ impl App {
                         });
                     }
                     HomeRow::Entry { .. } => {
+                        if let Some(entry) = self.key_row(&row) {
+                            let form = Kind::EditKey {
+                                entry_id: entry.entry_id.clone(),
+                                login_type: entry.login_type.clone(),
+                                title: entry.title.clone(),
+                                comment: entry.comment.clone(),
+                                notes: entry.notes.clone(),
+                            };
+                            self.show_form(form);
+                            return;
+                        }
                         if let Some((name, _)) = self.home_entry_connection(&row) {
                             self.show_form(Kind::Token(name));
                         }
@@ -522,6 +559,113 @@ impl App {
             .find(|(_, connection)| connection.credential_id == *id)
             .map(|(name, connection)| (name.clone(), connection.provider))
     }
+
+    /// The key entry behind a tree row, when that row is one. A `login` row carries no
+    /// `login_type` in its plaintext summary, so only the unlock that read the tree can
+    /// tell a key apart from an ordinary credential.
+    pub(super) fn key_row(&self, row: &HomeRow) -> Option<&KeyEntrySummary> {
+        let HomeRow::Entry { id, .. } = row else {
+            return None;
+        };
+        self.keys.iter().find(|key| key.entry_id == *id)
+    }
+
+    /// `y` puts a key row's public line on the clipboard, `Y` its fingerprint. Every value
+    /// read here already came out of the unlocked summary, so private material and gateway
+    /// tokens have no path into the clipboard, and no row can ask for one.
+    pub(super) fn copy_public_field(&mut self, fingerprint: bool) {
+        let lang = self.language;
+        let selected = self.selected_home_row();
+        let Some(key) = selected.as_ref().and_then(|row| self.key_row(row)) else {
+            self.warning(tr!(lang, ClipboardEmpty));
+            return;
+        };
+        let text = public_field(key, fingerprint).to_owned();
+        let done = if fingerprint {
+            tr!(lang, CopiedFingerprint)
+        } else if key.login_type == LOGIN_TYPE_SSH {
+            tr!(lang, CopiedPublicKey)
+        } else {
+            tr!(lang, CopiedUid)
+        };
+        if text.is_empty() {
+            self.warning(tr!(lang, ClipboardEmpty));
+            return;
+        }
+        match crate::clipboard::copy_text(&text) {
+            Ok(()) => self.info(done),
+            Err(crate::clipboard::ClipboardError::Unsupported) => {
+                self.warning(tr!(lang, ClipboardUnsupported));
+            }
+            Err(crate::clipboard::ClipboardError::Busy) => self.warning(tr!(lang, ClipboardBusy)),
+            Err(error) => self.warning(tr!(lang, ClipboardUnavailable, error = error)),
+        }
+    }
+}
+
+/// The only summary field the clipboard may carry: `Y` takes the fingerprint, `y` the
+/// public line, which is the SSH public key or the GPG user id. Private material is not
+/// part of the summary, so no argument here can reach it.
+pub(super) fn public_field(key: &KeyEntrySummary, fingerprint: bool) -> &str {
+    if fingerprint {
+        &key.fingerprint
+    } else if key.login_type == LOGIN_TYPE_SSH {
+        &key.public_key
+    } else {
+        &key.comment
+    }
+}
+
+/// The one-cell kind a key row shows where a token row shows its provider prefix.
+fn key_label(key: &KeyEntrySummary, lang: Language) -> String {
+    let fallback = if key.login_type == LOGIN_TYPE_SSH {
+        tr!(lang, KeyKindSsh)
+    } else {
+        tr!(lang, KeyKindGpg)
+    };
+    if key.algorithm.is_empty() {
+        return clean(fallback);
+    }
+    match key.key_size {
+        Some(bits) => format!("{} {bits}", clean(&key.algorithm)),
+        None => clean(&key.algorithm),
+    }
+}
+
+/// Public metadata only. The preview never asks the engine to disclose key text, and the
+/// summary it reads was already reduced to these fields when the tree was unlocked.
+fn key_fields(lines: &mut Vec<Line<'static>>, key: &KeyEntrySummary, lang: Language) {
+    let ssh = key.login_type == LOGIN_TYPE_SSH;
+    field(lines, tr!(lang, KeyAlgorithmHeading), key_label(key, lang));
+    field(
+        lines,
+        tr!(lang, KeyFingerprintHeading),
+        clean(&key.fingerprint),
+    );
+    let comment_label = if ssh {
+        tr!(lang, KeyCommentHeading)
+    } else {
+        tr!(lang, KeyUidHeading)
+    };
+    field(lines, comment_label, clean(&key.comment));
+    if ssh {
+        field(lines, tr!(lang, KeyPublicHeading), clean(&key.public_key));
+    } else {
+        field(
+            lines,
+            tr!(lang, KeyChunksHeading),
+            key.chunk_count.to_string(),
+        );
+    }
+    let secret = if key.has_secret {
+        tr!(lang, KeyValueYes)
+    } else {
+        tr!(lang, KeyValueNo)
+    };
+    field(lines, tr!(lang, KeyPrivateHeading), secret);
+    lines.push(Line::default());
+    lines.push(Line::raw(tr!(lang, KeyDetailHint)));
+    lines.push(Line::raw(tr!(lang, CopyHint)));
 }
 
 fn sort_key(row: &HomeRow) -> (String, String) {
@@ -562,6 +706,18 @@ fn record(app: &App, row: &HomeRow) -> Record {
             color: ACCENT,
         },
         HomeRow::Entry { title, kind, .. } => {
+            if let Some(key) = app.key_row(row) {
+                return Record {
+                    name: format!("{indent}{}", clean(title)),
+                    suffix: key_label(key, lang),
+                    icon: if key.login_type == LOGIN_TYPE_SSH {
+                        Icon::Key
+                    } else {
+                        Icon::Gpg
+                    },
+                    color: CYAN,
+                };
+            }
             let bound = app.home_entry_connection(row);
             Record {
                 name: format!("{indent}{}", clean(title)),
@@ -841,7 +997,10 @@ fn home_detail(app: &App) -> Vec<Line<'static>> {
                     clean(path)
                 },
             );
-            field(&mut lines, tr!(lang, TokenHeading), tr!(lang, TokenMasked));
+            match app.key_row(&row) {
+                Some(entry) => key_fields(&mut lines, entry, lang),
+                None => field(&mut lines, tr!(lang, TokenHeading), tr!(lang, TokenMasked)),
+            }
             lines
         }
         HomeRow::Action { action, title } => {
@@ -891,7 +1050,7 @@ fn home_detail(app: &App) -> Vec<Line<'static>> {
             let state = app.grant_state(grant);
             lines.push(scope_title(grant, &state, lang));
         }
-    } else if matches!(row, HomeRow::Entry { .. }) {
+    } else if matches!(row, HomeRow::Entry { .. }) && app.key_row(&row).is_none() {
         lines.push(Line::default());
         lines.push(Line::raw(tr!(lang, NoBindingHint)));
     }
@@ -905,8 +1064,12 @@ fn context_keys(app: &App) -> &'static str {
         Focus::Preview => tr!(lang, KeysPreview),
         Focus::List if app.library.is_none() => tr!(lang, KeysLocked),
         Focus::List => match app.selected_home_row() {
+            Some(row @ HomeRow::Entry { .. }) => match app.key_row(&row) {
+                Some(key) if key.login_type == LOGIN_TYPE_SSH => tr!(lang, KeysSshEntry),
+                Some(_) => tr!(lang, KeysGpgEntry),
+                None => tr!(lang, KeysEntry),
+            },
             Some(HomeRow::Category { .. }) => tr!(lang, KeysCategory),
-            Some(HomeRow::Entry { .. }) => tr!(lang, KeysEntry),
             Some(HomeRow::Action { .. }) | None => tr!(lang, KeysAction),
         },
     }

@@ -2,7 +2,7 @@
 
 **简体中文** · 概览见 [README](../README.md) · AI 侧文档见 [给 AI 的使用说明](ai-guide.md)
 
-本手册面向**使用 Monica CLI 的人**：如何建库、如何存 Token、如何设计一份授权、如何把它接到 AI 客户端、出错时该做什么。第 5 节专门讲 AI 接入，第 10 节是排障对照表。
+本手册面向**使用 Monica CLI 的人**：如何建库、如何存 Token、如何设计一份授权、如何把它接到 AI 客户端、出错时该做什么。第 4 节专门讲 AI 接入，第 11 节是排障对照表。
 
 适用版本 0.2.0。文中 Monica 侧的命令行与输出均在本机 Windows x64 的 0.2.0 构建上实测；AI 客户端的配置文件位置请以该客户端的官方文档为准。
 
@@ -294,10 +294,15 @@ monica -C %CFG% rf work
 | 验证工具发现 | `check` | `ck` / `p` | 否（需代理在跑） | 无 |
 | 本地执行一次调用 | `call <授权名> --request <文件>` | — | 否（需代理在跑） | 无 |
 | 查询命令与参数 | `commands` | `cmds` | 否 | 无 |
+| 列出密钥条目 | `keys` | `k` | 是 | 主密码 |
+| 生成或导入 SSH 密钥 | `keys ssh <名称> --generate ed25519` / `--private-key <文件>` | — | 是 | 主密码 |
+| 导入 OpenPGP 密钥 | `keys gpg <名称> --public-key <文件>` | — | 是 | 主密码 |
+| 改密钥条目的标题、注释或备注 | `keys edit <名称>` | — | 是 | 主密码 |
+| 导出公钥或私钥到文件 | `keys export <名称> -o <文件>` | — | 是 | 主密码 |
 
 要点：
 
-- **会先停代理的操作**：任何需要读写保险库的动作（`init` / `connect` / `add` / `grant` / `refresh` / `note` / `token` / `open` / `use` / `library` / `category` / `move` / `rename-category` / `rename-entry` / WebDAV 同步）。它们会等待在途请求结束，完成后**保持锁定**，要继续用 MCP 就得重新 `u`。
+- **会先停代理的操作**：任何需要读写保险库的动作（`init` / `connect` / `add` / `grant` / `refresh` / `note` / `token` / `open` / `use` / `library` / `category` / `move` / `rename-category` / `rename-entry` / `keys` / WebDAV 同步）。它们会等待在途请求结束，完成后**保持锁定**，要继续用 MCP 就得重新 `u`。
 - **不停代理的操作**：`ls` / `show` / `st` / `m` / `ck` / `call` / `cmds` / `rv`。
 - 授权的 `operations` 里出现 `api_read` / `api_write` 意味着这份授权拥有该 Token 的完整 API 能力，范围必须是 `*`。给出这种授权前请把它当成"把 Token 交出去"来评估。
 - `rv` 不需要停代理，也**不会删除 `clients/` 下的 capability 文件**——它只把授权从配置里移除，文件留在原地。想让那份文件彻底消失要自己删。
@@ -397,7 +402,53 @@ monica -C <恢复的配置> m <授权名>     # 客户端文件是否还在原�
 
 恢复与轮换的完整流程见 [SECURITY.md 的维护与恢复](../SECURITY.md#维护与恢复)。
 
-## 9. 常见提问
+## 9. SSH / GPG 密钥条目
+
+密钥条目与 Token 存在同一份加密保险库里，**存储格式与 Monica for Android 完全一致**：原生条目类型仍是 `login`，payload 里用 `login_type = SSH_KEY | GPG_KEY` 区分，私钥文本就放在同一条被引擎加密的 payload 字段中，GPG 公钥 armor 按 Android 的规则写成从 `monica_gpg_public_0000` 起的连续分块字段。同一份库在手机与电脑之间同步，两边读到的是同一条密钥，不需要任何中间导出导入。
+
+### 9.1 新建与导入
+
+```sh
+monica keys ssh 工作机 --generate ed25519 --comment me@laptop
+monica keys ssh 签名 --generate rsa4096 -n "git commit 签名"
+monica keys ssh 跳板机 --private-key ./id_ed25519
+monica keys gpg 邮件 --public-key ./pub.asc --private-key ./sec.asc
+monica keys                                  # 列出全部密钥条目
+monica keys edit 工作机 --title 新名 -n "用途"
+```
+
+- 算法可写 `ed25519`、`rsa`（等于 3072）、`rsa2048`、`rsa3072`、`rsa4096`。私钥在本进程内生成，不经过命令行参数、stdin 或临时文件。
+- 导入只接受文件路径，密钥文本永不进 argv。OpenSSH 私钥容器与 RSA PKCS#1 都按你给的字节原样保存，含末尾换行；`format:"OPENSSH"` 不会把 RSA 重新包装。
+- GPG 只支持 OpenPGP v4 armor：**公钥 armor 必需，私钥 armor 可选**。v6 与未知算法直接报错，不会猜。
+- 单个 armor/PEM 上限 64 KiB，整条 payload 上限 96 KiB，超限报 `key_payload_too_large`。
+- 表格与 `--json` 只出名称、类型、算法与位数、指纹、是否含私钥，永不出密钥材料。
+
+### 9.2 导出：唯一会写出密钥文本的命令
+
+```sh
+monica keys export 工作机 -o id_ed25519 --private
+monica keys export 工作机 -o id_ed25519.pub          # 只出公钥
+```
+
+- 公钥导出 SSH 是一行 `ssh-ed25519 AAAA… comment` 并补末尾换行，可直接追加进 `authorized_keys`；GPG 是原始 ASCII armor。
+- 私钥必须显式 `--private`，且该条目确实存了私钥，否则报 `key_secret_missing`。
+- 已存在的文件不会被覆盖，覆盖要再加 `--force`（否则 `already_exists`）。密钥文本只写文件，不打印到 stdout、不进日志，`--json` 只回路径与字节数。
+- 写出后立刻收紧文件权限（Windows 上只保留当前用户的 ACL）。
+- 界面里没有导出。TUI 只查看与编辑，写出文件必须走这条命令。
+
+### 9.3 在 TUI 里管理
+
+主页上 `S` 新建 SSH 密钥、`I` 导入私钥、`A` 导入 OpenPGP 密钥。密钥行在树里显示算法与位数，`Enter` 预览算法 / 指纹 / 注释或用户 ID / 公钥分块数 / 是否含私钥，`e` 编辑名称、注释与备注，`m` 移动分类。粘贴的 PEM 与 armor 整字段掩码显示，标签上只写"已粘贴 N 行"用来证明没被截断——屏幕上不会出现任何密钥字节。`Enter` 在多行字段里是换行，保存用 `Ctrl+S`。
+
+预览面板里的字段不用再抄：`y` 把公钥行（GPG 条目是用户 ID）放到系统剪贴板，`Y` 放指纹，选中行的按键条上就写着这两个键复制什么。能进剪贴板的只有这几项公开字段，Token 和私钥材料没有出口；要拿到私钥文件仍然是 `monica keys export`（见 [9.2](#92-导出唯一会写出密钥文本的命令)）。非 Windows 平台会直接告诉你当前平台没实现，不会偷偷去调外部命令。
+
+`/` 搜索现在是子序列匹配加相关度排序：`sk` 能找到 `ssh-key`，`rsa4k` 找不到就退一步打 `rsa`；命中的行按"贴不贴词首、连不连续"排序，最像的那条排在最前，同名的仍然按分类树顺序。
+
+### 9.4 AI 看不到密钥
+
+`keys` 整族命令不在 AI 可见的命令发现面里；密钥条目不进 catalog、不进 MCP 工具面，也不会被绑定成凭据——gateway 的解析路径只认 api-token 条目。密钥只由你自己管理。
+
+## 10. 常见提问
 
 **能不能给一份永久授权？** 不能。授权必然到期，上限 1440 分钟，这是设计约束而不是缺功能。
 
@@ -409,7 +460,7 @@ monica -C <恢复的配置> m <授权名>     # 客户端文件是否还在原�
 
 **同一台机器上别人能绕过这套限制吗？** 同一系统用户下、拥有任意文件读写或进程调试权限的程序不受这条接口边界保护。需要更强隔离请使用独立系统账户或沙箱——这是本手册唯一一处必要提醒，详细残余风险见 [SECURITY.md](../SECURITY.md#信任关系)。
 
-## 10. 故障对照表
+## 11. 故障对照表
 
 先看一个前提：**错误码与 HTTP 状态码不是一一对应的**。本地代理的 HTTP 报文只把错误码本身放在 `Err` 里，形如 `{"Err":"unauthorized"}`，**不附带说明文字**；成功时是 `{"Ok":…}`。时间到期和 capability 失效在鉴权中间件以 401 返回，Origin/Host 违规才是 403，而次数预算耗尽、范围不符、未知工具名等都发生在 `POST /v1/call` 的正常响应里，HTTP 仍是 200。所以**判断只看 `Err` 里的码**。这一层你平时不会直接看到：MCP 桥会把错误码补上固定说明文字后转成 `{"ok":false,"error":{"code":…,"message":…}}`，`monica … --json` 在此基础上再带上 `command`。
 
@@ -480,21 +531,32 @@ monica -C <恢复的配置> m <授权名>     # 客户端文件是否还在原�
 | 库里连接记录过多或歧义 | `vault_connections_invalid` | 先在 Monica 客户端里把重复的连接条目整理干净再导入 |
 | 还没绑定远端库 | `remote_not_configured` | 先 `webdav open` 或 `webdav publish` |
 
-## 11. 能力边界（必须知道的几条）
+### 密钥条目
+
+| 现象 | 错误码 | 为什么会这样 | 你该做什么 |
+| --- | --- | --- | --- |
+| 导入被拒 | `invalid_key_material` | PEM/armor 解析失败：不是 OpenSSH 私钥容器或 RSA PKCS#1，或 OpenPGP 不是 v4 主密钥 | 先用 `ssh-keygen -y -f <文件>`、`gpg --list-packets <文件>` 自证格式；程序不猜未知算法 |
+| 说这条不是密钥条目 | `key_entry_type_mismatch` | 目标条目的 `login_type` 与命令要求的不符，或它不是密钥条目 | `monica keys` 看类型列；普通 Token 走 `monica edit`，别用 `keys edit` |
+| 保存时提示超限 | `key_payload_too_large` | 单个 armor/PEM 超 64 KiB，或整条 payload 超 96 KiB | 换更小的证书，或删掉多余 UID 后重新 armor |
+| 导出私钥失败 | `key_secret_missing` | 该条目只存了公钥那一半 | 先补 `keys ssh --private-key` 或 `keys gpg --private-key` |
+| 导出说文件已存在 | `already_exists` | 输出路径上已有文件，程序不覆盖 | 换文件名；确认要覆盖再加 `--force` |
+
+## 12. 能力边界（必须知道的几条）
 
 1. **不存在永久授权**，最长期 1440 分钟。
 2. TUI 能看到授权状态与 `已用/上限`（见 [6.5](#65-在-tui-里核对预算)），但**没有续期按键**，授权表单也**不设次数预算**；这两件事只有命令行能做。
 3. MCP 只提供已支持的服务操作：**没有**凭据读取、任意 URL、任意请求头、Shell 执行工具。
 4. 已发出的远端操作无法撤回；锁定代理只阻止后续请求。
 5. 同一系统用户下、具备任意文件读写或进程调试权限的程序，不受这条接口边界保护。
+6. 密钥条目（SSH / GPG）对 AI 完全不可见：命令发现面、catalog、MCP 工具面都不出现。唯一写出密钥文本的是 `monica keys export`，必须由人显式执行（见 [9.2](#92-导出唯一会写出密钥文本的命令)）。
 
-## 12. 让 AI 帮你做管理
+## 13. 让 AI 帮你做管理
 
 这条路存在，但权限很窄：AI 可以用 `monica cmds --json` 发现命令、用 `ls` / `show` / `st` / `m` / `ck` 做只读查询；任何需要凭据的管理命令都必须由**可信本地启动器**通过 `--secrets-stdin` 供入，凭据不经过模型。协议、字段表和退出码见 [CLI 自动化](automation.md)。
 
 不要为了"省事"把主密码写进脚本参数、环境变量或请求文件。
 
-## 13. 延伸阅读
+## 14. 延伸阅读
 
 - [给 AI 的使用说明](ai-guide.md) —— 直接粘进 AI 项目规则的段落 + 全部错误码的工具侧动作
 - [CLI 自动化](automation.md) —— `--secrets-stdin` 协议与 JSON 结果约定

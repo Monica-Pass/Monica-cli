@@ -46,6 +46,12 @@ pub enum Command {
     RenameCategory { id: String, title: String },
     /// Rename an entry's display title (Chinese allowed) by its connection handle.
     RenameEntry { name: String, title: String },
+    /// Manage SSH and GPG key entries in the vault; bare keys lists them.
+    #[command(visible_alias = "k", hide = true)]
+    Keys {
+        #[command(subcommand)]
+        command: Option<KeysCommand>,
+    },
     /// Browse database categories and entry summaries after unlocking.
     #[command(visible_alias = "tree")]
     Library,
@@ -173,6 +179,61 @@ pub enum Command {
 }
 
 #[derive(Subcommand)]
+pub enum KeysCommand {
+    /// Generate a new OpenSSH key or import a private PEM file as a key entry.
+    #[command(group(clap::ArgGroup::new("material").required(true).args(["generate","private_key"])))]
+    Ssh {
+        #[arg(value_name = "NAME")]
+        key_name: String,
+        #[arg(long)]
+        generate: Option<String>,
+        #[arg(long, value_name = "FILE")]
+        private_key: Option<PathBuf>,
+        #[arg(long)]
+        comment: Option<String>,
+        #[arg(long)]
+        category: Option<String>,
+        #[arg(short = 'n', long = "note", default_value = "")]
+        purpose: String,
+    },
+    /// Import an OpenPGP certificate, and optionally the secret ring that belongs to it.
+    #[command(group(clap::ArgGroup::new("armor").required(true).multiple(true).args(["public_key","private_key"])))]
+    Gpg {
+        #[arg(value_name = "NAME")]
+        key_name: String,
+        #[arg(long, value_name = "FILE")]
+        public_key: Option<PathBuf>,
+        #[arg(long, value_name = "FILE")]
+        private_key: Option<PathBuf>,
+        #[arg(long)]
+        category: Option<String>,
+        #[arg(short = 'n', long = "note", default_value = "")]
+        purpose: String,
+    },
+    /// Rename a key entry or edit its comment and purpose note.
+    #[command(group(clap::ArgGroup::new("field").required(true).multiple(true).args(["new_title","purpose","comment"])))]
+    Edit {
+        entry: String,
+        #[arg(long = "title")]
+        new_title: Option<String>,
+        #[arg(short = 'n', long = "note")]
+        purpose: Option<String>,
+        #[arg(long)]
+        comment: Option<String>,
+    },
+    /// Write the public or private half of a key entry to a file. Never prints key material.
+    Export {
+        entry: String,
+        #[arg(short = 'o', long, value_name = "FILE")]
+        output: PathBuf,
+        #[arg(long)]
+        private: bool,
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum WebDavCommand {
     /// Verify login and save the URL/username. The password is not saved.
     #[command(visible_alias = "in")]
@@ -211,6 +272,13 @@ impl Command {
             Self::Token { .. } => "token",
             Self::RenameCategory { .. } => "rename-category",
             Self::RenameEntry { .. } => "rename-entry",
+            Self::Keys { command } => match command {
+                None => "keys",
+                Some(KeysCommand::Ssh { .. }) => "keys ssh",
+                Some(KeysCommand::Gpg { .. }) => "keys gpg",
+                Some(KeysCommand::Edit { .. }) => "keys edit",
+                Some(KeysCommand::Export { .. }) => "keys export",
+            },
             Self::Library => "library",
             Self::Category { .. } => "category",
             Self::Move { .. } => "move",

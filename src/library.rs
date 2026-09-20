@@ -279,6 +279,22 @@ pub fn read(store: &ConfigStore, password: &str) -> Result<Library> {
     result
 }
 
+/// The tree plus the key rows, from one unlock. `login_type` lives inside the encrypted
+/// payload, so a `login` row cannot be told apart from a key entry without this second pass.
+pub fn read_with_keys(
+    store: &ConfigStore,
+    password: &str,
+) -> Result<(Library, Vec<crate::vault::KeyEntrySummary>)> {
+    let _guard = store.acquire_broker_lock()?;
+    let vault = Vault::open(&store.load()?.vault, password)?;
+    let result = match vault.library() {
+        Ok(library) => vault.key_entries().map(|keys| (library, keys)),
+        Err(error) => Err(error),
+    };
+    vault.lock()?;
+    result
+}
+
 pub fn rename_category(store: &ConfigStore, password: &str, id: &str, title: &str) -> Result<()> {
     crate::upstream::reject_secret_value(&serde_json::json!([title]), password)
         .map_err(|_| GatewayError::SensitiveMetadata)?;
