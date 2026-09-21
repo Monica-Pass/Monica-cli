@@ -532,7 +532,7 @@ monica keys export 工作机 -o id_ed25519.pub          # 只出公钥
 | 上传结果不确定 | `sync_outcome_unknown` | 先比对两份再重试：已连接用 `sync`，首发后用 `open` |
 | 下载的文件不是可用库 | `invalid_vault` | 确认是 MDBX 文件且完整；换原始副本重试 |
 | 旧 Android 库打不开 | `vault_schema_unsupported` | `MDBX-1` 与本机不兼容，保留原文件，改用原生 MDBX3 库；改扩展名无效 |
-| 库带外置附件 | `external_blobs_unsupported` | 单文件同步无法搬运 `.blobs`，不要用它走 WebDAV |
+| 库带外置附件 | `external_blobs_unsupported` | 整文件与分段两种模式都不搬运 `.blobs`，带附件的库不要走 WebDAV |
 | 库里连接记录过多或歧义 | `vault_connections_invalid` | 先在 Monica 客户端里把重复的连接条目整理干净再导入 |
 | 还没绑定远端库 | `remote_not_configured` | 先 `webdav open` 或 `webdav publish` |
 

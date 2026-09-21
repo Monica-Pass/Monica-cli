@@ -148,10 +148,11 @@ deviceId   gateway.json 增加 webdav_device_id：monica-cli-<UUIDv4>，生成�
 ## 7. 与现有单文件模式共存
 
 - 绑定里加 `mode: "file" | "segment"`；`segment` 由「检测到 `.sync`」或用户显式指定触发。
-  两条路径共用 profile 与锁，但游标文件互不覆盖。
+  两条路径共用 profile 与锁，但游标文件互不覆盖。（实施时没有加这个字段，改为探测，见第 12 节第 5 条。）
 - `remote_protocol_unsupported` 保留，直到分段模式真的可用；届时它对普通网盘误判的兜底仍然有用。
+  （语义已按第 12 节第 6 条收窄，不再是「检测到 `.sync` 就拒」。）
 - `open_remote` 目前只读初始副本，接入分段模式后必须改成「下载 bootstrap + 重放分段」，
-  否则用户打开的仍然是第 1 节那个过时快照。
+  否则用户打开的仍然是第 1 节那个过时快照。（已改，见第 12 节第 5 条。）
 - 自动同步仍不引入后台常驻：手动 `webdav sync` 与 TUI 的 `S` 触发，与现在的授权纪律一致。
 
 ## 8. 传输层缺口（`src/webdav.rs`）
