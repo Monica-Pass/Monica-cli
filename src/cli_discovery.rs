@@ -18,7 +18,7 @@ pub fn run(topic: &[String], language: Language, output: Output) -> Result<()> {
     for name in topic {
         let child = command
             .get_subcommands()
-            .filter(|child| !child.is_hide_set())
+            .filter(|child| discoverable(child, &path))
             .find(|child| {
                 child.get_name() == name || child.get_all_aliases().any(|alias| alias == name)
             })
@@ -68,7 +68,7 @@ fn describe(command: &Command, path: &[String]) -> Value {
     }).collect();
     let children: Vec<_> = command
         .get_subcommands()
-        .filter(|child| child.get_name() != "help" && !child.is_hide_set())
+        .filter(|child| child.get_name() != "help" && discoverable(child, path))
         .map(|child| {
             let mut path = path.to_vec();
             path.push(child.get_name().to_owned());
@@ -92,4 +92,14 @@ fn describe(command: &Command, path: &[String]) -> Value {
         "long_running": name == "serve" || name == "mcp" || name == "tui",
         "commands": children,
     })
+}
+
+/// Key management is intentionally hidden from the ordinary top-level help because it is a
+/// human-only surface, but its public metadata is still needed by trusted local executors.
+/// Private key export remains outside the AI discovery contract.
+fn discoverable(command: &Command, parent_path: &[String]) -> bool {
+    if command.get_name() == "export" && parent_path.last().is_some_and(|name| name == "keys") {
+        return false;
+    }
+    !command.is_hide_set() || (parent_path.is_empty() && command.get_name() == "keys")
 }

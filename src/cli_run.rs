@@ -539,6 +539,7 @@ async fn keys_command(
                     &key_name,
                     &purpose,
                     category.as_deref(),
+                    comment.as_deref().unwrap_or_default(),
                     &absolute(&path)?,
                 )?,
                 _ => unreachable!("the material group accepts exactly one source"),

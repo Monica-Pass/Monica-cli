@@ -423,6 +423,7 @@ pub(super) async fn perform(
                     &title,
                     &note,
                     category.as_deref(),
+                    "",
                     &material,
                 )
             })

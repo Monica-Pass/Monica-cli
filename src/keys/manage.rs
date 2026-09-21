@@ -52,6 +52,7 @@ pub fn import_ssh(
     title: &str,
     note: &str,
     category: Option<&str>,
+    comment: &str,
     path: &Path,
 ) -> Result<KeyEntrySummary> {
     import_ssh_text(
@@ -60,6 +61,7 @@ pub fn import_ssh(
         title,
         note,
         category,
+        comment,
         &read_key_text(path)?,
     )
 }
@@ -71,16 +73,16 @@ pub fn import_ssh_text(
     title: &str,
     note: &str,
     category: Option<&str>,
+    comment: &str,
     text: &str,
 ) -> Result<KeyEntrySummary> {
-    add_ssh(
-        store,
-        password,
-        title,
-        note,
-        category,
-        SshKeyPair::from_pem(text)?,
-    )
+    let pair = SshKeyPair::from_pem(text)?;
+    let pair = if comment.trim().is_empty() {
+        pair
+    } else {
+        pair.with_comment(comment)?
+    };
+    add_ssh(store, password, title, note, category, pair)
 }
 
 fn add_ssh(
@@ -360,9 +362,12 @@ mod tests {
 
         let path = directory.path().join("id_ed25519");
         export(&store, PASSWORD, "laptop", &path, true, false).unwrap();
-        let reimported = import_ssh(&store, PASSWORD, "copy", "", None, &path).unwrap();
+        let reimported =
+            import_ssh(&store, PASSWORD, "copy", "", None, "imported@test", &path).unwrap();
         assert_eq!(reimported.fingerprint, created.fingerprint);
-        assert_eq!(reimported.public_key, created.public_key);
+        assert_ne!(reimported.public_key, created.public_key);
+        assert!(reimported.public_key.ends_with(" imported@test"));
+        assert_eq!(reimported.comment, "imported@test");
         assert_eq!(list(&store, PASSWORD).unwrap().len(), 2);
     }
 
@@ -371,7 +376,7 @@ mod tests {
         let (directory, store) = fixture();
         let missing = directory.path().join("missing");
         assert!(matches!(
-            import_ssh(&store, PASSWORD, "gone", "", None, &missing),
+            import_ssh(&store, PASSWORD, "gone", "", None, "", &missing),
             Err(GatewayError::StateUnavailable)
         ));
         assert!(matches!(
@@ -383,13 +388,13 @@ mod tests {
         let public_line = directory.path().join("id_ed25519.pub");
         std::fs::write(&public_line, created.public_key.clone() + "\n").unwrap();
         assert!(matches!(
-            import_ssh(&store, PASSWORD, "pub", "", None, &public_line),
+            import_ssh(&store, PASSWORD, "pub", "", None, "", &public_line),
             Err(GatewayError::InvalidKeyMaterial)
         ));
         let blank = directory.path().join("blank");
         std::fs::write(&blank, "  \n\t\n").unwrap();
         assert!(matches!(
-            import_ssh(&store, PASSWORD, "blank", "", None, &blank),
+            import_ssh(&store, PASSWORD, "blank", "", None, "", &blank),
             Err(GatewayError::InvalidKeyMaterial)
         ));
         let huge = directory.path().join("huge");

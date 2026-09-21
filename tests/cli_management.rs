@@ -948,26 +948,22 @@ fn key_entries_generate_import_edit_export_and_stay_out_of_the_gateway() {
 }
 
 #[test]
-fn key_administration_is_absent_from_the_ai_visible_discovery_surface() {
+fn key_administration_is_documented_without_private_export() {
     let directory = tempfile::tempdir().unwrap();
     let root = success(cli(directory.path(), &["cmds", "-j"], None));
     let text = serde_json::to_string(&root).unwrap();
-    for marker in [
-        "keys",
-        "ssh",
-        "gpg",
-        "export",
-        "--generate",
-        "private_key",
-        "fingerprint",
-    ] {
+    for marker in ["keys", "ssh", "gpg", "generate", "private_key"] {
         assert!(
-            !text.contains(marker),
-            "key grammar in discovery output: {marker}"
+            text.contains(marker),
+            "missing key grammar in discovery output: {marker}"
         );
     }
-    failure(
-        cli(directory.path(), &["cmds", "keys", "-j"], None),
-        "invalid_request",
+    assert!(
+        !text.contains("keys export"),
+        "private export leaked into discovery output"
     );
+    let keys = success(cli(directory.path(), &["cmds", "keys", "-j"], None));
+    let keys_text = serde_json::to_string(&keys).unwrap();
+    assert!(keys_text.contains("\"ssh\""));
+    assert!(!keys_text.contains("keys export"));
 }
