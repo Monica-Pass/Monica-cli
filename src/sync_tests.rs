@@ -6,6 +6,7 @@ use crate::admin;
 use crate::config::{ConfigStore, DEFAULT_PORT};
 use crate::error::GatewayError;
 use crate::model::Provider;
+use crate::segment::{self, ExportBase};
 use crate::sync::{self, SyncResult};
 use crate::test_support::{PASSWORD, TOKEN};
 use crate::webdav_tests::{DAV_PASSWORD, FakeWebDav, WriteFault};
@@ -51,7 +52,8 @@ async fn sync_real_mdbx_roundtrip_preserves_old_copies_and_detects_divergence() 
     assert_eq!(
         sync::synchronize(&writer, &remote.client, PASSWORD)
             .await
-            .unwrap(),
+            .unwrap()
+            .result,
         SyncResult::UpToDate
     );
     let reader = ConfigStore::new(directory.path().join("reader/gateway.json"));
@@ -69,7 +71,8 @@ async fn sync_real_mdbx_roundtrip_preserves_old_copies_and_detects_divergence() 
     assert_eq!(
         sync::synchronize(&reader, &remote.client, PASSWORD)
             .await
-            .unwrap(),
+            .unwrap()
+            .result,
         SyncResult::UpToDate
     );
     add(&writer, "second");
@@ -77,13 +80,15 @@ async fn sync_real_mdbx_roundtrip_preserves_old_copies_and_detects_divergence() 
     assert_eq!(
         sync::synchronize(&writer, &remote.client, PASSWORD)
             .await
-            .unwrap(),
+            .unwrap()
+            .result,
         SyncResult::Uploaded
     );
     assert_eq!(
         sync::synchronize(&reader, &remote.client, PASSWORD)
             .await
-            .unwrap(),
+            .unwrap()
+            .result,
         SyncResult::Downloaded
     );
     assert_ne!(reader.load().unwrap().vault, original_reader);
@@ -96,7 +101,8 @@ async fn sync_real_mdbx_roundtrip_preserves_old_copies_and_detects_divergence() 
     assert_eq!(
         sync::synchronize(&reader, &remote.client, PASSWORD)
             .await
-            .unwrap(),
+            .unwrap()
+            .result,
         SyncResult::UpToDate
     );
     add(&writer, "writer-change");
@@ -107,8 +113,10 @@ async fn sync_real_mdbx_roundtrip_preserves_old_copies_and_detects_divergence() 
     let prior_config = std::fs::read(&reader.path).unwrap();
     let prior_remote = remote.files.lock().unwrap()["/dav/vault.mdbx"].clone();
     assert_eq!(
-        sync::synchronize(&reader, &remote.client, PASSWORD).await,
-        Err(GatewayError::SyncConflict)
+        sync::synchronize(&reader, &remote.client, PASSWORD)
+            .await
+            .unwrap_err(),
+        GatewayError::SyncConflict
     );
     assert_eq!(std::fs::read(&reader.path).unwrap(), prior_config);
     assert_eq!(
@@ -131,9 +139,11 @@ async fn sync_real_mdbx_roundtrip_preserves_old_copies_and_detects_divergence() 
 }
 
 #[tokio::test]
-async fn android_segment_layout_is_refused_before_the_bootstrap_is_replaced() {
+async fn android_segment_layout_is_joined_without_replacing_the_bootstrap() {
     let directory = tempfile::tempdir().unwrap();
     let store = initialized(directory.path(), "writer");
+    // The name Android would never use is still a plausible neighbour in a tree the
+    // phone owns: it has to be skipped, not parsed and not fatal.
     let remote = FakeWebDav::new(
         [(
             "/dav/Mdbx/vault.mdbx.sync/streams/android-device/generation-1/segments/0000000000-integrity.mdbxsync".to_owned(),
@@ -146,26 +156,329 @@ async fn android_segment_layout_is_refused_before_the_bootstrap_is_replaced() {
         .await
         .unwrap();
     add(&store, "changed-after-android");
-    let local_config = std::fs::read(&store.path).unwrap();
     let bootstrap = remote.files.lock().unwrap()["/dav/Mdbx/vault.mdbx"].clone();
     let requests = remote.server.requests().len();
 
-    let error = sync::synchronize(&store, &remote.client, PASSWORD)
+    let outcome = sync::synchronize(&store, &remote.client, PASSWORD)
         .await
-        .unwrap_err();
-    assert_eq!(error, GatewayError::RemoteProtocolUnsupported);
-    assert!(error.to_string().contains(".sync"), "{error}");
-    assert_eq!(std::fs::read(&store.path).unwrap(), local_config);
+        .unwrap();
+    assert_eq!(outcome.result, SyncResult::Merged);
+    let report = outcome.segments.expect("a segment run reports what moved");
+    assert_eq!(report.uploaded_segments, 1);
+    assert_eq!(report.downloaded_segments, 0);
+    assert_eq!(report.conflicts, 0);
+    assert_eq!(report.blocked_streams, 0);
     assert_eq!(
         remote.files.lock().unwrap()["/dav/Mdbx/vault.mdbx"],
-        bootstrap
+        bootstrap,
+        "the bootstrap every other device tracks must stay byte-identical"
+    );
+    let device_id = store.load().unwrap().webdav_device_id.clone().unwrap();
+    assert!(device_id.starts_with("monica-cli-"), "{device_id}");
+    let sent = remote.server.requests();
+    let writes = sent[requests..]
+        .iter()
+        .filter(|request| request.method == "PUT")
+        .collect::<Vec<_>>();
+    assert!(!writes.is_empty());
+    for write in writes {
+        assert!(
+            write
+                .target
+                .starts_with(&format!("/dav/Mdbx/vault.mdbx.sync/streams/{device_id}/")),
+            "{}",
+            write.target
+        );
+    }
+
+    let again = sync::synchronize(&store, &remote.client, PASSWORD)
+        .await
+        .unwrap();
+    assert_eq!(again.result, SyncResult::UpToDate);
+    assert!(again.segments.is_none());
+}
+
+#[tokio::test]
+async fn segment_streams_converge_two_devices_without_replacing_any_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let writer = initialized(directory.path(), "writer");
+    let remote = FakeWebDav::new(Default::default()).await;
+    sync::publish(&writer, &remote.client, "vault.mdbx", PASSWORD)
+        .await
+        .unwrap();
+    // The sidecar tree a phone would have created by now: joining it has to beat
+    // falling back to replacing the single file.
+    remote.seed_collection("vault.mdbx.sync");
+    add(&writer, "writer-only");
+    let pushed = sync::synchronize(&writer, &remote.client, PASSWORD)
+        .await
+        .unwrap();
+    assert_eq!(pushed.result, SyncResult::Merged);
+    assert_eq!(pushed.segments.unwrap().uploaded_segments, 1);
+
+    let reader = initialized(directory.path(), "reader");
+    assert_eq!(
+        sync::open_remote(&reader, &remote.client, "vault.mdbx", PASSWORD)
+            .await
+            .unwrap(),
+        2,
+        "opening the remote vault has to include the published segments"
     );
     assert!(
-        remote.server.requests()[requests..]
-            .iter()
-            .all(|request| request.method != "PUT"),
-        "a detected segment vault must never be written to"
+        reader
+            .load()
+            .unwrap()
+            .connections
+            .contains_key("writer-only")
     );
+    assert_eq!(
+        sync::synchronize(&reader, &remote.client, PASSWORD)
+            .await
+            .unwrap()
+            .result,
+        SyncResult::UpToDate,
+        "a cold connect owes the remote nothing it was just told"
+    );
+
+    add(&reader, "reader-only");
+    let reply = sync::synchronize(&reader, &remote.client, PASSWORD)
+        .await
+        .unwrap()
+        .segments
+        .expect("the reply published a segment");
+    assert_eq!(reply.uploaded_segments, 1);
+    assert_eq!(reply.downloaded_segments, 0);
+    let pull = sync::synchronize(&writer, &remote.client, PASSWORD)
+        .await
+        .unwrap()
+        .segments
+        .expect("the writer read the reply back");
+    assert_eq!(pull.uploaded_segments, 0);
+    assert_eq!(pull.downloaded_segments, 1);
+    assert!(pull.applied_commits > 0);
+    assert!(
+        writer
+            .load()
+            .unwrap()
+            .connections
+            .contains_key("reader-only")
+    );
+    assert!(
+        reader
+            .load()
+            .unwrap()
+            .connections
+            .contains_key("writer-only")
+    );
+    assert_eq!(
+        sync::synchronize(&writer, &remote.client, PASSWORD)
+            .await
+            .unwrap()
+            .result,
+        SyncResult::UpToDate,
+        "a received commit must not be published back as one's own"
+    );
+    let view = segment::status(&writer, &writer.load().unwrap().webdav.unwrap().vault_id).unwrap();
+    assert!(
+        view.tracked && view.export_base == ExportBase::Anchored,
+        "a drained run leaves the export anchored, not owing a full re-export: {view:?}"
+    );
+    assert!(view.pending_upload.is_none(), "{view:?}");
+    assert_eq!(
+        view.streams, 1,
+        "only the peer stream is received: {view:?}"
+    );
+    assert!(view.waiting.is_empty(), "{view:?}");
+    for secret in [TOKEN, PASSWORD, DAV_PASSWORD] {
+        for bytes in remote.files.lock().unwrap().values() {
+            assert!(
+                !bytes
+                    .windows(secret.len())
+                    .any(|chunk| chunk == secret.as_bytes()),
+                "{secret} reached the remote"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn segment_gap_in_a_peer_stream_waits_and_the_cursor_says_why() {
+    let directory = tempfile::tempdir().unwrap();
+    let writer = initialized(directory.path(), "writer");
+    let remote = FakeWebDav::new(Default::default()).await;
+    sync::publish(&writer, &remote.client, "vault.mdbx", PASSWORD)
+        .await
+        .unwrap();
+    remote.seed_collection("vault.mdbx.sync");
+    add(&writer, "writer-only");
+    sync::synchronize(&writer, &remote.client, PASSWORD)
+        .await
+        .unwrap();
+
+    // A peer whose upload was cut short leaves a hole no later segment can cover:
+    // applying segment 9 without 1..8 would drop the commits in between silently.
+    let parent = remote
+        .files
+        .lock()
+        .unwrap()
+        .keys()
+        .find(|key| key.ends_with(".mdbxsync"))
+        .map(|key| key.rsplit_once('/').unwrap().0.to_owned())
+        .expect("the writer published a segment");
+    let stream = parent
+        .trim_start_matches("/dav/vault.mdbx.sync/streams/")
+        .trim_end_matches("/segments")
+        .to_owned();
+    remote.files.lock().unwrap().insert(
+        format!("{parent}/0000000009-{}.mdbxsync", "c".repeat(64)),
+        b"unreachable-without-the-segments-before-it".to_vec(),
+    );
+
+    let reader = initialized(directory.path(), "reader");
+    assert_eq!(
+        sync::open_remote(&reader, &remote.client, "vault.mdbx", PASSWORD)
+            .await
+            .unwrap(),
+        2,
+        "the segments up to the hole still land"
+    );
+    let report = sync::synchronize(&reader, &remote.client, PASSWORD)
+        .await
+        .unwrap()
+        .segments
+        .expect("a stalled stream is reported");
+    assert_eq!(report.blocked_streams, 1);
+    assert_eq!(report.conflicts, 0);
+    assert_eq!(report.uploaded_segments, 0);
+    assert_eq!(
+        report.downloaded_segments, 0,
+        "the segment past the hole is never even fetched"
+    );
+    assert_eq!(report.applied_commits, 0);
+    assert!(
+        reader
+            .load()
+            .unwrap()
+            .connections
+            .contains_key("writer-only")
+    );
+
+    let binding = reader.load().unwrap().webdav.unwrap();
+    let view = segment::status(&reader, &binding.vault_id).unwrap();
+    assert_eq!(view.streams, 1);
+    assert_eq!(
+        view.complete_streams, 1,
+        "the segment before the hole did apply; the one past it did not"
+    );
+    assert_eq!(
+        view.waiting,
+        vec![segment::Waiting {
+            stream,
+            reason: segment::WAITING_EARLIER_SEGMENT.to_owned(),
+        }],
+        "why a stream stopped is the one thing a status line has to carry"
+    );
+}
+
+#[tokio::test]
+async fn segment_replay_after_losing_the_cursor_skips_commits_it_already_has() {
+    let directory = tempfile::tempdir().unwrap();
+    let writer = initialized(directory.path(), "writer");
+    let remote = FakeWebDav::new(Default::default()).await;
+    sync::publish(&writer, &remote.client, "vault.mdbx", PASSWORD)
+        .await
+        .unwrap();
+    remote.seed_collection("vault.mdbx.sync");
+    add(&writer, "writer-only");
+    sync::synchronize(&writer, &remote.client, PASSWORD)
+        .await
+        .unwrap();
+
+    let reader = initialized(directory.path(), "reader");
+    sync::open_remote(&reader, &remote.client, "vault.mdbx", PASSWORD)
+        .await
+        .unwrap();
+    let before = reader
+        .load()
+        .unwrap()
+        .connections
+        .into_keys()
+        .collect::<Vec<_>>();
+    assert!(before.contains(&"writer-only".to_owned()));
+
+    // Local state is not part of the guarantee: the tree on the remote is. Losing
+    // the cursor has to cost one re-read, never a second copy of a commit.
+    std::fs::remove_file(reader.path.with_extension("sync.json")).unwrap();
+    let again = sync::synchronize(&reader, &remote.client, PASSWORD)
+        .await
+        .unwrap();
+    let report = again.segments.expect("a replayed stream is reported");
+    assert!(
+        report.skipped_commits > 0,
+        "the engine saw its own history again: {:?}",
+        report
+    );
+    assert_eq!(report.conflicts, 0);
+    assert_eq!(
+        reader
+            .load()
+            .unwrap()
+            .connections
+            .into_keys()
+            .collect::<Vec<_>>(),
+        before
+    );
+}
+
+#[tokio::test]
+async fn segment_stream_bytes_that_do_not_hash_to_their_name_are_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let writer = initialized(directory.path(), "writer");
+    let remote = FakeWebDav::new(Default::default()).await;
+    sync::publish(&writer, &remote.client, "vault.mdbx", PASSWORD)
+        .await
+        .unwrap();
+    remote.seed_collection("vault.mdbx.sync");
+    add(&writer, "writer-only");
+    sync::synchronize(&writer, &remote.client, PASSWORD)
+        .await
+        .unwrap();
+
+    // The bytes stay exactly as this device signed them; only the name is re-planted
+    // under another digest, which is what a lying or editing server produces.
+    let segment = remote
+        .files
+        .lock()
+        .unwrap()
+        .keys()
+        .find(|key| key.ends_with(".mdbxsync"))
+        .cloned()
+        .expect("the writer published a segment");
+    {
+        let (parent, name) = segment.rsplit_once('/').unwrap();
+        let sequence = name.split_once('-').unwrap().0;
+        let mut files = remote.files.lock().unwrap();
+        let bytes = files.remove(&segment).unwrap();
+        files.insert(
+            format!("{parent}/{sequence}-{}.mdbxsync", "b".repeat(64)),
+            bytes,
+        );
+    }
+
+    let reader = initialized(directory.path(), "reader");
+    assert_eq!(
+        sync::open_remote(&reader, &remote.client, "vault.mdbx", PASSWORD)
+            .await
+            .unwrap_err(),
+        GatewayError::SyncSegmentCorrupt,
+        "a segment that does not hash to its own name never reaches the engine"
+    );
+    let settled = reader.load().unwrap();
+    assert!(
+        settled.webdav.is_none(),
+        "a refused replay must not leave a remote configured"
+    );
+    assert!(!settled.connections.contains_key("writer-only"));
 }
 
 #[tokio::test]
@@ -181,8 +494,10 @@ async fn sync_etag_race_and_lost_upload_response_do_not_overwrite_or_repeat_writ
     let prior_remote = remote.files.lock().unwrap()["/dav/vault.mdbx"].clone();
     *remote.next_write.lock().unwrap() = Some(WriteFault::Race(b"racing remote revision".to_vec()));
     assert_eq!(
-        sync::synchronize(&store, &remote.client, PASSWORD).await,
-        Err(GatewayError::SyncConflict)
+        sync::synchronize(&store, &remote.client, PASSWORD)
+            .await
+            .unwrap_err(),
+        GatewayError::SyncConflict
     );
     assert_eq!(
         remote.files.lock().unwrap()["/dav/vault.mdbx"],
@@ -196,8 +511,10 @@ async fn sync_etag_race_and_lost_upload_response_do_not_overwrite_or_repeat_writ
         .insert("/dav/vault.mdbx".to_owned(), prior_remote);
     *remote.next_write.lock().unwrap() = Some(WriteFault::LoseResponse);
     assert_eq!(
-        sync::synchronize(&store, &remote.client, PASSWORD).await,
-        Err(GatewayError::SyncOutcomeUnknown)
+        sync::synchronize(&store, &remote.client, PASSWORD)
+            .await
+            .unwrap_err(),
+        GatewayError::SyncOutcomeUnknown
     );
     assert_eq!(std::fs::read(&store.path).unwrap(), previous_config);
     let put_count = remote
@@ -209,7 +526,8 @@ async fn sync_etag_race_and_lost_upload_response_do_not_overwrite_or_repeat_writ
     assert_eq!(
         sync::synchronize(&store, &remote.client, PASSWORD)
             .await
-            .unwrap(),
+            .unwrap()
+            .result,
         SyncResult::UpToDate
     );
     assert_eq!(
@@ -251,8 +569,10 @@ async fn sync_invalid_vault_password_and_busy_broker_preserve_configuration() {
     let guard = store.acquire_broker_lock().unwrap();
     let request_count = remote.server.requests().len();
     assert_eq!(
-        sync::synchronize(&store, &remote.client, PASSWORD).await,
-        Err(GatewayError::BrokerAlreadyRunning)
+        sync::synchronize(&store, &remote.client, PASSWORD)
+            .await
+            .unwrap_err(),
+        GatewayError::BrokerAlreadyRunning
     );
     assert_eq!(remote.server.requests().len(), request_count);
     assert_eq!(std::fs::read(&store.path).unwrap(), config);

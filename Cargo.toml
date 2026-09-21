@@ -23,6 +23,7 @@ futures-util = { version = "0.3", features = ["sink"] }
 hex = "0.4"
 mdbx-core = { path = "../mdbx/crates/mdbx-core" }
 mdbx-storage = { path = "../mdbx/crates/mdbx-storage", default-features = false, features = ["core"] }
+mdbx-sync = { path = "../mdbx/crates/mdbx-sync" }
 md-5 = "0.10.6"
 rand = "0.8"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }

@@ -92,6 +92,10 @@ pub struct Config {
     pub grants: Vec<Grant>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webdav: Option<crate::sync::RemoteBinding>,
+    /// Identity this device appends its segment stream under. Generated once and
+    /// never reused, because peers locate this device's history by that name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webdav_device_id: Option<String>,
 }
 
 impl Config {
@@ -105,6 +109,7 @@ impl Config {
             connections: BTreeMap::new(),
             grants: Vec::new(),
             webdav: None,
+            webdav_device_id: None,
         }
     }
 
@@ -118,6 +123,17 @@ impl Config {
         }
         if let Some(remote) = &self.webdav {
             remote.validate()?;
+        }
+        // The value names a remote directory, so it has to survive path
+        // normalisation, and the engine rejects device IDs outside this shape.
+        if self.webdav_device_id.as_ref().is_some_and(|id| {
+            id.is_empty()
+                || id.len() > 256
+                || !id
+                    .chars()
+                    .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || "-.".contains(ch))
+        }) {
+            return Err(GatewayError::InvalidConfig);
         }
         if self.version != 1
             || !self.vault.is_absolute()

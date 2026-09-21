@@ -8,6 +8,7 @@ pub mod i18n;
 pub mod keys;
 pub mod model;
 pub mod protocol;
+pub mod segment;
 pub mod service_api;
 pub mod sync;
 pub mod tui;

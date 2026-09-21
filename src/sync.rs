@@ -60,6 +60,25 @@ pub enum SyncResult {
     Uploaded,
     Downloaded,
     Published,
+    Merged,
+}
+
+/// What one `webdav sync` run achieved. `segments` is present only for a remote
+/// whose revisions live in the `.sync` tree, so the single-file payload an AI
+/// client has been reading stays exactly as it was.
+#[derive(Debug)]
+pub struct SyncOutcome {
+    pub result: SyncResult,
+    pub segments: Option<crate::segment::Report>,
+}
+
+impl From<SyncResult> for SyncOutcome {
+    fn from(result: SyncResult) -> Self {
+        Self {
+            result,
+            segments: None,
+        }
+    }
 }
 
 impl std::fmt::Display for SyncResult {
@@ -71,6 +90,7 @@ impl std::fmt::Display for SyncResult {
                 "Opened the new remote revision; the previous local copy is preserved."
             }
             Self::Published => "Published the encrypted vault and connected WebDAV sync.",
+            Self::Merged => "Merged commit-level segments with the remote stream.",
         })
     }
 }
@@ -165,19 +185,19 @@ fn hash_file(path: &Path) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-struct DownloadFile {
+pub(crate) struct DownloadFile {
     // Drop the open file before removing its directory and SQLite sidecars.
-    file: tempfile::NamedTempFile,
+    pub(crate) file: tempfile::NamedTempFile,
     _directory: tempfile::TempDir,
 }
 
 impl DownloadFile {
-    fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         self.file.path()
     }
 }
 
-fn download_file(store: &ConfigStore) -> Result<DownloadFile> {
+pub(crate) fn download_file(store: &ConfigStore) -> Result<DownloadFile> {
     ensure_parent(&store.path)?;
     let directory = tempfile::Builder::new()
         .prefix(".monica-download-")
@@ -215,6 +235,7 @@ fn replace_vault(
         if let Some(previous) = previous {
             remember_previous(store, &previous)?;
             config.listen = previous.listen;
+            config.webdav_device_id = previous.webdav_device_id;
         }
         // Switching vaults requires fresh explicit grants, even for the same vault ID.
         config.connections = inventory.connections;
@@ -256,7 +277,7 @@ pub async fn open_remote(
     let snapshot = Snapshot::new(store, download.path())?;
     let inventory = snapshot.inspect(password)?;
     let (local, local_sha256) = snapshot.install(store)?;
-    let binding = RemoteBinding {
+    let mut binding = RemoteBinding {
         profile: client.profile.clone(),
         path: normalize_path(path)?,
         vault_id: inventory.vault_id.clone(),
@@ -265,16 +286,26 @@ pub async fn open_remote(
         local_sha256,
         last_sync: chrono::Utc::now().timestamp(),
     };
-    replace_vault(
-        store,
-        local,
-        inventory,
-        Some(binding),
-        std::path::Path::new(path)
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .map(str::to_owned),
-    )
+    let inventory = if segment_sync_managed(client, &binding.path).await {
+        // The bootstrap is written once, so on its own it is a stale snapshot: the
+        // revisions that matter live in the `.sync` tree. Replay them into the
+        // installed copy before the configuration starts using it. The replay
+        // report is not surfaced here; `webdav sync` prints it from then on.
+        let device_id = crate::segment::device_id(store)?;
+        let (_, inventory) =
+            crate::segment::bootstrap(store, client, &local, &binding, &device_id, password)
+                .await?;
+        // `local_sha256` still means "the digest of the configured vault".
+        binding.local_sha256 = Snapshot::new(store, &local)?.sha256;
+        inventory
+    } else {
+        inventory
+    };
+    let name = std::path::Path::new(path)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .map(str::to_owned);
+    replace_vault(store, local, inventory, Some(binding), name)
 }
 
 /// Publishes to a new remote name only. It also provides a safe way to keep a
@@ -339,6 +370,45 @@ fn ensure_same_vault(current: &Config, previous: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Points the configuration at `vault` and re-imports what the file now holds.
+/// A segment merge can add, change or delete connections inside the same vault,
+/// so a grant only survives when its connection is still there with the same
+/// key material; anything else has to be authorized again by hand.
+fn apply_remote_vault(
+    store: &ConfigStore,
+    previous: &Config,
+    vault: PathBuf,
+    binding: RemoteBinding,
+    inventory: Option<GatewayInventory>,
+) -> Result<()> {
+    store.update(|current| {
+        let mut current = current.ok_or(GatewayError::NotFound)?;
+        ensure_same_vault(&current, previous)?;
+        let Some(inventory) = inventory else {
+            // Nothing of this vault's contents changed, so the cached connection list
+            // and the grants derived from it are still exactly right.
+            current.webdav = Some(binding);
+            return Ok((current, ()));
+        };
+        if current.vault != vault {
+            remember_previous(store, &current)?;
+            current.vault = vault;
+        }
+        current.collection_id = inventory.collection_id;
+        current.connections = inventory.connections;
+        current.grants.retain(|grant| {
+            current
+                .connections
+                .get(&grant.connection)
+                .is_some_and(|connection| {
+                    connection_fingerprint(connection) == grant.connection_fingerprint
+                })
+        });
+        current.webdav = Some(binding);
+        Ok((current, ()))
+    })
+}
+
 /// Android publishes `<name>.mdbx` once as an immutable bootstrap and keeps every
 /// later revision in a `<name>.mdbx.sync` folder. Replacing the bootstrap would
 /// strand each device tracking it, and comparing it reports a stale vault as
@@ -358,7 +428,7 @@ pub async fn synchronize(
     store: &ConfigStore,
     client: &WebDavClient,
     password: &str,
-) -> Result<SyncResult> {
+) -> Result<SyncOutcome> {
     // This OS lock excludes broker startup, grants, connections and other syncs.
     // Revocation remains allowed; every final config update preserves it.
     let _guard = store.acquire_broker_lock()?;
@@ -371,7 +441,24 @@ pub async fn synchronize(
         return Err(GatewayError::InvalidWebDav);
     }
     if segment_sync_managed(client, &binding.path).await {
-        return Err(GatewayError::RemoteProtocolUnsupported);
+        let device_id = crate::segment::device_id(store)?;
+        let (report, inventory) =
+            crate::segment::synchronize(store, client, &binding, &device_id, password).await?;
+        // The merge rewrote commits inside the configured vault, so the local
+        // digest the single-file protocol compares no longer describes it; only
+        // `last_sync` is meaningful here, and a segment remote never reads the
+        // pair back.
+        binding.last_sync = chrono::Utc::now().timestamp();
+        apply_remote_vault(store, &config, config.vault.clone(), binding, inventory)?;
+        let active = !report.is_quiet() || report.conflicts > 0 || report.blocked_streams > 0;
+        return Ok(SyncOutcome {
+            result: if active {
+                SyncResult::Merged
+            } else {
+                SyncResult::UpToDate
+            },
+            segments: active.then_some(report),
+        });
     }
     let local = Snapshot::new(store, &config.vault)?;
     let local_inventory = local.inspect(password)?;
@@ -384,13 +471,14 @@ pub async fn synchronize(
     let remote_changed = remote.sha256 != binding.remote_sha256;
     binding.etag = remote.etag.clone();
     binding.last_sync = chrono::Utc::now().timestamp();
+    let settled = SyncOutcome::from;
 
     // Also recovers an acknowledged/unknown upload whose config save did not finish.
     if remote.sha256 == local.sha256 || !local_changed && !remote_changed {
         binding.remote_sha256 = remote.sha256;
         binding.local_sha256 = local.sha256;
         update_binding(store, &config, binding)?;
-        return Ok(SyncResult::UpToDate);
+        return Ok(settled(SyncResult::UpToDate));
     }
     if local_changed && remote_changed {
         return Err(GatewayError::SyncConflict);
@@ -408,7 +496,7 @@ pub async fn synchronize(
         binding.etag = confirmed.etag;
         binding.local_sha256 = local.sha256;
         update_binding(store, &config, binding)?;
-        return Ok(SyncResult::Uploaded);
+        return Ok(settled(SyncResult::Uploaded));
     }
 
     let incoming = Snapshot::new(store, incoming.path())?;
@@ -419,25 +507,8 @@ pub async fn synchronize(
     let (path, baseline) = incoming.install(store)?;
     binding.local_sha256 = baseline;
     binding.remote_sha256 = remote.sha256;
-    store.update(|current| {
-        let mut current = current.ok_or(GatewayError::NotFound)?;
-        ensure_same_vault(&current, &config)?;
-        remember_previous(store, &current)?;
-        current.vault = path;
-        current.collection_id = inventory.collection_id;
-        current.connections = inventory.connections;
-        current.grants.retain(|grant| {
-            current
-                .connections
-                .get(&grant.connection)
-                .is_some_and(|connection| {
-                    connection_fingerprint(connection) == grant.connection_fingerprint
-                })
-        });
-        current.webdav = Some(binding);
-        Ok((current, ()))
-    })?;
-    Ok(SyncResult::Downloaded)
+    apply_remote_vault(store, &config, path, binding, Some(inventory))?;
+    Ok(settled(SyncResult::Downloaded))
 }
 
 #[cfg(test)]

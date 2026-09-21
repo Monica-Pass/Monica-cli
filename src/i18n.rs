@@ -236,6 +236,8 @@ impl Language {
             GatewayError::SyncConflict => Message::ErrorSyncConflict,
             GatewayError::RemoteVersionRequired => Message::ErrorRemoteVersionRequired,
             GatewayError::RemoteProtocolUnsupported => Message::ErrorRemoteProtocolUnsupported,
+            GatewayError::SyncStateMissing => Message::ErrorSyncStateMissing,
+            GatewayError::SyncSegmentCorrupt => Message::ErrorSyncSegmentCorrupt,
             GatewayError::SyncOutcomeUnknown => Message::ErrorSyncOutcomeUnknown,
             GatewayError::InvalidVault => Message::ErrorInvalidVault,
             GatewayError::VaultSchemaUnsupported => Message::ErrorVaultSchemaUnsupported,
@@ -256,7 +258,48 @@ impl Language {
             SyncResult::Uploaded => Message::SyncUploaded,
             SyncResult::Downloaded => Message::SyncDownloaded,
             SyncResult::Published => Message::SyncPublished,
+            SyncResult::Merged => Message::SyncMerged,
         })
+    }
+
+    pub fn segment_report(self, report: &crate::segment::Report) -> String {
+        if report.is_quiet()
+            && report.applied_commits == 0
+            && report.conflicts == 0
+            && report.blocked_streams == 0
+        {
+            return self.text(Message::SyncUpToDate).to_owned();
+        }
+        let mut line = self.format(
+            Message::CliSegmentReport,
+            &[
+                ("downloaded", &report.downloaded_segments),
+                ("uploaded", &report.uploaded_segments),
+                ("applied", &report.applied_commits),
+                ("skipped", &report.skipped_commits),
+            ],
+        );
+        if report.conflicts > 0 {
+            line.push_str(&self.format(
+                Message::CliSegmentConflicts,
+                &[("conflicts", &report.conflicts)],
+            ));
+        }
+        if report.blocked_streams > 0 {
+            line.push_str(&self.format(
+                Message::CliSegmentWaiting,
+                &[("streams", &report.blocked_streams)],
+            ));
+        }
+        line
+    }
+
+    /// The one line a sync run reports, whichever remote layout it used.
+    pub fn sync_message(self, outcome: &crate::sync::SyncOutcome) -> String {
+        match &outcome.segments {
+            Some(report) => self.segment_report(report),
+            None => self.sync_result(outcome.result).to_owned(),
+        }
     }
 }
 

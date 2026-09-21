@@ -103,9 +103,17 @@ pub enum GatewayError {
     )]
     RemoteVersionRequired,
     #[error(
-        "The remote vault is managed by Android segment sync, which keeps newer revisions in a sidecar .sync folder. Single-file sync must not replace that file, and neither copy was changed."
+        "A segment stream holds a complete-vault bundle instead of an incremental segment. Merging it blind would discard local commits, so nothing was applied and neither copy changed."
     )]
     RemoteProtocolUnsupported,
+    #[error(
+        "The local segment cursor is missing or belongs to another vault. Reopen the remote vault to rebuild it; no remote file was changed."
+    )]
+    SyncStateMissing,
+    #[error(
+        "A remote segment does not match the digest in its name, or its stored bytes changed after upload. Nothing was applied."
+    )]
+    SyncSegmentCorrupt,
     #[error(
         "The upload outcome is unknown. Compare both copies before retrying: sync an existing connection, or open the remote file after an initial publish."
     )]

@@ -335,6 +335,34 @@ impl WebDavClient {
         source: &Path,
         condition: WriteCondition<'_>,
     ) -> Result<()> {
+        let status = self.put(path, source, condition).await?;
+        check_status(status)?;
+        if !matches!(status.as_u16(), 200 | 201 | 204) {
+            return Err(GatewayError::SyncOutcomeUnknown);
+        }
+        Ok(())
+    }
+
+    /// Creates one immutable, content-addressed object. `Ok(false)` means the server already
+    /// holds that name, which is only benign once the caller has compared the stored bytes.
+    pub async fn create_immutable(&self, path: &str, source: &Path) -> Result<bool> {
+        let status = self.put(path, source, WriteCondition::Create).await?;
+        match status.as_u16() {
+            200 | 201 | 204 => Ok(true),
+            412 => Ok(false),
+            _ => {
+                check_status(status)?;
+                Err(GatewayError::SyncOutcomeUnknown)
+            }
+        }
+    }
+
+    async fn put(
+        &self,
+        path: &str,
+        source: &Path,
+        condition: WriteCondition<'_>,
+    ) -> Result<reqwest::StatusCode> {
         if path.is_empty() {
             return Err(GatewayError::InvalidWebDav);
         }
@@ -370,11 +398,40 @@ impl WebDavClient {
         if response.status().is_server_error() {
             return Err(GatewayError::SyncOutcomeUnknown);
         }
-        check_status(response.status())?;
-        if !matches!(response.status().as_u16(), 200 | 201 | 204) {
-            return Err(GatewayError::SyncOutcomeUnknown);
+        Ok(response.status())
+    }
+
+    /// Creates a collection. Servers reject a repeated MKCOL with 405, 409, 412 or 501 rather
+    /// than agreeing on one answer, so a failed reply is confirmed with a Depth:1 PROPFIND.
+    pub async fn create_collection(&self, path: &str) -> Result<()> {
+        let path = normalize_path(path)?;
+        if path.is_empty() {
+            return Err(GatewayError::InvalidWebDav);
         }
-        Ok(())
+        let response = self
+            .request(
+                reqwest::Method::from_bytes(b"MKCOL").unwrap(),
+                self.url(&path, true)?,
+            )?
+            .send()
+            .await
+            .map_err(|_| GatewayError::WebDavUnavailable)?;
+        let status = response.status();
+        drop(response);
+        if status.is_success() {
+            return Ok(());
+        }
+        let error = match check_status(status) {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
+        if error == GatewayError::WebDavUnauthorized {
+            return Err(error);
+        }
+        if self.list(&path).await.is_ok() {
+            return Ok(());
+        }
+        Err(error)
     }
 }
 

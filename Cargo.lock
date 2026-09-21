@@ -1581,6 +1581,7 @@ dependencies = [
  "md-5",
  "mdbx-core",
  "mdbx-storage",
+ "mdbx-sync",
  "percent-encoding",
  "rand 0.8.8",
  "ratatui",

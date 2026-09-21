@@ -428,8 +428,13 @@ async fn webdav_command(
             None
         };
         let safe_remote_replace = binding.as_ref().map(|binding| binding.etag.is_some());
-        let data = json!({"profile":profile, "sync":binding, "password_saved":false, "safe_remote_replace":safe_remote_replace});
-        return output.result("webdav status", data.clone(), Some(&data));
+        let segments = binding
+            .as_ref()
+            .map(|binding| monica_pass_cli::segment::status(&store, &binding.vault_id))
+            .transpose()?;
+        let data = json!({"profile":profile, "sync":binding, "password_saved":false, "safe_remote_replace":safe_remote_replace, "segments":segments});
+        let human = (!output.json).then(|| cli_table::render_webdav_status(&data, lang));
+        return output.result_text("webdav status", data, human);
     }
     let profile = match &command {
         WebDavCommand::Login { url, username } => WebDavProfile::new(url, username)?,
@@ -486,10 +491,14 @@ async fn webdav_command(
         WebDavCommand::Sync => {
             let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;
-            let result = monica_pass_cli::sync::synchronize(&store, &client, &password).await?;
-            output.result("webdav sync", json!({"result":result}), None)?;
+            let outcome = monica_pass_cli::sync::synchronize(&store, &client, &password).await?;
+            let data = match &outcome.segments {
+                Some(report) => json!({"result":outcome.result,"segments":report}),
+                None => json!({"result":outcome.result}),
+            };
+            output.result("webdav sync", data, None)?;
             if !output.json {
-                println!("{}", lang.sync_result(result));
+                println!("{}", lang.sync_message(&outcome));
             }
         }
         WebDavCommand::Status => unreachable!("status does not need a login"),

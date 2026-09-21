@@ -1111,10 +1111,10 @@ impl App {
             Outcome::Message(message) => self.info(lang.text(message)),
             Outcome::Revoked(name) => self.info(tr!(lang, RevokedHint, name = name)),
             Outcome::Opened(count) => self.info(tr!(lang, OpenedHint, count = count)),
-            Outcome::Synced(result) => self.info(tr!(
+            Outcome::Synced(outcome) => self.info(tr!(
                 lang,
                 SyncFinishedHint,
-                result = lang.sync_result(result)
+                result = lang.sync_message(&outcome)
             )),
             Outcome::Broker(broker) => {
                 self.broker = Some(broker);

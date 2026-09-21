@@ -264,6 +264,158 @@ pub fn render_status(status: &Value, lang: Language) -> String {
     out.trim_end().to_string()
 }
 
+/// Peer streams are one row per device generation, and a long-lived remote accumulates
+/// dozens, so the summary prints a bounded prefix; `--json` still carries them all.
+const MAX_WAITING_ROWS: usize = 8;
+
+/// A segment is named `<sequence>-<64 hex>.mdbxsync`, and only the sequence and a
+/// recognisable slice of the digest fit a status line. `--json` keeps the full path.
+fn short_segment_name(path: &str) -> String {
+    let (parent, name) = path.rsplit_once('/').unwrap_or(("", path));
+    let prefix = if parent.is_empty() {
+        String::new()
+    } else {
+        format!("{parent}/")
+    };
+    let Some((sequence, digest)) = name.split_once('-') else {
+        return path.to_string();
+    };
+    let digest = digest.strip_suffix(".mdbxsync").unwrap_or(digest);
+    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return path.to_string();
+    }
+    format!(
+        "{prefix}{sequence}-{}…{}.mdbxsync",
+        &digest[..8],
+        &digest[56..]
+    )
+}
+
+/// Segment paths start with the `<vault>.sync/` root that the WebDAV line already names,
+/// so the pending line prints from `streams/` on: the device, generation and sequence are
+/// what a status line has to add. `--json` keeps the full remote path.
+fn relative_segment_path<'a>(binding: &Value, remote: &'a str) -> &'a str {
+    let root = format!("{}.sync/", string(binding, "path"));
+    remote.strip_prefix(root.as_str()).unwrap_or(remote)
+}
+
+/// Cursors store a stable token so `--json` never has to reword a machine contract. A
+/// token this build does not know prints as stored rather than disappearing.
+fn segment_reason(lang: Language, token: &str) -> String {
+    use monica_pass_cli::segment::{
+        WAITING_AFTER_COMPLETION, WAITING_EARLIER_SEGMENT, WAITING_PARENT_COMMIT,
+        WAITING_PATH_MISMATCH,
+    };
+    match token {
+        WAITING_EARLIER_SEGMENT => tr!(lang, StatusWaitingEarlierSegment),
+        WAITING_PARENT_COMMIT => tr!(lang, StatusWaitingParentCommit),
+        WAITING_AFTER_COMPLETION => tr!(lang, StatusWaitingAfterCompletion),
+        WAITING_PATH_MISMATCH => tr!(lang, StatusWaitingPathMismatch),
+        _ => token,
+    }
+    .to_string()
+}
+
+/// `webdav status` answers without a login, so every line comes from the local
+/// configuration and the transport cursor: no request and no vault password.
+pub fn render_webdav_status(status: &Value, lang: Language) -> String {
+    let binding = &status["sync"];
+    let webdav = if binding.is_null() {
+        tr!(lang, StatusOff).to_string()
+    } else {
+        let profile = &binding["profile"];
+        let mut text = format!(
+            "{}@{} · {}",
+            string(profile, "username"),
+            string(profile, "base_url"),
+            string(binding, "path")
+        );
+        if status["safe_remote_replace"].as_bool().unwrap_or(false) {
+            text.push_str(&format!(" · {}", tr!(lang, StatusSafeReplace)));
+        }
+        text
+    };
+    let mut fields = vec![("WebDAV".to_string(), webdav)];
+    let segments = &status["segments"];
+    if !segments.is_null() {
+        if segments["tracked"].as_bool().unwrap_or(false) {
+            let mut text = match string(segments, "export_base").as_str() {
+                "bootstrap" => tr!(lang, StatusSegmentBaseBootstrap),
+                "anchored" => tr!(lang, StatusSegmentBaseAnchored),
+                _ => tr!(lang, StatusSegmentBaseUnset),
+            }
+            .to_string();
+            if segments["generation_open"].as_bool().unwrap_or(false) {
+                text.push_str(&format!(" · {}", tr!(lang, StatusSegmentGenerationOpen)));
+            }
+            text.push_str(&format!(
+                " · {}",
+                tr!(
+                    lang,
+                    StatusSegmentStreams,
+                    streams = segments["streams"].as_u64().unwrap_or(0),
+                    complete = segments["complete_streams"].as_u64().unwrap_or(0),
+                )
+            ));
+            fields.push((tr!(lang, StatusSegmentsLabel).to_string(), text));
+        } else {
+            fields.push((
+                tr!(lang, StatusSegmentsLabel).to_string(),
+                tr!(lang, StatusSegmentUntracked).to_string(),
+            ));
+        }
+        let pending = &segments["pending_upload"];
+        if let Some(remote) = pending["remote"].as_str() {
+            fields.push((
+                tr!(lang, StatusSegmentPendingLabel).to_string(),
+                format!(
+                    "{} · {} B",
+                    short_segment_name(relative_segment_path(binding, remote)),
+                    pending["size"].as_u64().unwrap_or(0)
+                ),
+            ));
+        }
+    }
+    let label_width = fields
+        .iter()
+        .map(|(label, _)| width(label))
+        .max()
+        .unwrap_or(0);
+    let mut out = String::new();
+    for (label, value) in &fields {
+        out.push_str(&pad(label, label_width));
+        out.push_str("  ");
+        out.push_str(value);
+        out.push('\n');
+    }
+    let waiting: Vec<&Value> = segments["waiting"]
+        .as_array()
+        .map(|array| array.iter().collect())
+        .unwrap_or_default();
+    if !waiting.is_empty() {
+        out.push('\n');
+        let headers = [tr!(lang, TableColumnStream), tr!(lang, TableColumnReason)];
+        let shown = waiting.len().min(MAX_WAITING_ROWS);
+        let rows: Vec<Vec<String>> = waiting[..shown]
+            .iter()
+            .map(|entry| {
+                vec![
+                    string(entry, "stream"),
+                    segment_reason(lang, &string(entry, "reason")),
+                ]
+            })
+            .collect();
+        out.push_str(&render_table(&headers, &rows));
+        let hidden = waiting.len() - shown;
+        if hidden > 0 {
+            out.push('\n');
+            out.push_str(&tr!(lang, StatusSegmentMore, count = hidden));
+        }
+        out.push('\n');
+    }
+    out.trim_end().to_string()
+}
+
 /// One line per key entry. `KeyEntrySummary` is already the public projection, so no cell here
 /// can carry key material; the private column only says whether the vault holds one.
 pub fn render_keys(entries: &[KeyEntrySummary], lang: Language) -> String {
@@ -306,8 +458,8 @@ pub fn render_keys(entries: &[KeyEntrySummary], lang: Language) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        KeyEntrySummary, Value, render_connection_detail, render_connections, render_keys,
-        render_status,
+        KeyEntrySummary, MAX_WAITING_ROWS, Value, render_connection_detail, render_connections,
+        render_keys, render_status, render_webdav_status, short_segment_name,
     };
     use monica_pass_cli::i18n::Language;
     use monica_pass_cli::keys::payload::{LOGIN_TYPE_GPG, LOGIN_TYPE_SSH};
@@ -498,5 +650,124 @@ mod tests {
         let empty = render_status(&status, Language::En);
         assert!(empty.ends_with("No AI grants yet."), "{empty}");
         assert!(!empty.contains("for this connection"), "{empty}");
+    }
+
+    fn webdav_status_fixture(waiting: usize) -> Value {
+        json!({
+            "profile": {"username":"joy","base_url":"https://dav.example/dav"},
+            "sync": {
+                "profile": {"username":"joy","base_url":"https://dav.example/dav"},
+                "path": "vault.mdbx",
+                "vault_id": "0f6f0f6f-0f6f-4f6f-8f6f-0f6f0f6f0f6f",
+                "etag": "\"abc\"",
+                "remote_sha256": "a".repeat(64),
+                "local_sha256": "b".repeat(64),
+                "last_sync": 0,
+            },
+            "password_saved": false,
+            "safe_remote_replace": true,
+            "segments": {
+                "tracked": true,
+                "export_base": "anchored",
+                "generation_open": false,
+                "pending_upload": {
+                    "remote": format!(
+                        "vault.mdbx.sync/streams/dev/1/segments/0000000001-{}.mdbxsync",
+                        "c".repeat(64)
+                    ),
+                    "size": 4096,
+                },
+                "streams": 12,
+                "complete_streams": 5,
+                "waiting": (0..waiting)
+                    .map(|index| json!({
+                        "stream": format!("dev{index}/generation"),
+                        "reason": monica_pass_cli::segment::WAITING_PARENT_COMMIT,
+                    }))
+                    .collect::<Vec<_>>(),
+            },
+        })
+    }
+
+    #[test]
+    fn webdav_status_shows_the_cursor_and_bounds_a_long_wait_list() {
+        let out = render_webdav_status(&webdav_status_fixture(10), Language::En);
+        let lines: Vec<&str> = out.lines().collect();
+        assert!(
+            lines[0].ends_with("joy@https://dav.example/dav · vault.mdbx · safe replace"),
+            "{out}"
+        );
+        assert!(lines[1].starts_with("Segments"), "{out}");
+        assert!(
+            lines[1].contains("anchored · 12 stream(s), 5 complete"),
+            "{}",
+            lines[1]
+        );
+        assert!(lines[2].starts_with("Pending upload"), "{out}");
+        assert!(
+            lines[2]
+                .ends_with("streams/dev/1/segments/0000000001-cccccccc…cccccccc.mdbxsync · 4096 B"),
+            "{out}"
+        );
+        assert_eq!(
+            lines[0].find("joy@").unwrap(),
+            lines[1].find("anchored").unwrap(),
+            "values share one column whatever the label widths"
+        );
+        assert_eq!(
+            lines[0].find("joy@").unwrap(),
+            lines[2].find("streams/").unwrap(),
+            "the longest label still has to keep that column"
+        );
+        assert!(
+            !lines[2].contains("vault.mdbx.sync"),
+            "the WebDAV line already names the sync root: {out}"
+        );
+        assert_eq!(
+            short_segment_name("streams/dev-a/segments/7-not-a-digest.mdbxsync"),
+            "streams/dev-a/segments/7-not-a-digest.mdbxsync",
+            "an unexpected name must print in full rather than guess at its shape"
+        );
+        assert_eq!(
+            out.matches("waiting for a parent commit").count(),
+            MAX_WAITING_ROWS,
+            "{out}"
+        );
+        assert!(out.ends_with("… and 2 more (see --json)"), "{out}");
+
+        let zh = render_webdav_status(&webdav_status_fixture(1), Language::ZhCn);
+        assert!(zh.contains("分段同步") && zh.contains("已锚定"), "{zh}");
+        assert!(zh.contains("12 个流，5 个已完成"), "{zh}");
+        assert!(!zh.contains("Waiting"), "{zh}");
+        assert!(zh.contains("等待父提交"), "{zh}");
+        assert!(!zh.contains("waiting_for_parent_commit"), "{zh}");
+
+        let mut future = webdav_status_fixture(1);
+        future["segments"]["waiting"][0]["reason"] = json!("reason_from_a_newer_client");
+        assert!(
+            render_webdav_status(&future, Language::ZhCn).contains("reason_from_a_newer_client"),
+            "an unknown token must still reach the user"
+        );
+
+        let mut unstarted = webdav_status_fixture(1);
+        unstarted["segments"]["tracked"] = json!(false);
+        unstarted["segments"]["pending_upload"] = json!(null);
+        unstarted["segments"]["waiting"] = json!([]);
+        let idle = render_webdav_status(&unstarted, Language::En);
+        assert!(
+            idle.contains("Segments") && idle.contains("no segment run yet"),
+            "{idle}"
+        );
+        assert!(!idle.contains("Pending upload"), "{idle}");
+
+        unstarted["sync"] = json!(null);
+        unstarted["segments"] = json!(null);
+        assert_eq!(
+            render_webdav_status(&unstarted, Language::ZhCn)
+                .lines()
+                .next()
+                .unwrap(),
+            "WebDAV  未启用"
+        );
     }
 }

@@ -203,7 +203,7 @@ pub(super) enum Outcome {
     Message(Message),
     Revoked(String),
     Opened(usize),
-    Synced(sync::SyncResult),
+    Synced(sync::SyncOutcome),
     Broker(BrokerSession),
     Login {
         client: WebDavClient,
@@ -503,7 +503,7 @@ pub(super) async fn perform(
         Action::Publish { path, password } => {
             let client = webdav.ok_or(GatewayError::WebDavUnauthorized)?;
             let result = sync::publish(&store, &client, &path, &password).await?;
-            Ok(Outcome::Synced(result))
+            Ok(Outcome::Synced(result.into()))
         }
         Action::Sync(password) => {
             let client = webdav.ok_or(GatewayError::WebDavUnauthorized)?;

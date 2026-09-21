@@ -804,6 +804,28 @@ impl Vault {
             .map_err(|_| GatewayError::StateUnavailable)
     }
 
+    /// Which vault this file is, without disclosing a single secret.
+    ///
+    /// `gateway_inventory` reveals every token it lists and each reveal writes a
+    /// security-audit row, which the schema triggers turn into a pending sync delta
+    /// this device then owes its peers. A read that only has to prove identity has
+    /// to stay out of that path.
+    pub(crate) fn gateway_binding(&self) -> Result<String> {
+        let connection = self
+            .runtime
+            .write()
+            .map_err(|_| GatewayError::StateUnavailable)?;
+        let counts = connection
+            .diagnostics_summary()
+            .map_err(|_| GatewayError::InvalidVault)?;
+        if counts.external_attachment_count > 0 {
+            return Err(GatewayError::ExternalBlobsUnsupported);
+        }
+        connection
+            .vault_id()
+            .map_err(|_| GatewayError::InvalidVault)
+    }
+
     pub(crate) fn gateway_inventory(&self) -> Result<GatewayInventory> {
         let mut connection = self
             .runtime

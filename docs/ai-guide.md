@@ -244,7 +244,7 @@ Monica CLI 是本机的凭据代理。服务 Token 与数据库主密码由人�
 
 **管理侧才会出现的码（你无权触发，收到即说明你在做不该做的事）**
 
-`invalid_config`、`already_exists`、`not_found`、`password_requirements`、`listen_unavailable`、`broker_already_running`、`human_terminal_required`、`secret_input_required`、`invalid_secret_input`、`credential_unavailable`、`state_unavailable`，以及全部 WebDAV / 保险库码：`invalid_web_dav`、`web_dav_unauthorized`、`web_dav_unavailable`、`invalid_web_dav_response`、`remote_not_found`、`sync_conflict`、`remote_version_required`、`remote_protocol_unsupported`、`sync_outcome_unknown`、`invalid_vault`、`vault_schema_unsupported`、`external_blobs_unsupported`、`vault_connections_invalid`、`remote_not_configured`。
+`invalid_config`、`already_exists`、`not_found`、`password_requirements`、`listen_unavailable`、`broker_already_running`、`human_terminal_required`、`secret_input_required`、`invalid_secret_input`、`credential_unavailable`、`state_unavailable`，以及全部 WebDAV / 保险库码：`invalid_web_dav`、`web_dav_unauthorized`、`web_dav_unavailable`、`invalid_web_dav_response`、`remote_not_found`、`sync_conflict`、`remote_version_required`、`remote_protocol_unsupported`、`sync_state_missing`、`sync_segment_corrupt`、`sync_outcome_unknown`、`invalid_vault`、`vault_schema_unsupported`、`external_blobs_unsupported`、`vault_connections_invalid`、`remote_not_configured`。
 
 看到这些码时：立即停止该方向，把错误码原文报给人，不要试图改用其他命令或路径达成同一目的。
 

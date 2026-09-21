@@ -376,10 +376,11 @@ monica webdav sync
 ```
 
 - 命令行的每次 WebDAV 网络操作都要会话密码（隐藏输入或 `--secrets-stdin`），命令结束即清除；地址与用户名会记住。
-- `webdav status --json` 不联网即可查看已存档案与同步绑定。
-- **覆盖远端文件需要强 ETag**。部分服务（本次实测的坚果云）不返回强 ETag，此时 `safe_remote_replace: false`，只能新建上传、读取和下载；有本地改动就 `publish` 成一个新文件名。程序不会强制覆盖。
-- **远端由 Android 分段同步维护时，CLI 一律不写**。同名加 `.sync` 的远端文件夹说明该库的新版本以内容寻址分段保存在其中，`.mdbx` 本身只是一次性发布的初始副本：比较它会误报「已是最新」，覆盖它会让其他设备失去基准。因此 `sync` 在任何读写之前返回 `remote_protocol_unsupported`，本地与远端都不改动，这类库的同步请回 Monica 客户端做。
-- 双方都有改动时报 `sync_conflict`，**两份都会保留**，需要你核对后再处理。
+- `webdav status --json` 不联网即可查看已存档案、同步绑定与分段游标（`segments`）。
+- **整文件模式覆盖远端需要强 ETag**。部分服务（本次实测的坚果云）不返回强 ETag，此时 `safe_remote_replace: false`，只能新建上传、读取和下载；有本地改动就 `publish` 成一个新文件名。程序不会强制覆盖。
+- **远端有同名加 `.sync` 的文件夹时，自动改用分段流合并**。那种库里 `.mdbx` 只是一次性发布的初始副本——比较它会误报「已是最新」，覆盖它会让其他设备失去基准——新版本以内容寻址的分段保存在 `.sync/streams/<设备>/<代>/segments/` 下。CLI 只往自己设备名下的流追加不可变分段，每个分段写完都读回核对摘要，收到的提交不会回推；合并由引擎按提交完成，不需要强 ETag，也不用你手工挑一边。
+- 分段模式**与手机 Monica 的真机互通尚未实测**，目前验证到的是两台 CLI 设备在服务器上的双向收敛。细节与偏差见 [docs/segment-sync.md](segment-sync.md) 第 12 节。
+- 整文件模式下双方都有改动时报 `sync_conflict`，**两份都会保留**，需要你核对后再处理。
 - 只支持自包含、不超过 64 MiB 的 MDBX；带外置附件 `.blobs` 的库返回 `external_blobs_unsupported`。
 - 打开另一份保险库会保留原本地文件，但**清除现有全部 AI 授权**。
 
@@ -525,7 +526,9 @@ monica keys export 工作机 -o id_ed25519.pub          # 只出公钥
 | 远端文件不存在 | `remote_not_found` | `monica dav ls` 确认文件名 |
 | 双方都有改动 | `sync_conflict` | 两份都保留了；核对后把本地 `publish` 到新远端名 |
 | 服务端不给强 ETag | `remote_version_required` | 远端文件未被覆盖，读取照常；本机库请 `publish` 到新远端名，程序不会强推 |
-| 远端是 Android 分段同步库 | `remote_protocol_unsupported` | 远端已有 `<库名>.sync` 文件夹，CLI 不读写它；两份数据都原样保留，同步回 Monica 客户端做 |
+| 分段里放的是整库快照 | `remote_protocol_unsupported` | `.sync` 流里出现了完整 bundle 而非增量分段，直接合并会丢掉本地提交，所以未应用任何数据；这类库请回 Monica 客户端处理 |
+| 分段与文件名对不上 | `sync_segment_corrupt` | 远端分段被改写，或上传后服务器存下的字节不是发出的字节；未应用任何数据，游标未推进，可重跑 `webdav sync` |
+| 本地分段游标暂存丢了 | `sync_state_missing` | 待推分段的本地暂存字节缺失或属于旧基准；重新 `webdav open` 重建游标即可，远端分段不可变，不会丢数据 |
 | 上传结果不确定 | `sync_outcome_unknown` | 先比对两份再重试：已连接用 `sync`，首发后用 `open` |
 | 下载的文件不是可用库 | `invalid_vault` | 确认是 MDBX 文件且完整；换原始副本重试 |
 | 旧 Android 库打不开 | `vault_schema_unsupported` | `MDBX-1` 与本机不兼容，保留原文件，改用原生 MDBX3 库；改扩展名无效 |
