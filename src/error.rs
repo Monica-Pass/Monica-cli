@@ -99,9 +99,13 @@ pub enum GatewayError {
     )]
     SyncConflict,
     #[error(
-        "The remote server did not provide a strong ETag. Read or publish to a new filename; safe replacement requires an ETag."
+        "The remote server did not provide a strong ETag, so the remote file was not replaced. Reading still works; safe replacement requires ETag support."
     )]
     RemoteVersionRequired,
+    #[error(
+        "The remote vault is managed by Android segment sync, which keeps newer revisions in a sidecar .sync folder. Single-file sync must not replace that file, and neither copy was changed."
+    )]
+    RemoteProtocolUnsupported,
     #[error(
         "The upload outcome is unknown. Compare both copies before retrying: sync an existing connection, or open the remote file after an initial publish."
     )]

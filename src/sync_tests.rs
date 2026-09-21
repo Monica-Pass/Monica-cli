@@ -131,6 +131,44 @@ async fn sync_real_mdbx_roundtrip_preserves_old_copies_and_detects_divergence() 
 }
 
 #[tokio::test]
+async fn android_segment_layout_is_refused_before_the_bootstrap_is_replaced() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = initialized(directory.path(), "writer");
+    let remote = FakeWebDav::new(
+        [(
+            "/dav/Mdbx/vault.mdbx.sync/streams/android-device/generation-1/segments/0000000000-integrity.mdbxsync".to_owned(),
+            b"encrypted android segment".to_vec(),
+        )]
+        .into(),
+    )
+    .await;
+    sync::publish(&store, &remote.client, "Mdbx/vault.mdbx", PASSWORD)
+        .await
+        .unwrap();
+    add(&store, "changed-after-android");
+    let local_config = std::fs::read(&store.path).unwrap();
+    let bootstrap = remote.files.lock().unwrap()["/dav/Mdbx/vault.mdbx"].clone();
+    let requests = remote.server.requests().len();
+
+    let error = sync::synchronize(&store, &remote.client, PASSWORD)
+        .await
+        .unwrap_err();
+    assert_eq!(error, GatewayError::RemoteProtocolUnsupported);
+    assert!(error.to_string().contains(".sync"), "{error}");
+    assert_eq!(std::fs::read(&store.path).unwrap(), local_config);
+    assert_eq!(
+        remote.files.lock().unwrap()["/dav/Mdbx/vault.mdbx"],
+        bootstrap
+    );
+    assert!(
+        remote.server.requests()[requests..]
+            .iter()
+            .all(|request| request.method != "PUT"),
+        "a detected segment vault must never be written to"
+    );
+}
+
+#[tokio::test]
 async fn sync_etag_race_and_lost_upload_response_do_not_overwrite_or_repeat_writes() {
     let directory = tempfile::tempdir().unwrap();
     let store = initialized(directory.path(), "writer");

@@ -88,6 +88,16 @@ impl FakeWebDav {
                         return response(404, Vec::new(), None);
                     }
                     let mut xml = format!(r#"<d:multistatus xmlns:d="DAV:"><d:response><d:href>{path}</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"#);
+                    for name in files.keys().filter(|key| key.starts_with(&path)) {
+                        let mut ancestor = path.clone();
+                        for part in name[path.len()..].split('/') {
+                            ancestor.push_str(part);
+                            if ancestor != *name {
+                                xml.push_str(&format!(r#"<d:response><d:href>{ancestor}/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"#));
+                            }
+                            ancestor.push('/');
+                        }
+                    }
                     for (name, bytes) in files.iter().filter(|(key, _)| key.starts_with(&path)) {
                         let etag = etag(bytes).replace('"', "&quot;");
                         xml.push_str(&format!(r#"<d:response><d:href>{name}</d:href><d:propstat><d:prop><d:resourcetype/><d:getcontentlength>{}</d:getcontentlength><d:getetag>{etag}</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"#, bytes.len()));

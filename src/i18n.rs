@@ -235,6 +235,7 @@ impl Language {
             GatewayError::RemoteNotFound => Message::ErrorRemoteNotFound,
             GatewayError::SyncConflict => Message::ErrorSyncConflict,
             GatewayError::RemoteVersionRequired => Message::ErrorRemoteVersionRequired,
+            GatewayError::RemoteProtocolUnsupported => Message::ErrorRemoteProtocolUnsupported,
             GatewayError::SyncOutcomeUnknown => Message::ErrorSyncOutcomeUnknown,
             GatewayError::InvalidVault => Message::ErrorInvalidVault,
             GatewayError::VaultSchemaUnsupported => Message::ErrorVaultSchemaUnsupported,

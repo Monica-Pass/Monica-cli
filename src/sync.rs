@@ -339,6 +339,21 @@ fn ensure_same_vault(current: &Config, previous: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Android publishes `<name>.mdbx` once as an immutable bootstrap and keeps every
+/// later revision in a `<name>.mdbx.sync` folder. Replacing the bootstrap would
+/// strand each device tracking it, and comparing it reports a stale vault as
+/// up to date, so neither outcome is safe to compute from a single file.
+async fn segment_sync_managed(client: &WebDavClient, path: &str) -> bool {
+    let marker = format!("{path}.sync");
+    let nested = format!("{marker}/");
+    let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
+    client.list(parent).await.is_ok_and(|entries| {
+        entries
+            .into_iter()
+            .any(|entry| entry.path == marker || entry.path.starts_with(&nested))
+    })
+}
+
 pub async fn synchronize(
     store: &ConfigStore,
     client: &WebDavClient,
@@ -354,6 +369,9 @@ pub async fn synchronize(
         .ok_or(GatewayError::RemoteNotConfigured)?;
     if client.profile != binding.profile {
         return Err(GatewayError::InvalidWebDav);
+    }
+    if segment_sync_managed(client, &binding.path).await {
+        return Err(GatewayError::RemoteProtocolUnsupported);
     }
     let local = Snapshot::new(store, &config.vault)?;
     let local_inventory = local.inspect(password)?;
