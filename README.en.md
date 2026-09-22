@@ -221,6 +221,8 @@ monica-pass ck work-github
 | Status / WebDAV / command discovery | `status` / `webdav` / `commands` | `st` / `dav` / `cmds` |
 | Delete a connection or entry / delete an empty category | `delete` / `delete-category` | `rm`, `del` / `rmdir` |
 
+`audit` reads the local gateway trail (`--grant <name>` to filter, `--limit <n>` for the most recent rows, newest first). It needs no master password and never contains credential material.
+
 Use `-r` for a repository, `-p` for the provider, `-n` for a purpose note, `-t` for grant lifetime, and `-s` to serve after adding. Global `-C` selects the configuration file and `-l` selects the language. TUI keys remain as shown in its footer.
 
 `show` selects a connection name and displays its public purpose and grants. `m` and `ck` select a grant name; quick add uses the same name for both. Management that accesses the vault, including sync, first stops the broker and drains in-flight requests. It leaves the broker locked; run `u`, or press `u` in the TUI, to resume MCP access. Metadata queries and revocation do not stop the broker.

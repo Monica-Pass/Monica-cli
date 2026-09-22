@@ -50,6 +50,7 @@ monica-pass cmds dav open --json
 | 解锁并运行代理 | `u` | `password` |
 | 锁定并等待代理结束 | `lk` | 无 |
 | 查看状态 | `st` | 无 |
+| 读取网关审计（自己做过哪些调用） | `audit --json` / `audit --grant READER --limit 200 --json` | 无 |
 | 登录 WebDAV | `dav in -u https://dav.example.com/monica/ -n user` | `webdav_password` |
 | 浏览 WebDAV | `dav ls [folder]` | `webdav_password` |
 | 打开远端 MDBX | `dav o vault.mdbx` | `password`, `webdav_password` |

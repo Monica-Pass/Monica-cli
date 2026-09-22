@@ -1176,3 +1176,92 @@ fn a_delete_tombstones_only_what_a_person_confirmed_or_forced() {
         "text a person already exported is never retracted"
     );
 }
+
+/// The gateway trail is the only place a person can see what an AI actually did, so the
+/// reader has to work from the terminal without a vault open. These lines are byte-for-byte
+/// the shape `gateway::audit` appends.
+#[test]
+fn audit_command_reads_the_gateway_trail() {
+    let directory = tempfile::tempdir().unwrap();
+    let trail = directory.path().join("gateway.audit.jsonl");
+
+    let empty = success(cli(directory.path(), &["audit", "--json"], None));
+    assert_eq!(empty["total"], 0);
+    assert_eq!(empty["order"], "newest_first");
+    assert!(empty["events"].as_array().unwrap().is_empty());
+    assert_eq!(empty["path"], trail.display().to_string());
+
+    std::fs::write(
+        &trail,
+        concat!(
+            r#"{"timestamp":1777000000,"grant":"probe","operation":"list_issues","repository":"org/repo","request_id":null,"stage":"authorized","error":null}"#, '\n',
+            r#"{"timestamp":1777000001,"grant":"probe","operation":"list_issues","repository":"org/repo","request_id":null,"stage":"finished","error":null}"#, '\n',
+            r#"{"timestamp":1777000002,"grant":"probe","operation":"api_write","repository":null,"request_id":null,"stage":"finished","error":"permission_denied"}"#, '\n',
+            r#"{"timestamp":1777000003,"grant":"other","operation":null,"repository":null,"request_id":null,"stage":"finished","error":null}"#, '\n',
+        ),
+    )
+    .unwrap();
+
+    let data = success(cli(directory.path(), &["audit", "--json"], None));
+    assert_eq!(data["total"], 4);
+    assert_eq!(data["shown"], 4);
+    assert_eq!(data["events"][0]["grant"], "other");
+    assert_eq!(data["events"][1]["error"], "permission_denied");
+    assert_eq!(data["events"][3]["stage"], "authorized");
+    // The request id is in the machine contract but not in the table.
+    assert!(
+        data["events"][0]
+            .as_object()
+            .unwrap()
+            .contains_key("request_id")
+    );
+
+    let filtered = success(cli(
+        directory.path(),
+        &["audit", "--grant", "probe", "--json"],
+        None,
+    ));
+    assert_eq!(filtered["total"], 3);
+    assert_eq!(filtered["shown"], 3);
+    assert!(
+        filtered["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|event| event["grant"] == "probe")
+    );
+
+    let capped = success(cli(
+        directory.path(),
+        &["audit", "--limit", "2", "--json"],
+        None,
+    ));
+    assert_eq!(capped["total"], 4);
+    assert_eq!(capped["shown"], 2);
+    assert_eq!(capped["events"][1]["stage"], "finished");
+
+    let human = cli(directory.path(), &["audit", "--grant", "probe"], None);
+    no_secrets(&human);
+    assert!(human.status.success(), "{human:?}");
+    let text = String::from_utf8_lossy(&human.stdout).replace('\r', "");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        lines[0].split_whitespace().collect::<Vec<_>>(),
+        ["Time", "Grant", "Operation", "Scope", "Stage", "Result"]
+    );
+    assert_eq!(lines.len(), 4, "{text}");
+    assert!(lines[1].contains("permission_denied"), "{text}");
+    // The authorized row has no outcome yet; the plain table must not claim success.
+    assert!(lines[3].contains("pending"), "{text}");
+    assert!(!lines[3].contains("ok"), "{text}");
+
+    // A budget the operator cannot honour is refused at parse time, not clamped away.
+    for argument in ["0", "501"] {
+        let output = cli(
+            directory.path(),
+            &["audit", "--limit", argument, "--json"],
+            None,
+        );
+        assert!(!output.status.success(), "{argument} accepted");
+    }
+}

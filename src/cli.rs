@@ -190,6 +190,15 @@ pub enum Command {
     /// Show connection, grant and broker metadata without revealing credentials.
     #[command(visible_alias = "st")]
     Status,
+    /// Read the local gateway audit trail: which grant ran which operation, and how it ended.
+    Audit {
+        /// Restrict the trail to one grant name.
+        #[arg(long, value_name = "GRANT")]
+        grant: Option<String>,
+        /// How many most recent events to return, newest first.
+        #[arg(long, default_value_t = 50, value_parser = clap::value_parser!(u16).range(1..=500))]
+        limit: u16,
+    },
     /// Start the MCP stdio bridge. Never prompts for upstream credentials.
     Mcp {
         #[arg(short = 'c', long, value_name = "CLIENT_FILE")]
@@ -341,6 +350,7 @@ impl Command {
             Self::Serve => "serve",
             Self::Lock => "lock",
             Self::Status => "status",
+            Self::Audit { .. } => "audit",
             Self::Mcp { .. } => "mcp",
         }
     }

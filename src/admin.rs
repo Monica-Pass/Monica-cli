@@ -791,6 +791,58 @@ pub fn revoke(store: &ConfigStore, name: &str) -> Result<()> {
     })
 }
 
+/// Fields the audit writer emits. Anything else a future writer adds to a record
+/// stays in the file instead of reaching human or `--json` output unreviewed.
+const AUDIT_FIELDS: [&str; 7] = [
+    "timestamp",
+    "grant",
+    "operation",
+    "repository",
+    "request_id",
+    "stage",
+    "error",
+];
+
+pub const MAX_AUDIT_EVENTS: usize = 500;
+
+/// The local gateway trail: which grant ran which operation, and how it ended.
+/// Newest first, because that is what a person looks for.
+pub fn read_audit(store: &ConfigStore, grant: Option<&str>, limit: usize) -> Result<Value> {
+    let path = store.audit_path();
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(_) => return Err(GatewayError::StateUnavailable),
+    };
+    let mut events: Vec<Value> = Vec::new();
+    for line in text.lines() {
+        // A torn trailing write must not make the rest of the trail unreadable.
+        let Ok(record) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if !grant.is_none_or(|name| record["grant"].as_str() == Some(name)) {
+            continue;
+        }
+        let mut event = serde_json::Map::new();
+        for field in AUDIT_FIELDS {
+            if let Some(value) = record.get(field) {
+                event.insert(field.to_string(), value.clone());
+            }
+        }
+        events.push(Value::Object(event));
+    }
+    let total = events.len();
+    let shown = limit.clamp(1, MAX_AUDIT_EVENTS).min(total);
+    let kept = events.split_off(total.saturating_sub(shown));
+    Ok(json!({
+        "path": path.display().to_string(),
+        "order": "newest_first",
+        "total": total,
+        "shown": kept.len(),
+        "events": kept.into_iter().rev().collect::<Vec<_>>(),
+    }))
+}
+
 pub fn status(store: &ConfigStore) -> Result<Value> {
     let config = store.load()?;
     let connections: Vec<_> = config

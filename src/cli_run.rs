@@ -420,6 +420,11 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             let human = (!output.json).then(|| cli_table::render_status(&data, lang));
             output.result_text("status", data, human)?;
         }
+        Command::Audit { grant, limit } => {
+            let data = admin::read_audit(&store, grant.as_deref(), limit as usize)?;
+            let human = (!output.json).then(|| cli_table::render_audit(&data, lang));
+            output.result_text("audit", data, human)?;
+        }
         Command::Mcp { .. } | Command::Check { .. } | Command::Commands { .. } => {
             return Err(GatewayError::InvalidRequest);
         }

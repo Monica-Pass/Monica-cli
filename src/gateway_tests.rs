@@ -3,10 +3,11 @@ use std::time::Duration;
 use base64::Engine;
 use serde_json::{Value, json};
 
+use crate::admin;
 use crate::error::GatewayError;
 use crate::gateway::Gateway;
 use crate::model::{CONNECTION_CATALOG_TOOL, Operation, Provider, ToolCall};
-use crate::test_support::{Fixture, REPOSITORY, Reply, TOKEN, issue};
+use crate::test_support::{Fixture, PASSWORD, REPOSITORY, Reply, TOKEN, issue};
 
 fn catalog_call() -> ToolCall {
     ToolCall {
@@ -1009,4 +1010,107 @@ async fn closed_window_asks_for_reauthorization_and_revocation_stays_unauthorize
         "revoking an authorization must not delete the stored credential"
     );
     assert_eq!(fixture.upstream.requests().len(), 0);
+}
+
+/// The gateway has appended to `gateway.audit.jsonl` since the first release but nothing
+/// read it back, so the trail was a control nobody could check. Pin the reader to records
+/// the writer actually produced rather than a hand-written fixture.
+#[tokio::test]
+async fn audit_reader_returns_the_trail_the_gateway_wrote() {
+    let fixture = Fixture::new(
+        Provider::Github,
+        &[Operation::ListIssues],
+        vec![Reply::json(json!([]))],
+    )
+    .await;
+    fixture
+        .gateway
+        .call(
+            &fixture.capability,
+            fixture.call(Operation::ListIssues, json!({"repository":REPOSITORY})),
+        )
+        .await
+        .unwrap();
+    // Outside the grant: refused after the grant name is known, before any network I/O.
+    assert_eq!(
+        fixture
+            .gateway
+            .call(
+                &fixture.capability,
+                fixture.call(Operation::CreateIssue, json!({"repository":REPOSITORY})),
+            )
+            .await
+            .unwrap_err(),
+        GatewayError::PermissionDenied
+    );
+    fixture
+        .gateway
+        .call(&fixture.capability, catalog_call())
+        .await
+        .unwrap();
+
+    let trail = admin::read_audit(&fixture.store, None, 50).unwrap();
+    assert_eq!(trail["order"], "newest_first");
+    assert_eq!(trail["total"], 4);
+    assert_eq!(trail["shown"], 4);
+    let events = trail["events"].as_array().unwrap();
+    // The catalog call is the last row appended, so it is the first row back. It never
+    // reaches an operation, hence no `authorized` row and a null operation.
+    assert_eq!(events[0]["stage"], "finished");
+    assert_eq!(events[0]["grant"], "test-agent");
+    assert_eq!(events[0]["operation"], Value::Null);
+    assert_eq!(events[1]["operation"], "create_issue");
+    assert_eq!(events[1]["error"], "permission_denied");
+    assert_eq!(events[2]["operation"], "list_issues");
+    assert_eq!(events[2]["error"], Value::Null);
+    // The durable pre-dispatch row is still in the file once the call has finished.
+    assert_eq!(events[3]["stage"], "authorized");
+    assert_eq!(events[3]["repository"], REPOSITORY);
+
+    assert_eq!(
+        admin::read_audit(&fixture.store, Some("test-agent"), 50).unwrap()["total"],
+        4
+    );
+    assert_eq!(
+        admin::read_audit(&fixture.store, Some("someone-else"), 50).unwrap()["total"],
+        0
+    );
+    let capped = admin::read_audit(&fixture.store, None, 2).unwrap();
+    assert_eq!(capped["total"], 4);
+    assert_eq!(capped["shown"], 2);
+    assert_eq!(capped["events"][0]["operation"], Value::Null);
+    assert_eq!(capped["events"][1]["error"], "permission_denied");
+
+    // The file is the only place a secret could surface: arguments were never persisted.
+    let raw = std::fs::read_to_string(fixture.store.audit_path()).unwrap();
+    for secret in [TOKEN, PASSWORD, "Private fixture body"] {
+        assert!(!raw.contains(secret), "audit file holds {secret}");
+    }
+
+    // A writer that adds a field must not widen what reaches a person or an AI.
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(fixture.store.audit_path())
+        .and_then(|mut file| {
+            writeln!(
+                file,
+                r#"{{"timestamp":1,"grant":"test-agent","operation":"list_issues","repository":"{REPOSITORY}","request_id":null,"stage":"finished","error":null,"arguments":{{"token":"{TOKEN}"}},"unlisted":true}}"#
+            )
+        })
+        .unwrap();
+    let trail = admin::read_audit(&fixture.store, None, 50).unwrap();
+    assert_eq!(trail["total"], 5);
+    assert_eq!(trail["events"][0].as_object().unwrap().len(), 7);
+    assert!(!serde_json::to_string(&trail).unwrap().contains(TOKEN));
+    // A torn line must not make the rest of the trail unreadable.
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(fixture.store.audit_path())
+        .and_then(|mut file| write!(file, "{{\"timestamp\":2"))
+        .unwrap();
+    assert_eq!(
+        admin::read_audit(&fixture.store, None, 50).unwrap()["total"],
+        5
+    );
 }

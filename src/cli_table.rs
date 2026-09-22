@@ -130,6 +130,72 @@ fn format_calls(grant: &Value, lang: Language) -> String {
     format!("{used}/{max}")
 }
 
+pub fn render_audit(audit: &Value, lang: Language) -> String {
+    let events: Vec<&Value> = audit["events"]
+        .as_array()
+        .map(|array| array.iter().collect())
+        .unwrap_or_default();
+    if events.is_empty() {
+        return format!("{}\n{}", tr!(lang, AuditEmpty), string(audit, "path"));
+    }
+    let headers = [
+        tr!(lang, TableColumnTime),
+        tr!(lang, TableColumnGrant),
+        tr!(lang, TableColumnOperation),
+        tr!(lang, TableColumnScope),
+        tr!(lang, TableColumnStage),
+        tr!(lang, TableColumnResult),
+    ];
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(events.len());
+    for &event in &events {
+        let stage = string(event, "stage");
+        let error = event["error"].as_str();
+        let result = match error {
+            Some(code) => code.to_string(),
+            None if stage == "authorized" => tr!(lang, AuditNoOutcomeYet).to_string(),
+            None => tr!(lang, AuditOk).to_string(),
+        };
+        rows.push(vec![
+            audit_time(event["timestamp"].as_i64().unwrap_or_default()),
+            dash_if_empty(string(event, "grant")),
+            dash_if_empty(string(event, "operation")),
+            dash_if_empty(string(event, "repository")),
+            match stage.as_str() {
+                "authorized" => tr!(lang, AuditStageAuthorized).to_string(),
+                "finished" => tr!(lang, AuditStageFinished).to_string(),
+                other => other.to_string(),
+            },
+            result,
+        ]);
+    }
+    let mut out = render_table(&headers, &rows);
+    let hidden = audit["total"]
+        .as_u64()
+        .unwrap_or(0)
+        .saturating_sub(audit["shown"].as_u64().unwrap_or(0));
+    if hidden > 0 {
+        out.push('\n');
+        out.push_str(&tr!(lang, AuditHidden, count = hidden));
+    }
+    out
+}
+
+fn audit_time(timestamp: i64) -> String {
+    Local
+        .timestamp_opt(timestamp, 0)
+        .single()
+        .map(|moment| moment.format("%m-%d %H:%M:%S").to_string())
+        .unwrap_or_else(|| timestamp.to_string())
+}
+
+fn dash_if_empty(value: String) -> String {
+    if value.is_empty() {
+        "—".to_string()
+    } else {
+        value
+    }
+}
+
 pub fn render_connection_detail(connection: &Value, lang: Language) -> String {
     let fields: [(&str, String); 4] = [
         (tr!(lang, TableColumnHandle), string(connection, "name")),
@@ -639,12 +705,13 @@ fn library_rows(
 #[cfg(test)]
 mod tests {
     use super::{
-        KeyEntrySummary, MAX_WAITING_ROWS, Value, render_connection_detail, render_connections,
-        render_databases, render_keys, render_library, render_status, render_webdav_list,
-        render_webdav_status, short_segment_name,
+        KeyEntrySummary, MAX_WAITING_ROWS, Value, render_audit, render_connection_detail,
+        render_connections, render_databases, render_keys, render_library, render_status,
+        render_webdav_list, render_webdav_status, short_segment_name,
     };
     use monica_pass_cli::i18n::Language;
     use monica_pass_cli::keys::payload::{LOGIN_TYPE_GPG, LOGIN_TYPE_SSH};
+    use monica_pass_cli::tr;
     use serde_json::json;
 
     #[test]
@@ -743,6 +810,52 @@ mod tests {
                 "{material}"
             );
         }
+    }
+
+    #[test]
+    fn audit_table_marks_stage_and_outcome() {
+        let audit = json!({
+            "path":"/tmp/gateway.audit.jsonl",
+            "order":"newest_first",
+            "total":4,
+            "shown":3,
+            "events":[
+                {"timestamp":1777000000,"grant":"probe","operation":"list_issues","repository":"a/b","request_id":"req-9f","stage":"finished","error":"permission_denied"},
+                {"timestamp":1777000001,"grant":"probe","operation":"api_write","repository":"*","request_id":"req-8e","stage":"authorized","error":null},
+                {"timestamp":1777000002,"grant":"probe","stage":"finished","error":null}
+            ]
+        });
+        let out = render_audit(&audit, Language::En);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 5, "{out}");
+        let headers: Vec<&str> = lines[0].split_whitespace().collect();
+        assert_eq!(
+            headers,
+            ["Time", "Grant", "Operation", "Scope", "Stage", "Result"]
+        );
+        assert!(lines[1].contains("permission_denied"), "{out}");
+        // An `authorized` row is the pre-dispatch write: the outcome is not known yet.
+        assert!(lines[2].contains("pending"), "{out}");
+        assert!(lines[3].contains('—'), "{out}");
+        assert_eq!(lines[4], "Older events not shown: 1.");
+        assert!(!out.contains("req-9f"), "{out}");
+        assert!(!out.contains("newest_first"), "{out}");
+
+        let zh = render_audit(&audit, Language::ZhCn);
+        assert!(zh.contains("时间") && zh.contains("阶段") && zh.contains("结果"));
+        assert!(zh.contains("待回执"), "{zh}");
+        assert!(zh.contains("更早的 1 条未显示。"), "{zh}");
+
+        assert_eq!(
+            render_audit(
+                &json!({"path":"/tmp/gateway.audit.jsonl", "events":[], "total":0, "shown":0}),
+                Language::En
+            ),
+            format!(
+                "{}\n/tmp/gateway.audit.jsonl",
+                tr!(Language::En, AuditEmpty)
+            )
+        );
     }
 
     #[test]

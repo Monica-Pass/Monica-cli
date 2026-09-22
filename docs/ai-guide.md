@@ -274,8 +274,11 @@ monica show <连接名>  # 一个连接及其授权
 monica st --json     # 授权到期与用量（含 max_calls / calls_used）
 monica m <授权名>     # MCP 配置片段
 monica ck <授权名>    # 工具发现结果
+monica audit --json  # 网关审计：哪些调用被放行、结果如何（可按授权过滤）
 monica cmds <命令> --json   # 查询命令、别名、参数与所需凭据字段
 ```
+
+`audit` 是你自己行为的全部可见面：只有时间、授权名、操作、范围、阶段（`authorized` 是副作用前的放行，`finished` 是结局）和固定错误码。请求正文、响应正文、Token 与 capability 都不在里面，所以它不能用来找回你上一次调用拿到的内容——那些只存在于对话里。
 
 以下**不属于你的权限**，即使你知道怎么做：任何需要主密码或 Token 的命令（`add` / `connect` / `grant` / `refresh` / `token` / `note` / `init` / `open` / `use` / `lock` / `serve` / `delete` / `delete-category` / `keys` 全族 / WebDAV 全部子命令）、读取或改写保险库与客户端文件、`revoke` 别人的授权。要撤销一份授权，只能由人决定。
 

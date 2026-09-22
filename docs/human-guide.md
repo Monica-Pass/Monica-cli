@@ -57,7 +57,7 @@ Windows 安装步骤见 [README 的快速开始](../README.md#快速开始)，�
 | `clients/<授权名>.client.mcp.json` | `m` 产出的 MCP 配置片段，仅指向上一行那个文件 |
 | `gateway.usage.json` | 各授权已消耗的调用次数。**落盘保存**，代理重启不会清零 |
 | `gateway.operations.json` | 写操作幂等记录，用于 `request_id` 回放 |
-| `gateway.audit.jsonl` | 本地审计日志 |
+| `gateway.audit.jsonl` | 本地审计日志，用 `monica audit` 读（见 5.4） |
 | `gateway.history` / `gateway.vaults` | 数据库浏览历史、WebDAV 本地副本目录 |
 | `gateway.preferences.json` | 界面语言偏好 |
 | `gateway.webdav.json` | WebDAV 地址与用户名（不含密码） |
@@ -278,6 +278,7 @@ monica -C %CFG% rf work
 | 列出连接 | `list` | `ls` | 否 | 无 |
 | 查看一个连接与其授权 | `show <连接名>` | `info` | 否 | 无 |
 | 查看全局状态 | `status` | `st` | 否 | 无 |
+| 查看 AI 调用审计 | `audit [--grant <授权名>] [--limit <条数>]` | — | 否 | 无 |
 | 解锁并运行代理 | `serve` | `u` / `s` / `unlock` | — | 主密码 |
 | 锁定代理 | `lock` | `lk` / `L` | — | 无 |
 | 建保险库 | `init` | `n` | 是 | 新主密码 ×2 |
@@ -368,6 +369,33 @@ Monica Credential Gateway  f5d63e56-c6de-4563-a7b5-c2c95e00ea9a
 - **`--json` 的结构一字未改**。上面这些都是人看的那一面，脚本照旧只认 `--json`。
 - 当前数据库那一行的 ID 就是字符串 `current`，它**不能**直接喂给 `use`（`use` 只认 UUID）；要切换请用另一行的 ID，正在用的这个本来也不需要切。
 - 每条命令重新输入主密码没有变：程序不缓存解锁状态，这是安全边界（见第 1 节），不是疏漏。
+
+### 5.4 AI 到底做了什么：审计
+
+代理每服务一次 AI 请求都会往 `gateway.audit.jsonl` 追加一行。读它就是 `audit`，不需要解锁、不需要主密码：
+
+```sh
+monica audit                        # 最近 50 条，新的在前
+monica audit --grant claude-code    # 只看一份授权
+monica audit --limit 200
+```
+
+2026-09-22 用一份手工写入的样例轨迹跑出来的实际输出（未加过滤）：
+
+```text
+Time            Grant        Operation    Scope               Stage       Result
+04-24 11:06:43  cursor       —            —                   finished    reauthorization_required
+04-24 11:06:42  claude-code  api_write    —                   finished    permission_denied
+04-24 11:06:41  claude-code  list_issues  Monica-Pass/Monica  finished    ok
+04-24 11:06:40  claude-code  list_issues  Monica-Pass/Monica  authorized  pending
+```
+
+- 一次真正派发到上游的调用有**两行**：`authorized` 是副作用发生**之前**落盘的放行决定，`finished` 是它的结局。所以放行行永远显示 `待回执`，那不是失败。
+- 只查目录（`monica_list_connections`）、或在拿到范围之前就被拒的请求只有一行 `finished`，因此 `操作` / `范围` 可能是 `—`。
+- `结果` 列就是错误码本身（`permission_denied`、`reauthorization_required`…），不翻译，方便对着第 11 节查；成功的行是 `ok`。
+- **审计里没有任何秘密**：请求参数、响应正文、Token、主密码都不写入，人侧和 `--json` 都一样；`request_id` 只在 `--json` 里保留，表格不占那一列。测试 `audit_reader_returns_the_trail_the_gateway_wrote` 是直接对真实网关写出的文件断言这一点的。
+- 写不进审计时代理会**拒绝这次调用**（宁可不做，也不做无痕的事），所以「该有的行没有」本身就是信号。文件上限 8 MiB，到顶后新的调用同样会被拒——归档或删掉该文件即可，历史记录不影响任何功能。
+- 表格一次最多回 500 条，`--limit` 超出范围会在参数解析阶段就被拒（退出码 2），不会静默截断。
 
 ## 6. 设计一份合适的授权
 
@@ -628,7 +656,7 @@ monica keys export 工作机 -o id_ed25519.pub          # 只出公钥
 
 ## 13. 让 AI 帮你做管理
 
-这条路存在，但权限很窄：AI 可以用 `monica cmds --json` 发现命令、用 `ls` / `show` / `st` / `m` / `ck` 做只读查询；任何需要凭据的管理命令都必须由**可信本地启动器**通过 `--secrets-stdin` 供入，凭据不经过模型。协议、字段表和退出码见 [CLI 自动化](automation.md)。
+这条路存在，但权限很窄：AI 可以用 `monica cmds --json` 发现命令、用 `ls` / `show` / `st` / `audit` / `m` / `ck` 做只读查询；任何需要凭据的管理命令都必须由**可信本地启动器**通过 `--secrets-stdin` 供入，凭据不经过模型。`audit` 能给 AI 看到自己已经做过哪些调用，但记录里只有授权名、操作、范围、阶段和错误码，看不到请求正文与响应正文。协议、字段表和退出码见 [CLI 自动化](automation.md)。
 
 不要为了"省事"把主密码写进脚本参数、环境变量或请求文件。
 
