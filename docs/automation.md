@@ -43,6 +43,7 @@ monica-pass cmds dav open --json
 | 移动条目或分类 | `mv ID TARGET_CATEGORY_ID` | `password` |
 | 创建授权 | `g reader -c work -r org/repo -t 60 --max-calls 200` | `password` |
 | 续期授权（换发新 capability） | `rf reader` / `rf reader -t 60 --max-calls 50` | `password` |
+| 给授权设人工门槛 | `g reader … --approval write` / `rf reader --approval all` | `password` |
 | 撤销授权 | `rv reader` | 无 |
 | 获取并保存 MCP 配置 | `m reader` | 无 |
 | 验证 MCP 工具发现 | `ck reader` 或 `check --client FILE` | 无；代理需要已解锁 |
@@ -61,6 +62,8 @@ monica-pass cmds dav open --json
 表中的名称必须精确匹配。`show` 选择连接；`m`、`ck`、`rv`、`rf` 选择授权。不存在的名称不会回退到其他条目。快速添加为连接和授权使用同一个名称，默认只读、有效期 240 分钟（`--ttl` 可指定 1–1440 分钟，`--max-calls` 可限制上游调用次数，省略为不限次数）；`-w` / `--allow-write` 才会增加创建 Issue 权限。详细授权用 `--op create-issue` 指定写操作。任何授权都会到期，不存在长期有效的选项。
 
 `grant` 与 `refresh` 都需要先停止代理，执行完代理保持锁定；续期后要重新 `u` 解锁，并让 AI 客户端重启对应的 MCP 入口，才会读到换发后的新 capability。
+
+`--approval`（`off|write|all`）与无人值守不搭：门槛要求有人当场回答，而 `--secrets-stdin` 启动的代理常常没有可应答的终端（`--json`、管道、后台都是）。这种代理是**失败关闭**的——需要批准的调用等满 15 秒后返回 `approval_timeout`，请求不会发出，也不消耗总调用次数（每分钟限额照扣）；如果启动时已有授权带门槛，代理会先打印一行"没有终端可问"的提示。流水线里请把授权留作 `off`，用 `--max-calls` 与较短的 `-t` 收窄风险；要门槛就得把代理跑在人自己的终端里。快速添加 `add` 没有该参数，它签出的授权一律是 `off`。
 
 ## 凭据输入协议
 
@@ -121,7 +124,7 @@ raise SystemExit(result.returncode)
 
 `serve` / `u` 是长驻命令：启动后立即输出 `event: "ready"`，停止后输出 `event: "stopped"`，每行一个 JSON 对象并立即刷新。`add --serve` 先输出添加结果，再输出代理事件。添加成功后即使代理启动失败，已创建的连接与授权仍然存在，应根据结果继续处理。
 
-需要访问保险库的管理或同步会先请求锁定代理，等待在途操作结束；无法取得锁时明确失败。这些操作完成后代理保持锁定，`a -s` 可在添加后直接解锁运行。查询元数据和撤销授权无需停止代理。普通解锁会话为五分钟，不延长授权有效期。授权窗口或调用次数用尽时代理返回 `reauthorization_required`，只有人工 `rf 授权名` 续期才能恢复；`st` 会显示每个授权的 `calls_used`、`max_calls`、`expired` 与 `refresh_required`。
+需要访问保险库的管理或同步会先请求锁定代理，等待在途操作结束；无法取得锁时明确失败。这些操作完成后代理保持锁定，`a -s` 可在添加后直接解锁运行。查询元数据和撤销授权无需停止代理。普通解锁会话为五分钟，不延长授权有效期。授权窗口或调用次数用尽时代理返回 `reauthorization_required`，只有人工 `rf 授权名` 续期才能恢复；`st` 会显示每个授权的 `calls_used`、`max_calls`、`expired`、`refresh_required` 与 `approval` 档位。被门槛挡下的调用返回 `approval_denied` 或 `approval_timeout`：请求没有发出、不写去重日志也不记 `authorized` 审计行，所以调用方用同一 `request_id` 原样重试是安全的，但它**只能由人回答**，重试不会绕过提问。
 
 通过 `--secrets-stdin` 注入的 WebDAV 密码不会跨 CLI 进程保存，也不落本机凭据管理器：每次网络操作仍需重新注入，所以单条 CLI 命令结束即完成会话退出。人在终端隐藏的输入会在请求成功后记入本机凭据管理器，之后的网络操作不再索要该密码，`dav forget-password` 删除它。TUI 的 `:logout` 只结束其自己的 WebDAV 会话。地址与用户名可以保存，`dav st` 可查询这些公开信息与是否已存密码。
 

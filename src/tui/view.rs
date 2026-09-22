@@ -240,6 +240,7 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &mut App) {
             Mode::Popup(popup) => render_popup(frame, popup, area, &mut app.page_size, lang),
             _ => {}
         }
+        render_approval(frame, app, area, lang);
         return;
     }
     let screen = chrome(area);
@@ -267,6 +268,7 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &mut App) {
         Mode::Popup(popup) => render_popup(frame, popup, area, &mut app.page_size, lang),
         Mode::Normal | Mode::Command(_) | Mode::Filter(_) => {}
     }
+    render_approval(frame, app, area, lang);
 }
 
 fn header(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -865,6 +867,55 @@ fn render_popup(
         Paragraph::new(lines).scroll((popup.scroll.min(u16::MAX as usize) as u16, 0)),
         inner,
     );
+}
+
+/// A call the AI is holding for a person to answer, drawn over every page. This
+/// is the only place it can be answered from a TUI: the prompt lives in the
+/// process that holds the unlocked vault.
+fn render_approval(frame: &mut Frame<'_>, app: &App, screen: Rect, lang: Language) {
+    // A field being typed in keeps its keystrokes, so the prompt waits for it
+    // to close rather than stealing a letter the person means for the text.
+    if matches!(app.mode, Mode::Form(_) | Mode::Command(_) | Mode::Filter(_)) {
+        return;
+    }
+    let Some(request) = app.approval.clone() else {
+        return;
+    };
+    let waiting = app
+        .broker
+        .as_ref()
+        .map_or(1, |broker| broker.approvals().waiting().len())
+        .max(1);
+    let width = screen.width.saturating_sub(6).min(84);
+    let mut lines = vec![
+        Line::raw(clean(&request.describe(lang))),
+        Line::raw(clean(&request.arguments(lang))),
+    ];
+    if waiting > 1 {
+        lines.push(Line::raw(clean(&tr!(
+            lang,
+            ApprovalWaitingHint,
+            count = waiting
+        ))));
+    }
+    let lines = wrapped_lines(lines, width.saturating_sub(4));
+    let height = (lines.len() as u16 + 2)
+        .min(screen.height.saturating_sub(4))
+        .max(4);
+    let area = centered(screen, width, height);
+    clear_modal(frame, area);
+    let block = Block::default()
+        .title(format!(" {} ", clean(tr!(lang, ApprovalRequestTitle))))
+        .title_style(Style::default().fg(WARNING).bold())
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(WARNING))
+        .padding(Padding::horizontal(1))
+        .style(Style::default().bg(BG).fg(LIGHT))
+        .title_bottom(Line::raw(clean(&crate::approval::ask_hint(lang))).right_aligned());
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn render_form(

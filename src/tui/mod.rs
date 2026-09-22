@@ -29,6 +29,7 @@ use browser::{Filter, Focus, quick_command};
 use form::{Form, FormEvent, Input, Kind};
 
 use crate::admin::{self, BrokerSession};
+use crate::approval::{Decision, Request};
 use crate::config::{Config, ConfigStore, Grant, GrantState, write_json};
 use crate::credstore;
 use crate::error::{GatewayError, Result};
@@ -282,6 +283,7 @@ struct App {
     folder: String,
     entries: Vec<RemoteEntry>,
     broker: Option<BrokerSession>,
+    approval: Option<Request>,
     external_busy: bool,
     page: Page,
     selected: [usize; 5],
@@ -327,6 +329,7 @@ impl App {
             folder: String::new(),
             entries: Vec::new(),
             broker: None,
+            approval: None,
             external_busy: false,
             page: Page::Dashboard,
             selected: [0; 5],
@@ -426,6 +429,25 @@ impl App {
         self.message = message.into();
         self.message_at = Some(Instant::now());
         self.failed = true;
+    }
+    /// Answers the call currently on screen. Only the process that holds the
+    /// unlocked vault holds the prompt, so this is where a person says yes.
+    fn decide_approval(&mut self, decision: Decision) {
+        let lang = self.language;
+        let Some(request) = self.approval.take() else {
+            return;
+        };
+        let answered = self
+            .broker
+            .as_ref()
+            .is_some_and(|broker| broker.approvals().decide(request.id, decision));
+        self.info(if !answered {
+            lang.text(Message::ApprovalGoneHint)
+        } else if decision == Decision::Approved {
+            lang.text(Message::ApprovalGrantedHint)
+        } else {
+            lang.text(Message::ApprovalDeniedHint)
+        });
     }
     fn selected_connection(&self) -> Option<String> {
         if self.page == Page::Grants {
@@ -861,6 +883,23 @@ impl App {
             self.quitting = true;
             return;
         }
+        // y and n answer a waiting call from anywhere except a field being typed
+        // in, where those letters belong to the text.
+        if self.approval.is_some() && key.modifiers.is_empty() {
+            let typing = matches!(
+                self.mode,
+                Mode::Form(_) | Mode::Command(_) | Mode::Filter(_)
+            );
+            let answer = match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => Some(Decision::Approved),
+                KeyCode::Char('n') | KeyCode::Char('N') => Some(Decision::Denied),
+                _ => None,
+            };
+            if !typing && let Some(answer) = answer {
+                self.decide_approval(answer);
+                return;
+            }
+        }
         let mode = std::mem::replace(&mut self.mode, Mode::Normal);
         match mode {
             Mode::Filter(mut filter) => match key.code {
@@ -1227,6 +1266,12 @@ impl App {
                 Err(error) => self.error(error),
             }
         }
+        // The prompt is whatever this process is holding right now, so it leaves
+        // the screen the moment the call is answered, refused or locked away.
+        self.approval = self
+            .broker
+            .as_ref()
+            .and_then(|broker| broker.approvals().waiting().into_iter().next());
         if self.last_refresh.elapsed() >= Duration::from_secs(1) {
             self.reload();
         }

@@ -229,6 +229,7 @@ fn grant(app: &App) -> Vec<Line<'static>> {
         tr!(lang, RateLimitHeading),
         tr!(lang, RequestsPerMinute, count = grant.requests_per_minute),
     );
+    field(&mut lines, tr!(lang, ApprovalColumn), grant.approval.name());
     if let Some(path) = &grant.client_file {
         lines.push(Line::default());
         lines.push(label(tr!(lang, McpSettingsHeading)));

@@ -1265,3 +1265,96 @@ fn audit_command_reads_the_gateway_trail() {
         assert!(!output.status.success(), "{argument} accepted");
     }
 }
+
+#[test]
+fn a_person_can_widen_a_grant_to_ask_before_every_call() {
+    let directory = tempfile::tempdir().unwrap();
+    add(directory.path());
+    let gate = |name: &str| {
+        let status = success(cli(directory.path(), &["status", "--json"], None));
+        status["grants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|grant| grant["name"] == name)
+            .unwrap()["approval"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    // Quick add keeps the silent default. A gate has to be something a person
+    // asks for, never something that appears under them.
+    assert_eq!(gate("work"), "off");
+
+    success(cli(
+        directory.path(),
+        &[
+            "grant",
+            "gated",
+            "--connection",
+            "work",
+            "--repo",
+            "example/project",
+            "--approval",
+            "write",
+            "--json",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    ));
+    assert_eq!(gate("gated"), "write");
+    let invalid = cli(
+        directory.path(),
+        &[
+            "grant",
+            "typo",
+            "--connection",
+            "work",
+            "--repo",
+            "example/project",
+            "--approval",
+            "sometimes",
+            "--json",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    );
+    assert!(!invalid.status.success(), "{invalid:?}");
+    assert_eq!(gate("gated"), "write", "a rejected command changes nothing");
+
+    // Refreshing without the flag keeps the gate a person set; widening it is an
+    // explicit act, and so is turning it back off.
+    success(cli(
+        directory.path(),
+        &["refresh", "gated", "--json", "--secrets-stdin"],
+        Some(&password()),
+    ));
+    assert_eq!(gate("gated"), "write");
+    success(cli(
+        directory.path(),
+        &[
+            "refresh",
+            "gated",
+            "--approval",
+            "all",
+            "--json",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    ));
+    assert_eq!(gate("gated"), "all");
+
+    // `monica status` is enough to see which grants are gated.
+    let human = cli(directory.path(), &["status", "--lang", "en"], None);
+    no_secrets(&human);
+    let text = String::from_utf8_lossy(&human.stdout).replace('\r', "");
+    let header = text
+        .lines()
+        .find(|line| line.contains("Gate"))
+        .unwrap_or_else(|| panic!("no gate column in:\n{text}"));
+    let row = text
+        .lines()
+        .find(|line| line.contains("gated"))
+        .unwrap_or_else(|| panic!("no gated grant in:\n{text}"));
+    assert!(row.contains("all"), "{header}\n{row}");
+}

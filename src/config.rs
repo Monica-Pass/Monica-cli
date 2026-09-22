@@ -12,7 +12,8 @@ use zeroize::Zeroizing;
 
 use crate::error::{GatewayError, Result};
 use crate::model::{
-    Operation, Provider, validate_api_base, validate_name, validate_note, validate_repository,
+    ApprovalPolicy, Operation, Provider, validate_api_base, validate_name, validate_note,
+    validate_repository,
 };
 
 const MAX_CONFIG_BYTES: u64 = 256 * 1024;
@@ -48,6 +49,10 @@ pub struct Grant {
     /// Upstream calls allowed before a human must re-authorize this grant. 0 means uncapped.
     #[serde(default)]
     pub max_calls: u32,
+    /// Whether a human approves each call. Absent in files written before this
+    /// existed, which is the same as the gate being off.
+    #[serde(default)]
+    pub approval: ApprovalPolicy,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_file: Option<PathBuf>,
 }
@@ -587,6 +592,7 @@ mod tests {
             expires_at: 2000,
             requests_per_minute: 60,
             max_calls: 0,
+            approval: ApprovalPolicy::Off,
             client_file: None,
         });
         config.connections.insert("work".to_owned(), connection);

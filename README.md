@@ -19,7 +19,7 @@
 
 [![Monica 主仓库](https://img.shields.io/badge/Monica-主仓库-2f6feb?style=flat-square&logo=github&logoColor=white)](https://github.com/Monica-Pass/Monica)
 [![Android](https://img.shields.io/badge/Android-APK%20下载-3DDC84?style=flat-square&logo=android&logoColor=white)](https://github.com/Monica-Pass/Monica/releases)
-[![版本](https://img.shields.io/badge/版本-0.4.0-8a2be2?style=flat-square)](docs/redesign-progress.md)
+[![版本](https://img.shields.io/badge/版本-0.5.0-8a2be2?style=flat-square)](docs/redesign-progress.md)
 [![Rust](https://img.shields.io/badge/Rust-1.97-000000?style=flat-square&logo=rust&logoColor=white)](#从源码构建)
 [![平台](https://img.shields.io/badge/平台-Windows%20已实测-0078d4?style=flat-square&logo=windows&logoColor=white)](#从源码构建)
 <br>
@@ -51,6 +51,7 @@ Monica CLI 将服务 Token 保存在本地 MDBX3 加密保险库中。AI 通过 
 - **它管的是"要交给 AI 去办事"的那批凭据**，例如 GitHub / GitLab 的 API Token，不是你全部的密码。
 - **它把 Token 挡在 AI 之外**：AI 只能提出"列出这个仓库的 Issue"这样的请求；校验授权、注入凭据、发送请求、检查响应是否回泄都由本地代理完成，原始 Token 从不出现在模型上下文里。
 - **它给权限上了时间**：每一份 AI 授权都会到期、可以设调用次数上限、只能由人在本地 `refresh` 续期，**不存在永久授权**；而存在保险库里的凭据本身不过期，也不会因为授权到期被删。
+- **它可以让每次写入先问你一句**：授权设 `--approval write` 后写操作、设 `--approval all` 后每一次调用，都要等你本人在终端里按 `y` 才会发出，最多等 15 秒，没人应答就返回 `approval_timeout`。提示只出现在你自己的终端（TUI 弹窗或 `serve` 终端），AI 侧没有应答通道也读不到它，`monica approve` 这样的命令**故意不存在**；被拒的调用不消耗次数预算。
 - **它顺带能管理这份数据库**：内置 TUI 与命令行，是因为配授权、看状态、同步 WebDAV 不必为此打开手机。
 
 它和手机 Monica **读写同一份 MDBX3 数据库**，所以是同一个保险库的两个入口，不是两套互不相干的存储。它明确不做的部分：不生成 TOTP、不做自动填充、没有浏览器扩展、不导入 KeePass / Bitwarden、不处理外置附件（带 `.blobs` 的库会被直接拒绝，报 `external_blobs_unsupported`）。
@@ -131,6 +132,8 @@ Windows 先按[从源码构建](#从源码构建)产出 `target/release/monica-p
 编辑表单用 `Tab` 切换字段，`Ctrl+S` 进入独立的数据库密码步骤。在密码步骤按 `Esc` 返回草稿并清除密码。每次管理操作只在执行期间解锁数据库，条目摘要最多缓存五分钟；这与 AI 代理的五分钟解锁会话相互独立。
 
 设置中按 `c` 可引导式接入服务，按 `a` 单独配置授权。授权**一律会到期**，可随时撤销：有效期默认 240 分钟（命令行 `--ttl`，可指定 1–1440 分钟，留空不再表示永久），还可以用 `--max-calls` 限制该授权能发起的上游请求次数。窗口或次数用尽后，AI 侧只会收到 `reauthorization_required`，必须由人在本地执行 `monica refresh 授权名` 续期（暂仅在命令行提供，TUI 无对应按键），续期会换发新的 capability，需重启 MCP 客户端才会生效。任何授权仍需要代理处于解锁状态。更换 Token 后，该连接原有授权会被撤销。
+
+授权还可以设**人工门槛**：命令行 `monica grant … --approval write`（写操作先问你）或 `--approval all`（每次调用都问），续期用 `monica rf 授权名 --approval all` 补设，`off` 为默认即不询问；TUI 的授权表单里对应「人工批准」一栏。`add` 这条快速路径没有该参数，它签出的授权一律是 `off`，需要门槛就事后用 `grant`/`rf` 补设。`st` 的表格新增「门槛」一列（英文界面为 `Gate`）直接显示档位。详见 [docs/human-guide.md](docs/human-guide.md) 第 6.5 节。
 
 主页树里始终有一行 **AI 授权**（锁库时也在），行尾直接给出当前生效的授权数量，按 `Enter` 进入授权列表：仍在生效的行显示只读或读写，已过期与 **调用已用完** 的行转暗，选中行的预览给出 `已用/上限` 次数——不用打开详细数据库就能看清哪些代理还在服务。
 
@@ -216,6 +219,7 @@ monica-pass ck work-github
 | 列出连接 / 编辑用途 | `list` / `note` | `ls` / `e` |
 | 建库 / 打开本地库 | `init` / `open` | `n` / `o` |
 | 创建授权 / 续期 / 撤销授权 | `grant` / `refresh` / `revoke` | `g` / `rf` / `rv` |
+| 给授权设人工门槛 | `grant --approval off\|write\|all` / `refresh --approval <档位>` | 授权表单「人工批准」栏 |
 | 解锁并运行 / 锁定 | `serve` / `lock` | `u` / `lk` |
 | MCP 配置 / 检查工具 | `settings` / `check` | `m` / `ck` |
 | 状态 / WebDAV / 命令查询 | `status` / `webdav` / `commands` | `st` / `dav` / `cmds` |
@@ -223,7 +227,7 @@ monica-pass ck work-github
 
 `audit` 读取本地 AI 调用审计（`--grant <授权名>` 过滤、`--limit <条数>` 取最近若干条，新的在前），不需要主密码，也不含任何凭据内容。
 
-`-r` 是仓库，`-p` 是服务类型，`-n` 是用途备注，`-t` 是授权分钟数，`-s` 表示添加后运行代理。全局 `-C` 指定配置文件，`-l` 指定界面语言。TUI 的按键仍按页面底部提示使用。
+`-r` 是仓库，`-p` 是服务类型，`-n` 是用途备注，`-t` 是授权分钟数，`-s` 表示添加后运行代理。人工门槛是 `--approval off|write|all`，只有长写法、没有缩写。全局 `-C` 指定配置文件，`-l` 指定界面语言。TUI 的按键仍按页面底部提示使用。
 
 `show` 按连接名称显示用途和相关授权；`m`、`ck` 按授权名称操作，快速添加时二者名称相同。需要访问保险库的管理或同步会先停止代理并等待在途请求结束，完成后保持锁定；需要继续使用 MCP 时运行 `u`，或在 TUI 按 `u`。查询元数据和撤销授权无需停止代理。
 

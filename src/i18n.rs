@@ -218,6 +218,8 @@ impl Language {
             GatewayError::Unauthorized => Message::ErrorUnauthorized,
             GatewayError::ReauthorizationRequired => Message::ErrorReauthorizationRequired,
             GatewayError::PermissionDenied => Message::ErrorPermissionDenied,
+            GatewayError::ApprovalDenied => Message::ErrorApprovalDenied,
+            GatewayError::ApprovalTimeout => Message::ErrorApprovalTimeout,
             GatewayError::UnlockRequired => Message::ErrorUnlockRequired,
             GatewayError::CredentialUnavailable => Message::ErrorCredentialUnavailable,
             GatewayError::StateUnavailable => Message::ErrorStateUnavailable,

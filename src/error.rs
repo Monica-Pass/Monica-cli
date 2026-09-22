@@ -66,6 +66,14 @@ pub enum GatewayError {
     ReauthorizationRequired,
     #[error("This operation or repository is not permitted by the grant.")]
     PermissionDenied,
+    #[error(
+        "A person reviewed this call and refused it. Do not retry it or reformulate it; tell the human what you were trying to do and wait for instructions."
+    )]
+    ApprovalDenied,
+    #[error(
+        "This call waits for a person to approve it in the terminal running Monica's broker. Ask them to approve it, then retry the same call with the same arguments."
+    )]
+    ApprovalTimeout,
     #[error("The vault requires a fresh unlock. Use the TUI or the local CLI with secure input.")]
     UnlockRequired,
     #[error("The credential is unavailable or does not match the configured service.")]

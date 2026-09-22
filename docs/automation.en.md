@@ -43,6 +43,7 @@ Global options work before or after subcommands. With no subcommand, normal mode
 | Move an entry or category | `mv ID TARGET_CATEGORY_ID` | `password` |
 | Issue a grant | `g reader -c work -r org/repo -t 60 --max-calls 200` | `password` |
 | Re-authorize a grant (new capability) | `rf reader` / `rf reader -t 60 --max-calls 50` | `password` |
+| Put a human approval gate on a grant | `g reader … --approval write` / `rf reader --approval all` | `password` |
 | Revoke a grant | `rv reader` | None |
 | Get and save MCP settings | `m reader` | None |
 | Verify MCP discovery | `ck reader` or `check --client FILE` | None; the broker must be unlocked |
@@ -60,6 +61,8 @@ Global options work before or after subcommands. With no subcommand, normal mode
 Names must match exactly. `show` selects a connection; `m`, `ck`, `rv`, and `rf` select a grant. Unknown names never fall back to another record. Quick add uses the same name for the connection and grant, with read-only access for 240 minutes by default; `--ttl` takes 1–1440 minutes and `--max-calls` can cap upstream calls. No authorization is indefinite. `-w` / `--allow-write` explicitly enables Issue creation. Detailed grants use `--op create-issue` to allow writes.
 
 Both `grant` and `refresh` stop the broker first and leave it locked afterwards. Unlock it again with `u`, and restart the AI client's MCP entry so it reads the newly issued capability.
+
+`--approval` (`off|write|all`) does not belong in an unattended pipeline: the gate needs a person answering on the spot, and a broker started with `--secrets-stdin` usually has no terminal to ask in (`--json`, a pipe, or a background process all qualify). Such a broker **fails closed** — a gated call waits out 15 seconds and returns `approval_timeout`, the request is never sent and spends none of the grant's call budget (the per-minute limit is still charged), and a broker that starts while some grant carries a gate says up front that it has no terminal to ask in. Leave automation grants at `off` and narrow the risk with `--max-calls` plus a short `-t`; if you want the gate, run the broker in your own terminal. Quick `add` has no such flag, so its grants are always `off`.
 
 ## Secret input contract
 
@@ -118,7 +121,7 @@ Failures return `ok: false`, `error.code`, and `error.message`. Missing secrets 
 
 `serve` / `u` stays running. It emits `event: "ready"` immediately after startup and `event: "stopped"` on shutdown, each on its own flushed JSON line. `add --serve` emits its creation result before broker events. If broker startup subsequently fails, the created connection and grant still exist; handle the completed step separately.
 
-Management that accesses the vault, including sync, requests a broker lock and waits for in-flight operations to drain. Failure to acquire the lock is explicit. The broker stays locked after these operations; `a -s` starts it immediately after adding. Metadata queries and revocation do not stop the broker. Unlock sessions last five minutes and do not extend grants. Once a grant's window or call budget is spent, the proxy answers `reauthorization_required` and only a human `rf GRANT` restores it; `st` reports each grant's `calls_used`, `max_calls`, `expired`, and `refresh_required`.
+Management that accesses the vault, including sync, requests a broker lock and waits for in-flight operations to drain. Failure to acquire the lock is explicit. The broker stays locked after these operations; `a -s` starts it immediately after adding. Metadata queries and revocation do not stop the broker. Unlock sessions last five minutes and do not extend grants. Once a grant's window or call budget is spent, the proxy answers `reauthorization_required` and only a human `rf GRANT` restores it; `st` reports each grant's `calls_used`, `max_calls`, `expired`, `refresh_required`, and `approval` gate. A call the gate stops answers `approval_denied` or `approval_timeout`: the request was not sent, nothing was written to the replay journal or the `authorized` audit row, so retrying the same `request_id` unchanged is safe — but only a person can answer, and retrying does not bypass the question.
 
 A `--secrets-stdin` password does not persist across CLI processes and never enters the local credential manager: supply it for each network operation, and command exit ends that session. A password you type at the hidden prompt is stored in this computer's credential manager once a request using it succeeds, so later operations no longer ask for it; `dav forget-password` removes it. TUI `:logout` ends only its own WebDAV session. URLs and usernames can be saved, and `dav st` reports them plus whether a password is stored.
 

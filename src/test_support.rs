@@ -15,7 +15,7 @@ use crate::config::{
     Config, ConfigStore, Grant, capability_hash, connection_fingerprint, new_capability,
 };
 use crate::gateway::Gateway;
-use crate::model::{Operation, Provider, ToolCall};
+use crate::model::{ApprovalPolicy, Operation, Provider, ToolCall};
 use crate::vault::Vault;
 
 pub const PASSWORD: &str = "Synthetic vault passphrase for tests only 7283!";
@@ -285,6 +285,7 @@ impl Fixture {
             expires_at: now + 3600,
             requests_per_minute: 60,
             max_calls: 0,
+            approval: ApprovalPolicy::Off,
             client_file: None,
         });
         config.connections.insert("work".to_owned(), connection);

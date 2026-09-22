@@ -1152,6 +1152,7 @@ fn manager_fixture(directory: &std::path::Path) -> App {
             expires_at: if index == 0 { now - 1 } else { now + 3600 },
             requests_per_minute: 60,
             max_calls: 0,
+            approval: crate::model::ApprovalPolicy::Off,
             client_file: Some(directory.join(format!("{name}.client.json"))),
         });
     }
@@ -2260,6 +2261,201 @@ async fn tui_quick_add_unlocks_and_exposes_only_public_named_metadata_to_mcp() {
     assert!(probe.is_err());
 }
 
+/// The gate has to be reachable from the form a person actually uses, not only from
+/// `monica grant`, so this issues three grants through the real TUI and reads each
+/// stored policy back.
+#[tokio::test]
+async fn a_grant_issued_in_the_tui_carries_the_approval_gate() {
+    use crate::model::{ApprovalPolicy, Provider};
+    use crate::test_support::{PASSWORD, REPOSITORY, TOKEN};
+
+    let directory = tempfile::tempdir().unwrap();
+    let store = ConfigStore::new(directory.path().join("gateway.json"));
+    let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = reservation.local_addr().unwrap().port();
+    admin::initialize(
+        &store,
+        &directory.path().join("vault.mdbx"),
+        port,
+        PASSWORD,
+        PASSWORD,
+    )
+    .unwrap();
+    drop(reservation);
+    admin::add_connection(
+        &store,
+        "work",
+        Provider::Github,
+        "https://api.github.com/",
+        "只读巡检",
+        PASSWORD,
+        Zeroizing::new(TOKEN.to_owned()),
+    )
+    .unwrap();
+    let mut app = App::new(store.clone(), Language::ZhCn);
+    for (name, approval, expected) in [
+        ("plain", "", ApprovalPolicy::Off),
+        ("writes", "write", ApprovalPolicy::Write),
+        ("gated", "all", ApprovalPolicy::All),
+    ] {
+        app.key(key(KeyCode::Char(':')));
+        for ch in "grant".chars() {
+            app.key(key(KeyCode::Char(ch)));
+        }
+        app.key(key(KeyCode::Enter));
+        assert!(
+            matches!(&app.mode, Mode::Form(form) if matches!(form.kind, Kind::Grant) && form.fields.len() == 8),
+            "{name} did not open the grant form"
+        );
+        let screen = fill(
+            &mut app,
+            &[
+                name,
+                "work",
+                REPOSITORY,
+                "list-issues,get-issue",
+                "",
+                "60",
+                approval,
+                PASSWORD,
+            ],
+        );
+        assert!(!screen.contains(PASSWORD));
+        app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        settle(&mut app).await;
+        let config = store.load().unwrap();
+        let stored = config
+            .grants
+            .iter()
+            .find(|grant| grant.name == name)
+            .unwrap_or_else(|| panic!("{name} was never issued"));
+        assert_eq!(stored.approval, expected, "{name} kept no gate");
+        app.key(key(KeyCode::Esc));
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    // A policy the form cannot map is refused with the draft still on screen.
+    app.key(key(KeyCode::Char(':')));
+    for ch in "grant".chars() {
+        app.key(key(KeyCode::Char(ch)));
+    }
+    app.key(key(KeyCode::Enter));
+    fill(
+        &mut app,
+        &[
+            "typo",
+            "work",
+            REPOSITORY,
+            "list-issues,get-issue",
+            "",
+            "60",
+            "sometimes",
+            PASSWORD,
+        ],
+    );
+    app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    assert!(app.failed);
+    assert!(
+        matches!(&app.mode, Mode::Form(_)),
+        "a rejected gate must not close the form"
+    );
+    assert!(
+        store
+            .load()
+            .unwrap()
+            .grants
+            .iter()
+            .all(|grant| grant.name != "typo"),
+        "a refused grant still wrote"
+    );
+    app.key(key(KeyCode::Esc));
+    app.key(key(KeyCode::Char('q')));
+    app.finish().await.unwrap();
+}
+
+/// Answering in the TUI is the whole approval mechanism, so this drives the real
+/// broker: the call registers itself with the same queue the gateway parks on, and
+/// the keystrokes have to reach that queue rather than the home key map.
+#[tokio::test]
+async fn tui_answers_a_waiting_call_with_y_and_n() {
+    use crate::approval::{Decision, Request};
+    use crate::test_support::{PASSWORD, REPOSITORY, TOKEN};
+    use std::time::Instant;
+
+    let directory = tempfile::tempdir().unwrap();
+    let store = ConfigStore::new(directory.path().join("gateway.json"));
+    let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = reservation.local_addr().unwrap().port();
+    admin::initialize(
+        &store,
+        &directory.path().join("vault.mdbx"),
+        port,
+        PASSWORD,
+        PASSWORD,
+    )
+    .unwrap();
+    let mut app = App::new(store.clone(), Language::ZhCn);
+    app.key(key(KeyCode::F(3)));
+    app.key(key(KeyCode::Char('c')));
+    fill(
+        &mut app,
+        &[
+            "work",
+            "",
+            "github",
+            REPOSITORY,
+            "只读巡检",
+            "",
+            TOKEN,
+            PASSWORD,
+        ],
+    );
+    drop(reservation);
+    app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    settle(&mut app).await;
+    assert!(app.broker.is_some());
+    app.key(key(KeyCode::Esc));
+    assert!(matches!(app.mode, Mode::Normal));
+
+    let approvals = app.broker.as_ref().unwrap().approvals();
+    let waiting = |tool: &str, is_write: bool| Request {
+        id: 0,
+        grant: "work".to_owned(),
+        tool: tool.to_owned(),
+        repository: REPOSITORY.to_owned(),
+        is_write,
+        preview: format!("{{\"title\":\"{tool} body\"}}"),
+        asked_at: Instant::now(),
+    };
+
+    let refusal = approvals.ask("k1", waiting("github_create_issue", true));
+    app.poll().await;
+    assert!(app.approval.is_some(), "the prompt reached the screen");
+    let screen = text(&mut app, 120, 38);
+    assert!(screen.contains("github_create_issue"), "{screen}");
+    assert!(screen.contains("github_create_issue body"), "{screen}");
+    capture_buffer("approval-request-120x38", &draw(&mut app, 120, 38));
+    // `n` would otherwise open the new-database form, and `y` would copy a field.
+    app.key(key(KeyCode::Char('n')));
+    assert_eq!(refusal.answer(), Some(Decision::Denied));
+    assert!(app.approval.is_none());
+    assert!(matches!(app.mode, Mode::Normal));
+
+    let grant = approvals.ask("k2", waiting("github_list_issues", false));
+    app.poll().await;
+    assert_eq!(app.approval.as_ref().unwrap().tool, "github_list_issues");
+    app.key(key(KeyCode::Char('y')));
+    assert_eq!(grant.answer(), Some(Decision::Approved));
+    app.poll().await;
+    assert!(
+        app.approval.is_none(),
+        "an answered call leaves the screen on the next frame"
+    );
+
+    app.key(key(KeyCode::Char('q')));
+    app.finish().await.unwrap();
+}
+
 /// This reaches the real OS credential manager, so it deletes exactly the entry it
 /// creates. The fake server answers on an ephemeral port, so the target name can
 /// never collide with a vault a person has actually logged into. The store is one
@@ -2408,6 +2604,7 @@ async fn tui_webdav_setup_to_mcp_call_revocation_and_quit_works_end_to_end() {
             "list-issues,get-issue",
             "60",
             "60",
+            "off",
             PASSWORD,
         ],
     ));

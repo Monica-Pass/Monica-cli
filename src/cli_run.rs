@@ -1,11 +1,15 @@
+use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
 use monica_pass_cli::admin::{self, BrokerSession, absolute, default_config};
+use monica_pass_cli::approval::{self, ApprovalQueue, Decision};
 use monica_pass_cli::config::{ClientConfig, ConfigStore, read_json};
 use monica_pass_cli::credstore;
 use monica_pass_cli::error::{GatewayError, Result};
 use monica_pass_cli::i18n::{self, Language, Message, Preferences};
-use monica_pass_cli::model::{validate_api_base, validate_name, validate_note};
+use monica_pass_cli::model::{ApprovalPolicy, validate_api_base, validate_name, validate_note};
 use monica_pass_cli::protocol::{McpBridge, serve_mcp};
 use monica_pass_cli::segment;
 use monica_pass_cli::tr;
@@ -449,7 +453,8 @@ async fn run_broker(
     output: Output,
 ) -> Result<()> {
     let mut session = BrokerSession::start(store.clone(), password).await?;
-    let address = store.load()?.listen;
+    let config = store.load()?;
+    let address = config.listen;
     output.event(
         "serve",
         "ready",
@@ -457,13 +462,88 @@ async fn run_broker(
     )?;
     output.note(tr!(lang, CliBrokerReady, address = address));
     output.note(tr!(lang, CliSessionLifetime));
-    tokio::select! {
-        result = session.wait() => result?,
-        _ = tokio::signal::ctrl_c() => session.stop().await?,
+    let gated = config
+        .grants
+        .iter()
+        .any(|grant| grant.approval != ApprovalPolicy::Off);
+    let prompter = if gated && !output.json && std::io::stdin().is_terminal() {
+        Some(spawn_approver(session.approvals(), lang, output))
+    } else {
+        if gated {
+            output.note(tr!(lang, ApprovalNoTerminalHint));
+        }
+        None
+    };
+    let result = tokio::select! {
+        result = session.wait() => result,
+        _ = tokio::signal::ctrl_c() => session.stop().await,
+    };
+    if let Some(prompter) = prompter {
+        prompter.abort();
     }
+    result?;
     output.event("serve", "stopped", json!({"locked":true}))?;
     output.note(tr!(lang, CliBrokerStopped));
     Ok(())
+}
+
+/// Asks a person about calls this process is holding, for as long as it owns
+/// the broker. A broker started without a terminal has nobody to ask, so its
+/// gated calls wait out their window and come back refused: the gate fails
+/// closed rather than approving itself.
+fn spawn_approver(
+    approvals: Arc<ApprovalQueue>,
+    lang: Language,
+    output: Output,
+) -> tokio::task::JoinHandle<()> {
+    let (sender, mut lines) = tokio::sync::mpsc::unbounded_channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        while std::io::stdin().read_line(&mut line).is_ok() {
+            let answer = line.trim().to_owned();
+            line.clear();
+            if sender.send(answer).is_err() {
+                return;
+            }
+        }
+    });
+    tokio::spawn(async move {
+        let mut on_screen: Option<u64> = None;
+        loop {
+            let Some(request) = approvals.waiting().first().cloned() else {
+                on_screen = None;
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                continue;
+            };
+            if on_screen != Some(request.id) {
+                // Whatever was typed between two calls answers neither of them.
+                while lines.try_recv().is_ok() {}
+                on_screen = Some(request.id);
+                output.note(tr!(lang, ApprovalRequestTitle));
+                output.note(request.describe(lang));
+                output.note(request.arguments(lang));
+                output.note(approval::ask_hint(lang));
+                output.prompt(tr!(lang, ApprovalInputPrompt));
+            }
+            tokio::select! {
+                answer = lines.recv() => match answer.as_deref() {
+                    Some("y") | Some("Y") | Some("yes") | Some("Yes") => {
+                        approvals.decide(request.id, Decision::Approved);
+                        output.note(tr!(lang, ApprovalGrantedHint));
+                        on_screen = None;
+                    }
+                    Some("n") | Some("N") | Some("no") | Some("No") => {
+                        approvals.decide(request.id, Decision::Denied);
+                        output.note(tr!(lang, ApprovalDeniedHint));
+                        on_screen = None;
+                    }
+                    None => return,
+                    Some(_) => output.prompt(tr!(lang, ApprovalInputPrompt)),
+                },
+                _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+            }
+        }
+    })
 }
 
 async fn webdav_command(

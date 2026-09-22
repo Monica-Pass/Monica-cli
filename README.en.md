@@ -19,7 +19,7 @@ Part of the <a href="https://github.com/Monica-Pass/Monica"><strong>Monica local
 
 [![Monica main repository](https://img.shields.io/badge/Monica-main%20repository-2f6feb?style=flat-square&logo=github&logoColor=white)](https://github.com/Monica-Pass/Monica)
 [![Android](https://img.shields.io/badge/Android-APK%20downloads-3DDC84?style=flat-square&logo=android&logoColor=white)](https://github.com/Monica-Pass/Monica/releases)
-[![Version](https://img.shields.io/badge/version-0.4.0-8a2be2?style=flat-square)](docs/redesign-progress.md)
+[![Version](https://img.shields.io/badge/version-0.5.0-8a2be2?style=flat-square)](docs/redesign-progress.md)
 [![Rust](https://img.shields.io/badge/rust-1.97-000000?style=flat-square&logo=rust&logoColor=white)](#build-from-source)
 [![Platform](https://img.shields.io/badge/platform-Windows%20verified-0078d4?style=flat-square&logo=windows&logoColor=white)](#build-from-source)
 <br>
@@ -51,6 +51,7 @@ Concretely:
 - **It manages the credentials you hand to AI**, such as GitHub / GitLab API tokens — not your entire password set.
 - **It keeps the token away from AI.** AI can only ask for an operation, like "list the Issues in this repository"; grant checks, token injection, request sending, and leak checks on the response all happen in the local gateway. The raw token never enters the model's context.
 - **It puts time on permissions.** Every AI authorization expires, can carry a call budget, and can only be renewed by a person running `refresh` locally — **no grant is permanent**. The credential stored in your vault does not expire and is not deleted when a grant ends.
+- **It can ask you first.** With `--approval write` a grant asks before every write, and with `--approval all` before every call. The prompt appears only in your own terminal — the TUI modal or the `serve` prompt — and waits at most 15 seconds; nobody answering means `approval_timeout`. AI sees the gate in the catalog but cannot answer it, and a command like `monica approve` **deliberately does not exist**. A refused call spends none of the grant's call budget.
 - **It also manages this database**, because configuring grants, checking status, and syncing over WebDAV should not require picking up a phone.
 
 It reads and writes **the same MDBX3 database** as the phone app, so the two are entry points into one vault rather than two unrelated stores. What it deliberately does not do: no TOTP generation, no autofill, no browser extension, no KeePass / Bitwarden import, and no external attachments — a vault with `.blobs` is refused outright with `external_blobs_unsupported`.
@@ -131,6 +132,8 @@ While the database is locked, the middle pane lists selectable action rows (open
 In edit forms, `Tab` moves between fields and `Ctrl+S` opens a separate database-password step. `Esc` in that step returns to the draft and clears the password. Each management operation unlocks the database only while it runs; summary metadata is cached for at most five minutes. This is separate from the AI broker's five-minute unlock session.
 
 In settings, press `c` for guided service setup, or `a` to configure an explicit grant. Every authorization **expires**: the default lifetime is 240 minutes (`--ttl`, 1–1440; leaving the field blank no longer means forever), and `--max-calls` can additionally cap how many upstream calls that grant may make. Once the window or the call budget is spent the AI only receives `reauthorization_required`, and a person must run `monica refresh GRANT` locally — command line only for now, with no TUI key — which issues a new capability, so the MCP client must be restarted to pick it up. Grants stay revocable and still require an active unlocked broker. Token replacement revokes existing grants for that connection.
+
+The same grants can carry a **human approval gate**: `monica grant … --approval write` asks before writes, `--approval all` asks before every call, and `monica rf GRANT --approval all` sets it while renewing (`off` is the default and never asks). The TUI grant form has an **Approval gate** field for the same thing. The quick `add` path has no such flag, so its grants are always `off`; set the gate afterwards with `grant` or `rf`. `st` now shows the setting in a `Gate` column. See section 6.5 of [docs/human-guide.md](docs/human-guide.md) (Chinese) for measured prompts and timings.
 
 The home tree always carries an **AI grants** row (locked vault included) whose suffix counts the authorizations currently in force. `Enter` opens the list: live rows show read-only or read-write scope, expired and "Calls used up" rows are dimmed, and the preview of the selected row shows `used/max` calls — so you can see which proxies are still serving without drilling into the database.
 
@@ -216,6 +219,7 @@ monica-pass ck work-github
 | List connections / edit purpose | `list` / `note` | `ls` / `e` |
 | Create / open a local vault | `init` / `open` | `n` / `o` |
 | Issue / refresh / revoke a grant | `grant` / `refresh` / `revoke` | `g` / `rf` / `rv` |
+| Put a human approval gate on a grant | `grant --approval off\|write\|all` / `refresh --approval <policy>` | Approval gate field |
 | Unlock and serve / lock | `serve` / `lock` | `u` / `lk` |
 | MCP settings / check discovery | `settings` / `check` | `m` / `ck` |
 | Status / WebDAV / command discovery | `status` / `webdav` / `commands` | `st` / `dav` / `cmds` |
@@ -223,7 +227,7 @@ monica-pass ck work-github
 
 `audit` reads the local gateway trail (`--grant <name>` to filter, `--limit <n>` for the most recent rows, newest first). It needs no master password and never contains credential material.
 
-Use `-r` for a repository, `-p` for the provider, `-n` for a purpose note, `-t` for grant lifetime, and `-s` to serve after adding. Global `-C` selects the configuration file and `-l` selects the language. TUI keys remain as shown in its footer.
+Use `-r` for a repository, `-p` for the provider, `-n` for a purpose note, `-t` for grant lifetime, and `-s` to serve after adding. The approval gate is `--approval off|write|all` and has no short form. Global `-C` selects the configuration file and `-l` selects the language. TUI keys remain as shown in its footer.
 
 `show` selects a connection name and displays its public purpose and grants. `m` and `ck` select a grant name; quick add uses the same name for both. Management that accesses the vault, including sync, first stops the broker and drains in-flight requests. It leaves the broker locked; run `u`, or press `u` in the TUI, to resume MCP access. Metadata queries and revocation do not stop the broker.
 

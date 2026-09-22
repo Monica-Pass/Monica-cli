@@ -31,6 +31,39 @@ impl Provider {
     }
 }
 
+/// Whether a person has to allow a call before it leaves the machine. A grant
+/// window bounds how long an AI may act; this bounds what it may do without a
+/// human in the loop. `off` keeps the behaviour every existing grant was issued
+/// with, so nothing changes until a person asks for a gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum ApprovalPolicy {
+    #[default]
+    Off,
+    /// Only operations that change remote state.
+    Write,
+    /// Every call, reads included.
+    All,
+}
+
+impl ApprovalPolicy {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Write => "write",
+            Self::All => "all",
+        }
+    }
+
+    pub fn requires(self, is_write: bool) -> bool {
+        match self {
+            Self::Off => false,
+            Self::Write => is_write,
+            Self::All => true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum Operation {

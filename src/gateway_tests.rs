@@ -1,12 +1,13 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use serde_json::{Value, json};
 
 use crate::admin;
+use crate::approval::{Decision, Request};
 use crate::error::GatewayError;
 use crate::gateway::Gateway;
-use crate::model::{CONNECTION_CATALOG_TOOL, Operation, Provider, ToolCall};
+use crate::model::{ApprovalPolicy, CONNECTION_CATALOG_TOOL, Operation, Provider, ToolCall};
 use crate::test_support::{Fixture, PASSWORD, REPOSITORY, Reply, TOKEN, issue};
 
 fn catalog_call() -> ToolCall {
@@ -69,6 +70,25 @@ async fn gateway_catalog_is_scoped_and_stops_on_lock_or_revocation() {
             .as_i64()
             .unwrap()
             > chrono::Utc::now().timestamp()
+    );
+    // The gate is disclosed to the AI on the catalog's first page, so a refused
+    // call reads as a person's decision rather than as a fault to retry around.
+    let mut authorization: Vec<&str> = catalog["authorization"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    authorization.sort();
+    assert_eq!(authorization, ["approval", "expires_at_unix", "grant"]);
+    assert_eq!(catalog["authorization"]["approval"], "off");
+    assert!(
+        catalog["usage"]
+            .as_str()
+            .unwrap()
+            .contains("approval_denied"),
+        "the catalog has to say what a refused call means: {}",
+        catalog["usage"]
     );
     let text = catalog.to_string();
     for private in [
@@ -1113,4 +1133,206 @@ async fn audit_reader_returns_the_trail_the_gateway_wrote() {
         admin::read_audit(&fixture.store, None, 50).unwrap()["total"],
         5
     );
+}
+
+fn set_approval(fixture: &Fixture, policy: ApprovalPolicy) {
+    fixture
+        .store
+        .update(|config| {
+            let mut config = config.unwrap();
+            config.grants[0].approval = policy;
+            Ok((config, ()))
+        })
+        .unwrap();
+}
+
+/// Answers the prompt the way the terminal holding the broker does: it waits for
+/// the call to park itself, reads what a person would see, then says yes or no.
+async fn answer(fixture: &Fixture, decision: Decision) -> Request {
+    let approvals = fixture.gateway.approvals();
+    loop {
+        if let Some(request) = approvals.waiting().first().cloned() {
+            approvals.decide(request.id, decision);
+            return request;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// Calls the durable usage state says this broker has already charged out.
+fn calls_spent(fixture: &Fixture) -> u64 {
+    crate::gateway::load_call_usage(&fixture.store)
+        .unwrap()
+        .values()
+        .map(|count| *count as u64)
+        .sum()
+}
+
+#[tokio::test]
+async fn a_person_gates_writes_and_a_refusal_spends_nothing() {
+    let fixture = Fixture::new(
+        Provider::Github,
+        &[Operation::ListIssues, Operation::CreateIssue],
+        vec![
+            Reply::json(json!([])),
+            Reply::json(issue(Provider::Github, 43)),
+        ],
+    )
+    .await;
+    set_approval(&fixture, ApprovalPolicy::Write);
+    cap_calls(&fixture, 2);
+    // The AI reads the gate off the catalog before it spends a call on a question
+    // it cannot answer itself.
+    let catalog = fixture
+        .gateway
+        .call(&fixture.capability, catalog_call())
+        .await
+        .unwrap();
+    assert_eq!(catalog["authorization"]["approval"], "write");
+    // `write` leaves reads alone, so the gate cannot stall ordinary traffic.
+    fixture
+        .gateway
+        .call(
+            &fixture.capability,
+            fixture.call(Operation::ListIssues, json!({"repository":REPOSITORY})),
+        )
+        .await
+        .unwrap();
+    assert!(fixture.gateway.approvals().waiting().is_empty());
+
+    let write = fixture.call(
+        Operation::CreateIssue,
+        json!({"repository":REPOSITORY, "title":"Needs a yes", "request_id":uuid::Uuid::new_v4()}),
+    );
+    let (refused, request) = tokio::join!(
+        fixture.gateway.call(&fixture.capability, write.clone()),
+        answer(&fixture, Decision::Denied)
+    );
+    assert_eq!(refused.unwrap_err(), GatewayError::ApprovalDenied);
+    assert_eq!(request.grant, "test-agent");
+    assert_eq!(request.repository, REPOSITORY);
+    assert!(request.is_write);
+    assert!(request.preview.contains("Needs a yes"));
+    // Refusing kept the call on this machine: only the earlier read ever reached
+    // the upstream, and the refusal cost none of the allowed calls.
+    assert_eq!(
+        fixture.upstream.requests().len(),
+        1,
+        "a refused write must not reach the upstream"
+    );
+    assert_eq!(calls_spent(&fixture), 1);
+    let trail = admin::read_audit(&fixture.store, None, 50).unwrap();
+    let rows = trail["events"].as_array().unwrap().clone();
+    assert_eq!(rows[0]["error"], "approval_denied");
+    assert_eq!(rows[0]["stage"], "finished");
+    assert!(
+        !rows
+            .iter()
+            .any(|row| row["stage"] == "authorized" && row["operation"] == "create_issue"),
+        "a refusal must not claim a dispatch"
+    );
+
+    // The refusal also covers the attempt straight after it, so an agent that
+    // retries in spite of the warning does not get a second bite at the human.
+    let retried = fixture
+        .gateway
+        .call(&fixture.capability, write.clone())
+        .await;
+    assert_eq!(retried.unwrap_err(), GatewayError::ApprovalDenied);
+    assert!(fixture.gateway.approvals().waiting().is_empty());
+    assert_eq!(calls_spent(&fixture), 1);
+
+    // A third attempt is a fresh question, and this time the answer is yes.
+    let (created, request) = tokio::join!(
+        fixture.gateway.call(&fixture.capability, write.clone()),
+        answer(&fixture, Decision::Approved)
+    );
+    assert_eq!(
+        request.tool,
+        Operation::CreateIssue.tool_name(Provider::Github)
+    );
+    assert_eq!(created.unwrap()["issue"]["number"], 43);
+    // The read plus the now-approved write, and nothing from the refusal.
+    assert_eq!(fixture.upstream.requests().len(), 2);
+    assert_eq!(calls_spent(&fixture), 2);
+
+    // `all` also asks about reads.
+    set_approval(&fixture, ApprovalPolicy::All);
+    let read = fixture.call(Operation::ListIssues, json!({"repository":REPOSITORY}));
+    let (refused, request) = tokio::join!(
+        fixture.gateway.call(&fixture.capability, read),
+        answer(&fixture, Decision::Denied)
+    );
+    assert_eq!(refused.unwrap_err(), GatewayError::ApprovalDenied);
+    assert!(!request.is_write);
+    assert_eq!(fixture.upstream.requests().len(), 2);
+}
+
+/// An unanswered call comes back as a clear "a person has not answered yet", and
+/// the prompt stays up so the answer given late still counts. This waits out the
+/// real approval window, so it is the slowest test here on purpose: the alternative
+/// is shipping a claim about a timeout nobody measured.
+#[tokio::test]
+async fn an_unanswered_call_times_out_and_a_late_answer_still_counts() {
+    let fixture = Fixture::new(
+        Provider::Github,
+        &[Operation::CreateIssue],
+        vec![Reply::json(issue(Provider::Github, 44))],
+    )
+    .await;
+    set_approval(&fixture, ApprovalPolicy::Write);
+    let write = fixture.call(
+        Operation::CreateIssue,
+        json!({"repository":REPOSITORY, "title":"Answered late", "request_id":uuid::Uuid::new_v4()}),
+    );
+    let started = Instant::now();
+    let first = fixture
+        .gateway
+        .call(&fixture.capability, write.clone())
+        .await;
+    assert_eq!(first.unwrap_err(), GatewayError::ApprovalTimeout);
+    assert!(started.elapsed() >= crate::approval::WAIT);
+    // The ceiling a timeout has to respect is the bridge's own patience, and that
+    // is a relationship between two constants rather than a race with the
+    // scheduler: pinned here so neither can drift past the other unnoticed.
+    assert!(
+        crate::approval::WAIT < crate::protocol::CALL_TIMEOUT,
+        "an approval must not outlive the request waiting for it"
+    );
+    // The person walks back to the terminal while the prompt is still there.
+    let approvals = fixture.gateway.approvals();
+    assert_eq!(approvals.waiting().len(), 1);
+    approvals.decide(approvals.waiting()[0].id, Decision::Approved);
+    let retry = fixture
+        .gateway
+        .call(&fixture.capability, write)
+        .await
+        .unwrap();
+    assert_eq!(retry["issue"]["number"], 44);
+    assert_eq!(fixture.upstream.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn locking_the_broker_answers_every_waiting_call() {
+    let fixture = Fixture::new(Provider::Github, &[Operation::ListIssues], vec![]).await;
+    set_approval(&fixture, ApprovalPolicy::All);
+    let approvals = fixture.gateway.approvals();
+    let park = {
+        let approvals = approvals.clone();
+        let store = fixture.store.clone();
+        async move {
+            loop {
+                if let Some(request) = approvals.waiting().first().cloned() {
+                    std::fs::write(store.lock_marker(), b"").unwrap();
+                    return request;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }
+    };
+    let call = fixture.call(Operation::ListIssues, json!({"repository":REPOSITORY}));
+    let (result, _waiting) = tokio::join!(fixture.gateway.call(&fixture.capability, call), park);
+    // Locking must never leave a call behind a door nobody can answer from.
+    assert_eq!(result.unwrap_err(), GatewayError::UnlockRequired);
+    assert!(approvals.waiting().is_empty());
 }

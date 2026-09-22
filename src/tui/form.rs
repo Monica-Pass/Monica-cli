@@ -9,8 +9,8 @@ use crate::admin::{AddOptions, GrantOptions, validate_new_password};
 use crate::config::DEFAULT_PORT;
 use crate::error::{GatewayError, Result};
 use crate::model::{
-    Operation, Provider, validate_api_base, validate_name, validate_note, validate_repository,
-    validate_title,
+    ApprovalPolicy, Operation, Provider, validate_api_base, validate_name, validate_note,
+    validate_repository, validate_title,
 };
 use crate::tr;
 use crate::webdav::{WebDavProfile, normalize_path};
@@ -512,6 +512,7 @@ impl Form {
                         },
                     ),
                     Field::text(tr!(lang, RateLimitLabel), "60", "1–600"),
+                    Field::text(tr!(lang, ApprovalLabel), "off", tr!(lang, ApprovalHint)),
                     Field::secret(tr!(lang, MasterPasswordLabel)),
                 ],
             ),
@@ -960,6 +961,12 @@ impl Form {
                     .ok()
                     .filter(|value| (1..=600).contains(value))
                     .ok_or(GatewayError::InvalidRequest)?;
+                let approval = match self.text(6).trim() {
+                    "" | "off" => ApprovalPolicy::Off,
+                    "write" => ApprovalPolicy::Write,
+                    "all" => ApprovalPolicy::All,
+                    _ => return Err(GatewayError::InvalidRequest),
+                };
                 let options = GrantOptions {
                     name: self.text(0).to_owned(),
                     connection: self.text(1).to_owned(),
@@ -968,11 +975,12 @@ impl Form {
                     ttl_minutes,
                     requests_per_minute,
                     max_calls: 0,
+                    approval,
                     out: None,
                 };
                 Action::Grant {
                     options,
-                    password: self.secret(6),
+                    password: self.secret(7),
                 }
             }
             Kind::Login => Action::Login {

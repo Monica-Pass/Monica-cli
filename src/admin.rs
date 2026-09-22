@@ -9,6 +9,7 @@ use mdbx_core::tiga::TigaMode;
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
 
+use crate::approval::ApprovalQueue;
 use crate::config::{
     ClientConfig, Config, ConfigStore, Connection, DEFAULT_GRANT_TTL_MINUTES, Grant,
     MAX_GRANT_CALLS, capability_hash, connection_fingerprint, ensure_parent, new_capability,
@@ -17,8 +18,8 @@ use crate::config::{
 use crate::error::{GatewayError, Result};
 use crate::gateway::Gateway;
 use crate::model::{
-    Operation, Provider, validate_api_base, validate_name, validate_note, validate_repository,
-    validate_title,
+    ApprovalPolicy, Operation, Provider, validate_api_base, validate_name, validate_note,
+    validate_repository, validate_title,
 };
 use crate::protocol::serve_broker;
 use crate::upstream::reject_secret_value;
@@ -42,6 +43,9 @@ pub struct GrantOptions {
     /// Upstream calls this grant may make before a person refreshes it; 0 is uncapped.
     #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=MAX_GRANT_CALLS as i64))]
     pub max_calls: u32,
+    /// Ask a person before a call leaves the machine: off, write, or all.
+    #[arg(long, value_enum, default_value = "off")]
+    pub approval: ApprovalPolicy,
     /// A new capability file. Existing files are never overwritten.
     #[arg(short = 'o', long, value_name = "NEW_CLIENT_FILE")]
     pub out: Option<PathBuf>,
@@ -57,6 +61,9 @@ pub struct RefreshOptions {
     /// New call cap. Omit to keep the cap this grant was issued with.
     #[arg(long = "max-calls", value_parser = clap::value_parser!(u32).range(0..=MAX_GRANT_CALLS as i64))]
     pub call_cap: Option<u32>,
+    /// New approval gate. Omit to keep the gate this grant was issued with.
+    #[arg(long, value_enum)]
+    pub approval: Option<ApprovalPolicy>,
 }
 
 #[derive(Clone, clap::Args)]
@@ -122,6 +129,9 @@ impl AddOptions {
             ttl_minutes: self.ttl_minutes,
             requests_per_minute: 60,
             max_calls: 0,
+            // Quick add stays the one-command path; the gate is set deliberately
+            // with `grant --approval` or turned on later with `refresh --approval`.
+            approval: ApprovalPolicy::default(),
             out: None,
         }
     }
@@ -544,6 +554,7 @@ fn prepare_grant(
         expires_at: now + i64::from(window_minutes(options.ttl_minutes)) * 60,
         requests_per_minute: options.requests_per_minute,
         max_calls: options.max_calls,
+        approval: options.approval,
         client_file: Some(output.to_owned()),
     });
     config.validate()?;
@@ -671,6 +682,7 @@ pub fn refresh_grant(
             issued_at: now,
             expires_at: now + i64::from(window_minutes(minutes)) * 60,
             max_calls: options.call_cap.unwrap_or(previous.max_calls),
+            approval: options.approval.unwrap_or(previous.approval),
             ..previous
         };
         config.validate()?;
@@ -865,6 +877,7 @@ pub fn status(store: &ConfigStore) -> Result<Value> {
                 "name": grant.name, "connection": grant.connection, "repositories": grant.repositories,
                 "operations": grant.operations, "expires_at_unix": grant.expires_at,
                 "expired": state.expired, "max_calls": grant.max_calls, "calls_used": state.used,
+                "approval": grant.approval.name(),
                 "refresh_required": state.refresh_required(),
             })
         })
@@ -883,6 +896,7 @@ pub struct BrokerSession {
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<Result<()>>>,
     deadline: Instant,
+    approvals: Arc<ApprovalQueue>,
 }
 
 impl BrokerSession {
@@ -925,6 +939,7 @@ impl BrokerSession {
         .map_err(|_| GatewayError::StateUnavailable)??;
         let (stop, receiver) = tokio::sync::oneshot::channel();
         let lifetime = Duration::from_secs(300);
+        let approvals = gateway.approvals();
         let task = tokio::spawn(async move {
             let _guard = guard;
             serve_broker(gateway, listener, async move {
@@ -939,7 +954,15 @@ impl BrokerSession {
             stop: Some(stop),
             task: Some(task),
             deadline: Instant::now() + lifetime,
+            approvals,
         })
+    }
+
+    /// The prompts this broker process is waiting on. The frontend that owns the
+    /// session renders them and answers, because it is the process a person is
+    /// actually looking at.
+    pub fn approvals(&self) -> Arc<ApprovalQueue> {
+        self.approvals.clone()
     }
 
     pub fn is_finished(&self) -> bool {
@@ -963,6 +986,7 @@ impl BrokerSession {
     }
 
     pub async fn stop(mut self) -> Result<()> {
+        self.approvals.deny_all();
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
@@ -972,6 +996,8 @@ impl BrokerSession {
 
 impl Drop for BrokerSession {
     fn drop(&mut self) {
+        // Nobody is left to answer a prompt the session is taking with it.
+        self.approvals.deny_all();
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
@@ -1141,6 +1167,7 @@ mod tests {
                 ttl_minutes: 60,
                 requests_per_minute: 10,
                 max_calls: 0,
+                approval: ApprovalPolicy::Off,
                 out: None,
             },
             PASSWORD,
@@ -1494,6 +1521,7 @@ mod tests {
             ttl_minutes: 30,
             requests_per_minute: 10,
             max_calls: 0,
+            approval: ApprovalPolicy::Off,
             out: None,
         };
         assert!(matches!(
@@ -1566,6 +1594,7 @@ mod tests {
                 ttl_minutes: 0,
                 requests_per_minute: 10,
                 max_calls: 3,
+                approval: ApprovalPolicy::Off,
                 out: None,
             },
             PASSWORD,
@@ -1591,6 +1620,7 @@ mod tests {
                 name: "agent".to_owned(),
                 window: Some(15),
                 call_cap: None,
+                approval: None,
             },
             PASSWORD,
         )
@@ -1629,6 +1659,7 @@ mod tests {
                 name: "agent".to_owned(),
                 window: None,
                 call_cap: None,
+                approval: None,
             },
             PASSWORD,
         )

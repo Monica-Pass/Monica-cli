@@ -15,6 +15,16 @@ impl Output {
         }
     }
 
+    /// A question waiting for a keystroke, so no newline and an immediate flush.
+    pub fn prompt(self, message: impl std::fmt::Display) {
+        if self.json {
+            return;
+        }
+        let mut stderr = std::io::stderr();
+        let _ = write!(&mut stderr, "{message}");
+        let _ = stderr.flush();
+    }
+
     pub fn result(self, command: &str, data: Value, human_json: Option<&Value>) -> Result<()> {
         if self.json {
             print_json(

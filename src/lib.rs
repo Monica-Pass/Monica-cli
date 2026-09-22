@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod approval;
 pub mod clipboard;
 pub mod config;
 pub mod credstore;

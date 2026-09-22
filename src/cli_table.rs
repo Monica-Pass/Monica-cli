@@ -313,6 +313,7 @@ pub fn render_status(status: &Value, lang: Language) -> String {
         tr!(lang, TableColumnOperations),
         tr!(lang, TableColumnExpires),
         tr!(lang, TableColumnCalls),
+        tr!(lang, ApprovalColumn),
     ];
     let mut rows: Vec<Vec<String>> = Vec::with_capacity(grants.len());
     for &grant in &grants {
@@ -323,6 +324,7 @@ pub fn render_status(status: &Value, lang: Language) -> String {
             join_array(grant, "operations"),
             format_expiry(grant, lang),
             format_calls(grant, lang),
+            string(grant, "approval"),
         ]);
     }
     out.push('\n');
@@ -887,9 +889,9 @@ mod tests {
             "connections": [{"name":"gh","provider":"github","api_base":"https://api.github.com/","note":"ok"}],
             "grants": [
                 {"name":"read","connection":"gh","repositories":["a/b"],"operations":["list_issues"],
-                 "expires_at_unix":0,"expired":false,"max_calls":0,"calls_used":0,"refresh_required":false},
+                 "expires_at_unix":0,"expired":false,"max_calls":0,"calls_used":0,"refresh_required":false,"approval":"off"},
                 {"name":"cap","connection":"gh","repositories":["a/b"],"operations":["get_issue"],
-                 "expires_at_unix":1,"expired":true,"max_calls":5,"calls_used":5,"refresh_required":true},
+                 "expires_at_unix":1,"expired":true,"max_calls":5,"calls_used":5,"refresh_required":true,"approval":"write"},
             ]
         })
     }
@@ -911,17 +913,17 @@ mod tests {
         assert_eq!(lines[3], "WebDAV   off");
         let header = line_starting(&lines, "Grant");
         assert!(
-            header.contains("Handle") && header.ends_with("Calls"),
+            header.contains("Handle") && header.ends_with("Gate"),
             "{out}"
         );
         let read = line_starting(&lines, "read");
         assert!(
-            read.contains("never") && read.contains("unlimited"),
+            read.contains("never") && read.contains("unlimited") && read.ends_with("off"),
             "{read}"
         );
         let cap = line_starting(&lines, "cap");
         assert!(
-            cap.contains("1970-01-01") && cap.contains("expired") && cap.ends_with("5/5"),
+            cap.contains("1970-01-01") && cap.contains("expired") && cap.ends_with("write"),
             "{cap}"
         );
     }
