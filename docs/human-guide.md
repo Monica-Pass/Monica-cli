@@ -4,7 +4,7 @@
 
 本手册面向**使用 Monica CLI 的人**：如何建库、如何存 Token、如何设计一份授权、如何把它接到 AI 客户端、出错时该做什么。第 4 节专门讲 AI 接入，第 11 节是排障对照表。
 
-适用版本 0.2.0。文中 Monica 侧的命令行与输出均在本机 Windows x64 的 0.2.0 构建上实测；AI 客户端的配置文件位置请以该客户端的官方文档为准。
+适用版本 0.3.0。文中 Monica 侧的命令行与输出均在本机 Windows x64 的 0.3.0 构建上实测；AI 客户端的配置文件位置请以该客户端的官方文档为准。
 
 ---
 
@@ -156,11 +156,11 @@ monica -C %CFG% ck work
 monica -C %CFG% call work --request catalog.json --json
 ```
 
-实测输出（0.2.0）：
+实测输出（0.3.0）：
 
 ```json
 {"ok":true,"command":"call","data":{
-  "authorization":{"expires_at_unix":1789798380,"grant":"work"},
+  "authorization":{"expires_at_unix":1790086615,"grant":"work"},
   "connections":[{
     "default_repository":"joyins/example-repo",
     "name":"work",

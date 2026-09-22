@@ -18,7 +18,7 @@ That tally is the state at this milestone, not the current suite: the run of 202
 
 The separate lifetimes were also demonstrated with the debug binary against a throwaway vault: a one-minute grant returned `reauthorization_required` while `list` and `status` still showed the connection, `refresh` succeeded with the master password only and rejected a payload that also carried a token, and revoking the grant left the stored credential in place.
 
-The `D:/Apps/MonicaCLI` portable install was refreshed on 2026-09-22 from this release build; its `monica-pass.exe` is SHA-256 identical to `target/release/monica-pass.exe`, and `monica --help` there now lists `refresh`. Because `Cargo.toml` is still `0.2.0`, `monica --version` cannot tell one build from another, so the hash is the check. Read-only commands were exercised against a throwaway config under `%TEMP%`, never against the real vault.
+The `D:/Apps/MonicaCLI` portable install was refreshed on 2026-09-22 and now reports `monica 0.3.0`, the same number the MCP handshake returns as `serverInfo.version`, so either one tells this build from an older one. Read-only commands were exercised against a throwaway config under `%TEMP%`, never against the real vault.
 
 Scope and limitations:
 
