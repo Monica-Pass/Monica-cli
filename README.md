@@ -1,26 +1,60 @@
-<div align="center">
-<img src="docs/images/logo.png" alt="Monica CLI 图标" width="112">
-</div>
+<h1 align="center">Monica CLI</h1>
 
 <div align="center">
-<img src="docs/images/banner.png" alt="MONICA CLI" width="880">
-</div>
-
-# Monica CLI
 
 **简体中文** · [English](README.en.md)
 
-[实现与验证](docs/redesign-progress.md) · [克隆与构建依赖](docs/source-checkout.md) · [Token 与 Android 数据约定](docs/token-format.md)
+<img src="docs/images/logo.png" alt="Monica CLI 图标" width="120" />
+<br/>
+<img src="docs/images/banner.png" alt="MONICA CLI" width="880" />
 
 **面向 AI 的本地凭据代理，让 AI 在你的授权范围内使用服务。**
 
+<p>服务 Token 保存在本地 MDBX3 加密保险库 · AI 通过 MCP 请求 · 授权一律会到期 · 解锁与撤销由你执行</p>
+
+<p>
+隶属 <a href="https://github.com/Monica-Pass/Monica"><strong>Monica 本地密码库</strong></a> 生态 ·
+<a href="https://monica-pass.github.io/MonicaDocs/">Monica 文档站</a>
+</p>
+
+[![Monica 主仓库](https://img.shields.io/badge/Monica-主仓库-2f6feb?style=flat-square&logo=github&logoColor=white)](https://github.com/Monica-Pass/Monica)
+[![Android](https://img.shields.io/badge/Android-APK%20下载-3DDC84?style=flat-square&logo=android&logoColor=white)](https://github.com/Monica-Pass/Monica/releases)
+[![版本](https://img.shields.io/badge/版本-0.4.0-8a2be2?style=flat-square)](docs/redesign-progress.md)
+[![Rust](https://img.shields.io/badge/Rust-1.97-000000?style=flat-square&logo=rust&logoColor=white)](#从源码构建)
+[![平台](https://img.shields.io/badge/平台-Windows%20已实测-0078d4?style=flat-square&logo=windows&logoColor=white)](#从源码构建)
+<br>
+[![爱发电](https://img.shields.io/badge/爱发电-JoyinJoester-ea4aaa?style=flat-square)](https://afdian.com/a/JoyinJoester)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-joyinjoester-29ABE0?style=flat-square&logo=kofi&logoColor=white)](https://ko-fi.com/joyinjoester)
+[![PayPal](https://img.shields.io/badge/PayPal-Support%20Monica-FFD140?style=flat-square&logo=paypal&logoColor=00457C)](https://www.paypal.com/ncp/payment/BHSYWK73CA8FW)
+[![Liberapay · EUR](https://img.shields.io/badge/Liberapay-EUR-F6C915?style=flat-square&logo=liberapay&logoColor=black)](https://liberapay.com/JoyinJoester)
+[![QQ群](https://img.shields.io/badge/QQ群-1087865010-12B7F5?style=flat-square&logo=tencentqq&logoColor=white)](https://qm.qq.com/q/2vTdTkHV3u)
+[![Telegram](https://img.shields.io/badge/Telegram-Monica%20Community-26A5E4?style=flat-square&logo=telegram&logoColor=white)](https://t.me/+IZUDLL-vWOA1Y2U1)
+
+</div>
+
+[实现与验证](docs/redesign-progress.md) · [克隆与构建依赖](docs/source-checkout.md) · [Token 与 Android 数据约定](docs/token-format.md)
+
 Monica CLI 将服务 Token 保存在本地 MDBX3 加密保险库中。AI 通过 MCP 请求操作，Monica 校验授权、注入凭据并代为发送请求，再将业务结果返回给 AI。你负责管理凭据和权限，AI 通过连接名称和用途备注理解该使用哪个服务，无需直接持有原始 Token。
 
-[快速开始](#快速开始) · [接入 AI](#接入-ai) · [WebDAV 保险库](#webdav-保险库) · [从源码构建](#从源码构建) · [GitHub](https://github.com/Monica-Pass/Monica-cli)
+[快速开始](#快速开始) · [接入 AI](#接入-ai) · [WebDAV 保险库](#webdav-保险库) · [从源码构建](#从源码构建) · [Monica 主仓库](https://github.com/Monica-Pass/Monica) · [本仓库](https://github.com/Monica-Pass/Monica-cli)
 
 ![Monica CLI 终端管理界面](docs/images/home.png)
 
 *数据库与嵌套分类主页；由合成测试数据渲染。*
+
+## Monica 生态
+
+Monica 是聚合 **Bitwarden** 与 **KeePass** 的本地优先密码库，本仓库是它的命令行与 AI 网关一端，与手机端读写同一份 MDBX3 数据库。
+
+| 组件 | 用途 | 入口 |
+| --- | --- | --- |
+| Monica for Android | 手机端日常使用：本地 Vault、TOTP、自动填充、WebDAV 同步 | [主仓库](https://github.com/Monica-Pass/Monica) · [Releases](https://github.com/Monica-Pass/Monica/releases) |
+| Monica CLI（本仓库） | 本地凭据代理：人工管理 + 让 AI 在授权范围内使用服务 | 当前目录 |
+| Monica 文档站 | 面向使用者的完整文档 | [MonicaDocs](https://monica-pass.github.io/MonicaDocs/) |
+
+手机与命令行共用同一份数据库：在 CLI 里建库、保存 Token、同步 WebDAV 之后，手机 Monica 打开同一个 `.mdbx` 文件就能看到并继续编辑同一批条目；根分类与密钥条目的跨端约定见 [WebDAV 保险库](#webdav-保险库)。
+
+> 整个项目目前由一人维护，优先级依次是 Android 端的功能与稳定性、CLI 端的授权边界、文档。感谢理解与支持。
 
 ## 能做什么
 
@@ -349,4 +383,64 @@ WebDAV 同步加密保险库，本地的 AI 授权文件和操作日志不会随
 - [安全边界、授权与恢复](SECURITY.md)
 - [TUI 布局与交互说明](docs/tui-design.md)
 - [第三方许可与致谢](THIRD_PARTY_NOTICES.md)；终端界面参考了 [Yazi](https://github.com/sxyazi/yazi)。
-- [问题反馈与功能建议](https://github.com/Monica-Pass/Monica-cli/issues)
+- [问题反馈与功能建议](https://github.com/Monica-Pass/Monica-cli/issues)；生态层面的问题请提到 [Monica 主仓库](https://github.com/Monica-Pass/Monica/issues)。
+
+---
+
+## 赞助支持
+
+如果 Monica CLI 帮你把 Token 留在了自己手里，欢迎支持持续开发与维护。
+
+<div align="center">
+<img src="docs/images/support-monica.jpg" alt="微信 / 支付宝收款码" width="640"/>
+<br/>
+<sub>微信 / 支付宝扫码支持</sub>
+</div>
+
+<br/>
+
+<p align="center">
+  <a href="https://afdian.com/a/JoyinJoester">
+    <img src="https://img.shields.io/badge/爱发电-JoyinJoester-ea4aaa?style=for-the-badge" alt="通过爱发电支持" />
+  </a>
+  <a href="https://ko-fi.com/joyinjoester">
+    <img src="https://img.shields.io/badge/Ko--fi-joyinjoester-29ABE0?style=for-the-badge&amp;logo=kofi&amp;logoColor=white" alt="Ko-fi" />
+  </a>
+  <a href="https://www.paypal.com/ncp/payment/BHSYWK73CA8FW">
+    <img src="https://img.shields.io/badge/PayPal-Support%20Monica-FFD140?style=for-the-badge&amp;logo=paypal&amp;logoColor=003087" alt="通过 PayPal 支持 Monica" />
+  </a>
+  <a href="https://liberapay.com/JoyinJoester">
+    <img src="https://img.shields.io/badge/Liberapay-EUR-F6C915?style=for-the-badge&amp;logo=liberapay&amp;logoColor=black" alt="Liberapay · EUR (€)" />
+  </a>
+</p>
+
+你的支持会优先用于：
+
+- 授权边界与安全审计：让 Token 更不可能从这条接口泄漏。
+- 跨端兼容：与手机 Monica 共用同一份数据库的持续对齐。
+- 文档与人工体验：命令行、TUI 与[人工使用手册](docs/human-guide.md)的维护。
+
+打赏鸣谢名单由 [Monica 主仓库](https://github.com/Monica-Pass/Monica#赞助支持) 的 README 统一维护——本仓库没有定时抓取爱发电的脚本，复制一份名单只会过期。
+
+## 社区与支持
+
+Monica 全项目共用同一个社区，CLI 的使用问题也欢迎在这里问：
+
+- Telegram 群组：[加入 Monica 社区](https://t.me/+IZUDLL-vWOA1Y2U1)
+- QQ 群：`1087865010`（[加群链接](https://qm.qq.com/q/2vTdTkHV3u)）
+- 本仓库 [Issues](https://github.com/Monica-Pass/Monica-cli/issues) · 主仓库 [Issues](https://github.com/Monica-Pass/Monica/issues)
+
+## 致谢
+
+- [Monica for Android](https://github.com/Monica-Pass/Monica) — 与本工具读写同一份数据库的对端。
+- [Yazi](https://github.com/sxyazi/yazi) — 终端界面布局与交互的参考。
+- [Bitwarden](https://bitwarden.com/) 与 [KeePass](https://keepass.info/) — 本地优先密码管理生态的参照。
+- 依赖与资源的许可声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+## 许可证
+
+本仓库按 `Cargo.toml` 声明的 **MIT OR Apache-2.0** 提供。
+
+> 需要注意：Monica 主仓库使用 **GPL-3.0**，与本仓库声明的许可并不相同，且本仓库当前没有 `LICENSE` 文件。若要与主项目统一，需要先修改 `Cargo.toml` 并补上 `LICENSE`。
+
+品牌名称与 Logo 的商标权归各自权利人所有。

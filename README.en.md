@@ -1,26 +1,60 @@
-<div align="center">
-<img src="docs/images/logo.png" alt="Monica CLI logo" width="112">
-</div>
+<h1 align="center">Monica CLI</h1>
 
 <div align="center">
-<img src="docs/images/banner.png" alt="MONICA CLI" width="880">
-</div>
-
-# Monica CLI
 
 **English** · [简体中文](README.md)
 
-[Implementation status](docs/redesign-progress.md) · [Source dependencies](docs/source-checkout.md) · [Token / Android format](docs/token-format.md)
+<img src="docs/images/logo.png" alt="Monica CLI logo" width="120" />
+<br/>
+<img src="docs/images/banner.png" alt="MONICA CLI" width="880" />
 
 **A local credential gateway that lets AI use services within the permissions you grant.**
 
+<p>Service tokens stay in a local encrypted MDBX3 vault · AI asks through MCP · every authorization expires · you unlock and revoke</p>
+
+<p>
+Part of the <a href="https://github.com/Monica-Pass/Monica"><strong>Monica local password manager</strong></a> family ·
+<a href="https://monica-pass.github.io/MonicaDocs/">Monica documentation site</a>
+</p>
+
+[![Monica main repository](https://img.shields.io/badge/Monica-main%20repository-2f6feb?style=flat-square&logo=github&logoColor=white)](https://github.com/Monica-Pass/Monica)
+[![Android](https://img.shields.io/badge/Android-APK%20downloads-3DDC84?style=flat-square&logo=android&logoColor=white)](https://github.com/Monica-Pass/Monica/releases)
+[![Version](https://img.shields.io/badge/version-0.4.0-8a2be2?style=flat-square)](docs/redesign-progress.md)
+[![Rust](https://img.shields.io/badge/rust-1.97-000000?style=flat-square&logo=rust&logoColor=white)](#build-from-source)
+[![Platform](https://img.shields.io/badge/platform-Windows%20verified-0078d4?style=flat-square&logo=windows&logoColor=white)](#build-from-source)
+<br>
+[![Afdian](https://img.shields.io/badge/爱发电-JoyinJoester-ea4aaa?style=flat-square)](https://afdian.com/a/JoyinJoester)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-joyinjoester-29ABE0?style=flat-square&logo=kofi&logoColor=white)](https://ko-fi.com/joyinjoester)
+[![PayPal](https://img.shields.io/badge/PayPal-Support%20Monica-FFD140?style=flat-square&logo=paypal&logoColor=00457C)](https://www.paypal.com/ncp/payment/BHSYWK73CA8FW)
+[![Liberapay · EUR](https://img.shields.io/badge/Liberapay-EUR-F6C915?style=flat-square&logo=liberapay&logoColor=black)](https://liberapay.com/JoyinJoester)
+[![QQ Group](https://img.shields.io/badge/QQ-1087865010-12B7F5?style=flat-square&logo=tencentqq&logoColor=white)](https://qm.qq.com/q/2vTdTkHV3u)
+[![Telegram](https://img.shields.io/badge/Telegram-Monica%20Community-26A5E4?style=flat-square&logo=telegram&logoColor=white)](https://t.me/+IZUDLL-vWOA1Y2U1)
+
+</div>
+
+[Implementation status](docs/redesign-progress.md) · [Source dependencies](docs/source-checkout.md) · [Token / Android format](docs/token-format.md)
+
 Monica CLI stores service tokens in a local, encrypted MDBX3 vault. AI requests an operation through MCP; Monica checks the grant, injects the credential, sends the request, and returns the service result. You manage credentials and permissions, while AI uses connection names and purpose notes to understand which service to use without directly holding the raw token.
 
-[Quick start](#quick-start) · [Connect an AI client](#connect-an-ai-client) · [WebDAV vaults](#webdav-vaults) · [Build from source](#build-from-source) · [GitHub](https://github.com/Monica-Pass/Monica-cli)
+[Quick start](#quick-start) · [Connect an AI client](#connect-an-ai-client) · [WebDAV vaults](#webdav-vaults) · [Build from source](#build-from-source) · [Monica main repository](https://github.com/Monica-Pass/Monica) · [This repository](https://github.com/Monica-Pass/Monica-cli)
 
 ![Monica CLI database and category home](docs/images/home.png)
 
 *Database and nested-category home rendered from synthetic test data. The interface supports English and Simplified Chinese.*
+
+## The Monica family
+
+Monica is a local-first password manager that brings **Bitwarden** and **KeePass** together; this repository is its command-line and AI gateway end, reading and writing the same MDBX3 databases as the phone app.
+
+| Component | What it does | Where |
+| --- | --- | --- |
+| Monica for Android | Everyday use on the phone: local vault, TOTP, autofill, WebDAV sync | [Main repository](https://github.com/Monica-Pass/Monica) · [Releases](https://github.com/Monica-Pass/Monica/releases) |
+| Monica CLI (this repository) | Local credential gateway: human management plus AI access inside your grants | Here |
+| Monica documentation site | Full end-user documentation | [MonicaDocs](https://monica-pass.github.io/MonicaDocs/) |
+
+Phone and command line share one database: after this tool creates a vault, stores a token and syncs over WebDAV, Monica for Android opens the same `.mdbx` file and keeps editing the same entries. The root-collection and key-entry rules are covered in [WebDAV vaults](#webdav-vaults).
+
+> The whole project is maintained by one person. Priorities are Android features and stability, then the CLI's authorization boundaries, then documentation. Thanks for your understanding.
 
 ## What Monica does
 
@@ -349,4 +383,64 @@ WebDAV sync transfers the encrypted vault. Local AI grant files and operation lo
 - [Security boundaries, grants, and recovery](SECURITY.md) (Chinese)
 - [TUI layout and interaction guide](docs/tui-design.md) (Chinese)
 - [Third-party licenses and acknowledgments](THIRD_PARTY_NOTICES.md); the terminal interface draws on [Yazi](https://github.com/sxyazi/yazi).
-- [Bug reports and feature requests](https://github.com/Monica-Pass/Monica-cli/issues)
+- [Bug reports and feature requests](https://github.com/Monica-Pass/Monica-cli/issues); for ecosystem-wide topics use the [Monica main repository](https://github.com/Monica-Pass/Monica/issues).
+
+---
+
+## Support the project
+
+If Monica CLI keeps your tokens in your own hands, support for ongoing development is welcome.
+
+<div align="center">
+<img src="docs/images/support-monica.jpg" alt="WeChat and Alipay donation codes" width="640"/>
+<br/>
+<sub>Scan with WeChat or Alipay</sub>
+</div>
+
+<br/>
+
+<p align="center">
+  <a href="https://afdian.com/a/JoyinJoester">
+    <img src="https://img.shields.io/badge/爱发电-JoyinJoester-ea4aaa?style=for-the-badge" alt="Support on Afdian" />
+  </a>
+  <a href="https://ko-fi.com/joyinjoester">
+    <img src="https://img.shields.io/badge/Ko--fi-joyinjoester-29ABE0?style=for-the-badge&amp;logo=kofi&amp;logoColor=white" alt="Ko-fi" />
+  </a>
+  <a href="https://www.paypal.com/ncp/payment/BHSYWK73CA8FW">
+    <img src="https://img.shields.io/badge/PayPal-Support%20Monica-FFD140?style=for-the-badge&amp;logo=paypal&amp;logoColor=003087" alt="Support Monica through PayPal" />
+  </a>
+  <a href="https://liberapay.com/JoyinJoester">
+    <img src="https://img.shields.io/badge/Liberapay-EUR-F6C915?style=for-the-badge&amp;logo=liberapay&amp;logoColor=black" alt="Liberapay · EUR (€)" />
+  </a>
+</p>
+
+Support goes to:
+
+- Authorization boundaries and security review: making token leakage through this interface less likely.
+- Cross-client compatibility: staying aligned with Monica for Android on the same database.
+- Documentation and the human experience: command line, TUI, and the usage guides.
+
+The backer acknowledgements list is maintained in the [Monica main repository](https://github.com/Monica-Pass/Monica#赞助支持) README. This repository has no scheduled Afdian fetch, so a copied list would only go stale.
+
+## Community
+
+The whole Monica project shares one community, and CLI questions are welcome there too:
+
+- Telegram: [join the Monica community](https://t.me/+IZUDLL-vWOA1Y2U1)
+- QQ group: `1087865010` ([invite link](https://qm.qq.com/q/2vTdTkHV3u))
+- [Issues in this repository](https://github.com/Monica-Pass/Monica-cli/issues) · [Issues in the main repository](https://github.com/Monica-Pass/Monica/issues)
+
+## Acknowledgments
+
+- [Monica for Android](https://github.com/Monica-Pass/Monica) — the other client reading and writing the same databases.
+- [Yazi](https://github.com/sxyazi/yazi) — reference for the terminal layout and interaction.
+- [Bitwarden](https://bitwarden.com/) and [KeePass](https://keepass.info/) — reference points for local-first password management.
+- License texts for bundled components: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## License
+
+This repository is offered under **MIT OR Apache-2.0** as declared in `Cargo.toml`.
+
+> Note: the Monica main repository is **GPL-3.0**, which differs from what this repository declares, and no `LICENSE` file exists here yet. Aligning them means changing `Cargo.toml` first and adding `LICENSE`.
+
+Brand names and logos remain the property of their respective owners.
