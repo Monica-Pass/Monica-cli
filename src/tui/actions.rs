@@ -4,6 +4,7 @@ use zeroize::Zeroizing;
 
 use crate::admin::{self, AddOptions, BrokerSession, GrantOptions};
 use crate::config::{ClientConfig, ConfigStore, read_json};
+use crate::credstore;
 use crate::error::{GatewayError, Result};
 use crate::i18n::Message;
 use crate::model::Provider;
@@ -208,6 +209,7 @@ pub(super) enum Outcome {
     Login {
         client: WebDavClient,
         entries: Vec<RemoteEntry>,
+        password_saved: bool,
     },
     Browse {
         path: String,
@@ -220,10 +222,24 @@ pub(super) enum Outcome {
     Probe(Vec<String>),
 }
 
-pub(super) async fn login(store: &ConfigStore, client: WebDavClient) -> Result<Outcome> {
+pub(super) async fn login(
+    store: &ConfigStore,
+    client: WebDavClient,
+    typed: Option<Zeroizing<String>>,
+) -> Result<Outcome> {
     let entries = client.list("").await?;
     client.profile.save(store)?;
-    Ok(Outcome::Login { client, entries })
+    // The request above proved the password, so a typo is never remembered.
+    let account = (&client.profile.base_url, &client.profile.username);
+    let password_saved = match typed {
+        Some(secret) => credstore::save(account.0, account.1, &secret).is_ok(),
+        None => credstore::present(account.0, account.1),
+    };
+    Ok(Outcome::Login {
+        client,
+        entries,
+        password_saved,
+    })
 }
 
 pub(super) async fn perform(
@@ -485,7 +501,12 @@ pub(super) async fn perform(
             .map(Outcome::Broker),
         Action::Lock => Ok(Outcome::Message(Message::BrokerLockedHint)),
         Action::Login { profile, password } => {
-            login(&store, WebDavClient::new(profile, password)?).await
+            login(
+                &store,
+                WebDavClient::new(profile, password.clone())?,
+                Some(password),
+            )
+            .await
         }
         Action::Browse(path) => {
             let entries = webdav

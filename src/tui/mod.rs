@@ -30,6 +30,7 @@ use form::{Form, FormEvent, Input, Kind};
 
 use crate::admin::{self, BrokerSession};
 use crate::config::{Config, ConfigStore, Grant, GrantState, write_json};
+use crate::credstore;
 use crate::error::{GatewayError, Result};
 use crate::i18n::{self, Language, LanguageChoice, Message, Preferences};
 use crate::tr;
@@ -362,6 +363,15 @@ impl App {
         match WebDavProfile::load(&app.store) {
             Ok(profile) => app.profile = profile,
             Err(error) => app.error(error),
+        }
+        // A password remembered on this computer lets the TUI start already logged
+        // in. The vault master password is still asked for on every action.
+        let profile = app.profile.clone();
+        if let Some(profile) = profile
+            && let Some(password) = credstore::load(&profile.base_url, &profile.username)
+            && let Ok(client) = WebDavClient::new(profile, password)
+        {
+            app.webdav = Some(client);
         }
         if !app.failed {
             app.message_at = None;
@@ -1121,7 +1131,11 @@ impl App {
                 self.external_busy = false;
                 self.info(tr!(lang, BrokerReadyHint));
             }
-            Outcome::Login { client, entries } => {
+            Outcome::Login {
+                client,
+                entries,
+                password_saved,
+            } => {
                 self.profile = Some(client.profile.clone());
                 self.webdav = Some(client);
                 self.entries = entries;
@@ -1129,7 +1143,11 @@ impl App {
                 self.set_page(Page::WebDav);
                 self.update_filter("");
                 self.selected[3] = 0;
-                self.info(tr!(lang, WebDavLoginReady));
+                self.info(if password_saved {
+                    tr!(lang, WebDavLoginReady)
+                } else {
+                    tr!(lang, WebDavLoginPasswordNotSaved)
+                });
             }
             Outcome::Browse { path, entries } => {
                 let selection = self.selection_key(Page::WebDav);

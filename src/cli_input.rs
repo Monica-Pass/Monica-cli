@@ -126,6 +126,12 @@ impl SecretInput {
         })
     }
 
+    /// True when secrets arrived through a trusted producer's pipe rather than
+    /// being typed by a person. Injected secrets are never stored locally.
+    pub fn injected(&self) -> bool {
+        self.pipe.is_some()
+    }
+
     pub fn take(&mut self, field: SecretField, prompt: &str) -> Result<Zeroizing<String>> {
         if let Some(pipe) = &mut self.pipe {
             return pipe
@@ -153,7 +159,13 @@ impl SecretInput {
         if !std::io::stdin().is_terminal() {
             return Err(GatewayError::HumanTerminalRequired);
         }
-        rpassword::prompt_password(prompt)
+        // rpassword opens CONOUT$ itself and may fall back to writing the prompt as
+        // raw bytes, which a non-UTF-8 console code page renders as mojibake. Emit it
+        // through this process' stderr so it uses the same writer as all other output.
+        use std::io::Write;
+        eprint!("{prompt}");
+        std::io::stderr().flush().ok();
+        rpassword::prompt_password("")
             .map(Zeroizing::new)
             .map_err(|_| GatewayError::HumanTerminalRequired)
     }

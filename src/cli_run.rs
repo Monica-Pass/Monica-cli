@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use monica_pass_cli::admin::{self, BrokerSession, absolute, default_config};
 use monica_pass_cli::config::{ClientConfig, ConfigStore, read_json};
+use monica_pass_cli::credstore;
 use monica_pass_cli::error::{GatewayError, Result};
-use monica_pass_cli::i18n::{self, Language, Preferences};
+use monica_pass_cli::i18n::{self, Language, Message, Preferences};
 use monica_pass_cli::model::{validate_api_base, validate_name, validate_note};
 use monica_pass_cli::protocol::{McpBridge, serve_mcp};
 use monica_pass_cli::tr;
@@ -427,14 +428,29 @@ async fn webdav_command(
         } else {
             None
         };
+        let password_saved = profile
+            .as_ref()
+            .is_some_and(|profile| credstore::present(&profile.base_url, &profile.username));
         let safe_remote_replace = binding.as_ref().map(|binding| binding.etag.is_some());
         let segments = binding
             .as_ref()
             .map(|binding| monica_pass_cli::segment::status(&store, &binding.vault_id))
             .transpose()?;
-        let data = json!({"profile":profile, "sync":binding, "password_saved":false, "safe_remote_replace":safe_remote_replace, "segments":segments});
+        let data = json!({"profile":profile, "sync":binding, "password_saved":password_saved, "safe_remote_replace":safe_remote_replace, "segments":segments});
         let human = (!output.json).then(|| cli_table::render_webdav_status(&data, lang));
         return output.result_text("webdav status", data, human);
+    }
+    if matches!(command, WebDavCommand::ForgetPassword) {
+        let profile = WebDavProfile::load(&store)?.ok_or(GatewayError::InvalidWebDav)?;
+        let removed =
+            credstore::forget(&profile.base_url, &profile.username).map_err(map_store_error)?;
+        output.result("webdav forget-password", json!({"removed":removed}), None)?;
+        output.note(lang.text(if removed {
+            Message::CliWebDavPasswordForgotten
+        } else {
+            Message::CliWebDavPasswordAbsent
+        }));
+        return Ok(());
     }
     let profile = match &command {
         WebDavCommand::Login { url, username } => WebDavProfile::new(url, username)?,
@@ -447,17 +463,30 @@ async fn webdav_command(
         }
         _ => WebDavProfile::load(&store)?.ok_or(GatewayError::InvalidWebDav)?,
     };
-    let client = WebDavClient::new(
-        profile,
-        input.take(SecretField::WebDavPassword, tr!(lang, PromptWebDavPassword))?,
-    )?;
+    let account = (profile.base_url.clone(), profile.username.clone());
+    // Only a password a person types is worth remembering. One supplied by a
+    // trusted producer through `--secrets-stdin` stays in that process.
+    let mut typed: Option<Zeroizing<String>> = None;
+    let password = match credstore::load(&account.0, &account.1) {
+        Some(secret) => secret,
+        None => {
+            let secret =
+                input.take(SecretField::WebDavPassword, tr!(lang, PromptWebDavPassword))?;
+            if !input.injected() {
+                typed = Some(secret.clone());
+            }
+            secret
+        }
+    };
+    let client = WebDavClient::new(profile, password)?;
     match command {
         WebDavCommand::Login { .. } => {
             client.list("").await?;
             client.profile.save(&store)?;
+            let saved = remember_password(&account.0, &account.1, &mut typed, &output, lang);
             output.result(
                 "webdav login",
-                json!({"profile":client.profile,"password_saved":false}),
+                json!({"profile":client.profile,"password_saved":saved}),
                 None,
             )?;
             output.note(tr!(lang, CliLoginVerified));
@@ -501,9 +530,45 @@ async fn webdav_command(
                 println!("{}", lang.sync_message(&outcome));
             }
         }
-        WebDavCommand::Status => unreachable!("status does not need a login"),
+        WebDavCommand::Status | WebDavCommand::ForgetPassword => {
+            unreachable!("status and forget-password do not need a login")
+        }
     }
+    remember_password(&account.0, &account.1, &mut typed, &output, lang);
     Ok(())
+}
+
+/// Stores a password a person just typed in this computer's credential manager.
+/// Called once the request that used it has succeeded, so a wrong password is
+/// never remembered. Returns whether a password is available locally afterwards.
+fn remember_password(
+    base_url: &str,
+    username: &str,
+    typed: &mut Option<Zeroizing<String>>,
+    output: &Output,
+    lang: Language,
+) -> bool {
+    let Some(secret) = typed.take() else {
+        return credstore::present(base_url, username);
+    };
+    match credstore::save(base_url, username, &secret) {
+        Ok(()) => {
+            output.note(tr!(lang, CliWebDavPasswordRemembered));
+            true
+        }
+        Err(err) => {
+            output.note(tr!(
+                lang,
+                CliWebDavPasswordNotRemembered,
+                reason = err.reason()
+            ));
+            false
+        }
+    }
+}
+
+fn map_store_error(_: credstore::StoreError) -> GatewayError {
+    GatewayError::StateUnavailable
 }
 
 /// SSH and GPG entries are managed locally: the vault is unlocked, the work is done through

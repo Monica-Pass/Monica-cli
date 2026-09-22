@@ -235,7 +235,7 @@ pub enum KeysCommand {
 
 #[derive(Subcommand)]
 pub enum WebDavCommand {
-    /// Verify login and save the URL/username. The password is not saved.
+    /// Verify login and save the URL/username. A typed password is kept on this computer only.
     #[command(visible_alias = "in")]
     Login {
         #[arg(short = 'u', long)]
@@ -252,6 +252,9 @@ pub enum WebDavCommand {
     /// Show the saved WebDAV profile and sync binding without logging in.
     #[command(visible_alias = "st")]
     Status,
+    /// Delete the saved WebDAV password from this computer's credential manager.
+    #[command(visible_alias = "forget")]
+    ForgetPassword,
     /// Download and open an MDBX; preserve the old local vault and clear grants.
     #[command(visible_alias = "o")]
     Open { path: String },
@@ -294,6 +297,7 @@ impl Command {
                 WebDavCommand::Login { .. } => "webdav login",
                 WebDavCommand::List { .. } => "webdav list",
                 WebDavCommand::Status => "webdav status",
+                WebDavCommand::ForgetPassword => "webdav forget-password",
                 WebDavCommand::Open { .. } => "webdav open",
                 WebDavCommand::Publish { .. } => "webdav publish",
                 WebDavCommand::Sync => "webdav sync",

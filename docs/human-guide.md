@@ -373,9 +373,12 @@ monica webdav list
 monica webdav open vault.mdbx          # 下载并打开远端库
 monica webdav publish backup.mdbx      # 把本地库发布到新远端文件名
 monica webdav sync
+monica webdav forget-password          # 删除本机记住的 WebDAV 密码
 ```
 
-- 命令行的每次 WebDAV 网络操作都要会话密码（隐藏输入或 `--secrets-stdin`），命令结束即清除；地址与用户名会记住。
+- WebDAV 密码只问一次：人工输入并在某次请求中用成功后，它存进**本机 Windows 凭据管理器**，之后 `list` / `open` / `publish` / `sync` 只要保险库主密码；地址与用户名照旧保存。
+- 走 `--secrets-stdin` 注入的密码**只活在那个进程里**，不写本机；可信执行器的调用契约不变，每次仍要提供 `webdav_password`。
+- 输错的密码不会被记住（只在请求成功后才写），`webdav status` 的「已存密码」一行说明当前状态（`仅本机` / `未保存`）。
 - `webdav status --json` 不联网即可查看已存档案、同步绑定与分段游标（`segments`）。
 - **整文件模式覆盖远端需要强 ETag**。部分服务（本次实测的坚果云）不返回强 ETag，此时 `safe_remote_replace: false`，只能新建上传、读取和下载；有本地改动就 `publish` 成一个新文件名。程序不会强制覆盖。
 - **远端有同名加 `.sync` 的文件夹时，自动改用分段流合并**。那种库里 `.mdbx` 只是一次性发布的初始副本——比较它会误报「已是最新」，覆盖它会让其他设备失去基准——新版本以内容寻址的分段保存在 `.sync/streams/<设备>/<代>/segments/` 下。CLI 只往自己设备名下的流追加不可变分段，每个分段写完都读回核对摘要，收到的提交不会回推；合并由引擎按提交完成，不需要强 ETag，也不用你手工挑一边。

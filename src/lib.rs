@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod clipboard;
 pub mod config;
+pub mod credstore;
 pub mod databases;
 pub mod error;
 pub mod gateway;

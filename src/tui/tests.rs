@@ -2121,6 +2121,53 @@ async fn tui_quick_add_unlocks_and_exposes_only_public_named_metadata_to_mcp() {
     assert!(probe.is_err());
 }
 
+/// This reaches the real OS credential manager, so it deletes exactly the entry it
+/// creates. The fake server answers on an ephemeral port, so the target name can
+/// never collide with a vault a person has actually logged into.
+#[cfg(windows)]
+#[tokio::test]
+async fn a_typed_webdav_password_is_remembered_only_after_a_request_proves_it() {
+    use crate::webdav::WebDavClient;
+    use crate::webdav_tests::{DAV_PASSWORD, FakeWebDav};
+
+    let directory = tempfile::tempdir().unwrap();
+    let store = ConfigStore::new(directory.path().join("gateway.json"));
+    let remote = FakeWebDav::new(Default::default()).await;
+    let profile = remote.client.profile.clone();
+    let account = (profile.base_url.as_str(), profile.username.as_str());
+    credstore::forget(account.0, account.1).unwrap();
+
+    let wrong = Zeroizing::new("definitely-not-the-app-password".to_owned());
+    let client = WebDavClient::for_test(profile.clone(), &wrong, remote.server.client.clone());
+    assert!(actions::login(&store, client, Some(wrong)).await.is_err());
+    assert!(
+        !credstore::present(account.0, account.1),
+        "a password the server rejected must never be remembered"
+    );
+
+    let typed = Zeroizing::new(DAV_PASSWORD.to_owned());
+    let client = WebDavClient::for_test(profile.clone(), &typed, remote.server.client.clone());
+    let Outcome::Login { password_saved, .. } =
+        actions::login(&store, client, Some(typed)).await.unwrap()
+    else {
+        unreachable!("login reports its own outcome")
+    };
+    assert!(password_saved, "a typed password must reach this computer");
+    assert!(credstore::present(account.0, account.1));
+
+    // The next sign-in reads it back instead of asking again.
+    let stored = credstore::load(account.0, account.1).unwrap();
+    let client = WebDavClient::for_test(profile.clone(), &stored, remote.server.client.clone());
+    let Outcome::Login { password_saved, .. } = actions::login(&store, client, None).await.unwrap()
+    else {
+        unreachable!("login reports its own outcome")
+    };
+    assert!(password_saved, "an existing credential stays in force");
+
+    assert!(credstore::forget(account.0, account.1).unwrap());
+    assert!(!credstore::present(account.0, account.1));
+}
+
 #[tokio::test]
 async fn tui_webdav_setup_to_mcp_call_revocation_and_quit_works_end_to_end() {
     use crate::config::{ClientConfig, read_json};
@@ -2186,7 +2233,8 @@ async fn tui_webdav_setup_to_mcp_call_revocation_and_quit_works_end_to_end() {
     drop(password);
     // The test CA is the only substituted transport dependency; real HTTPS,
     // authentication, XML parsing, encrypted MDBX and UI actions are exercised.
-    app.apply(actions::login(&store, dav).await.unwrap());
+    // `None` keeps this synthetic sign-in out of the real credential manager.
+    app.apply(actions::login(&store, dav, None).await.unwrap());
     app.key(key(KeyCode::Char('P')));
     screens.push(fill(&mut app, &["vault.mdbx", PASSWORD]));
     app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));

@@ -122,6 +122,6 @@ raise SystemExit(result.returncode)
 
 需要访问保险库的管理或同步会先请求锁定代理，等待在途操作结束；无法取得锁时明确失败。这些操作完成后代理保持锁定，`a -s` 可在添加后直接解锁运行。查询元数据和撤销授权无需停止代理。普通解锁会话为五分钟，不延长授权有效期。授权窗口或调用次数用尽时代理返回 `reauthorization_required`，只有人工 `rf 授权名` 续期才能恢复；`st` 会显示每个授权的 `calls_used`、`max_calls`、`expired` 与 `refresh_required`。
 
-WebDAV 密码不会跨 CLI 进程保存；每次网络操作需重新注入，所以单条 CLI 命令结束即完成会话退出。TUI 的 `:logout` 只结束其自己的 WebDAV 会话。地址与用户名可以保存，`dav st` 可查询这些公开信息。
+通过 `--secrets-stdin` 注入的 WebDAV 密码不会跨 CLI 进程保存，也不落本机凭据管理器：每次网络操作仍需重新注入，所以单条 CLI 命令结束即完成会话退出。人在终端隐藏的输入会在请求成功后记入本机凭据管理器，之后的网络操作不再索要该密码，`dav forget-password` 删除它。TUI 的 `:logout` 只结束其自己的 WebDAV 会话。地址与用户名可以保存，`dav st` 可查询这些公开信息与是否已存密码。
 
 `status` 与 `dav st` 的 `safe_remote_replace` 表示当前连接是否有强 ETag：未连接为 `null`，缺失为 `false`。为 `false` 时可以读取、检查同步状态及发布到新文件名，但本地有改动时不能覆盖原远端文件；请使用 `dav p NEW_NAME.mdbx`。TUI 的总览和 WebDAV 预览也会提示这一限制。

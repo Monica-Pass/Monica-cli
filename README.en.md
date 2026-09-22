@@ -245,16 +245,17 @@ Sign in and manage WebDAV vaults directly from the TUI:
 2. Browse the WebDAV list and press `Enter` to open an `.mdbx` file, then enter its master password. Monica creates a local encrypted copy, so later gateway use does not require an ongoing WebDAV connection.
 3. Press `s` to manually sync the connected vault. If you are starting with a local vault, first press `P` to publish it under a new remote filename, then use `s` to sync.
 
-The WebDAV password is held only for the current TUI session and is cleared on exit or `:logout`. The URL and username can be remembered. These operations are also available from the command line:
+You enter the WebDAV password once. After the sign-in succeeds it is kept in **this computer's Windows credential manager**, so opening and syncing only ask for the vault master password. The URL and username are saved as before, and `:logout` ends just this session — it does not forget the stored password. Use `webdav forget-password` to remove it. These operations are also available from the command line:
 
 ```sh
 monica-pass webdav login --url https://dav.example.com/monica/ --username your-name
 monica-pass webdav list
 monica-pass webdav open vault.mdbx
 monica-pass webdav sync
+monica-pass webdav forget-password
 ```
 
-Each WebDAV network command needs a session password, supplied through hidden input or `--secrets-stdin` and cleared when the command exits. `monica-pass dav st` displays saved connection metadata without a password. Single-file sync compares local and remote versions and reports a conflict if both have changed. You can publish the local version under a new filename before resolving the conflict. Opening a different vault preserves the previous local file and clears existing AI grants.
+A password you type at the prompt follows the same route into the credential manager; a password injected through `--secrets-stdin` is **used only inside that process and never stored**. `monica-pass dav st` shows the saved connection and whether a password is stored, without touching the network. Single-file sync compares local and remote versions and reports a conflict if both have changed. You can publish the local version under a new filename before resolving the conflict. Opening a different vault preserves the previous local file and clears existing AI grants.
 
 Supported vaults are password-unlocked, **self-contained MDBX files up to 64 MiB**. External `.blobs` attachments are not supported. A remote comes in two shapes: a lone `.mdbx` file syncs whole-file, which needs strong ETags and conditional writes from the server to replace it and stays readable without them; a same-named `.sync` folder — what Monica Android maintains — switches to segment-stream merging, where the engine merges commits, each device only writes immutable segments into its own stream, the one-time bootstrap is never replaced, and no strong ETag is required because every segment is read back and digest-checked after upload.
 

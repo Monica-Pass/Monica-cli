@@ -336,6 +336,16 @@ pub fn render_webdav_status(status: &Value, lang: Language) -> String {
         text
     };
     let mut fields = vec![("WebDAV".to_string(), webdav)];
+    if !status["profile"].is_null() {
+        fields.push((
+            tr!(lang, StatusWebDavPasswordLabel).to_string(),
+            if status["password_saved"].as_bool().unwrap_or(false) {
+                tr!(lang, StatusPasswordRemembered).to_string()
+            } else {
+                tr!(lang, StatusPasswordNotSaved).to_string()
+            },
+        ));
+    }
     let segments = &status["segments"];
     if !segments.is_null() {
         if segments["tracked"].as_bool().unwrap_or(false) {
@@ -697,30 +707,47 @@ mod tests {
             lines[0].ends_with("joy@https://dav.example/dav · vault.mdbx · safe replace"),
             "{out}"
         );
-        assert!(lines[1].starts_with("Segments"), "{out}");
+        assert!(lines[1].starts_with("Saved password"), "{out}");
+        assert!(lines[1].ends_with("not saved"), "{out}");
+        assert!(lines[2].starts_with("Segments"), "{out}");
         assert!(
-            lines[1].contains("anchored · 12 stream(s), 5 complete"),
+            lines[2].contains("anchored · 12 stream(s), 5 complete"),
             "{}",
-            lines[1]
-        );
-        assert!(lines[2].starts_with("Pending upload"), "{out}");
-        assert!(
             lines[2]
+        );
+        assert!(lines[3].starts_with("Pending upload"), "{out}");
+        assert!(
+            lines[3]
                 .ends_with("streams/dev/1/segments/0000000001-cccccccc…cccccccc.mdbxsync · 4096 B"),
             "{out}"
         );
         assert_eq!(
             lines[0].find("joy@").unwrap(),
-            lines[1].find("anchored").unwrap(),
+            lines[2].find("anchored").unwrap(),
             "values share one column whatever the label widths"
         );
         assert_eq!(
             lines[0].find("joy@").unwrap(),
-            lines[2].find("streams/").unwrap(),
+            lines[3].find("streams/").unwrap(),
             "the longest label still has to keep that column"
         );
+        assert_eq!(
+            lines[0].find("joy@").unwrap(),
+            lines[1].find("not saved").unwrap(),
+            "{out}"
+        );
+        let mut remembered = webdav_status_fixture(0);
+        remembered["password_saved"] = json!(true);
         assert!(
-            !lines[2].contains("vault.mdbx.sync"),
+            render_webdav_status(&remembered, Language::En).contains("Saved password"),
+            "the remembered state has to be visible"
+        );
+        assert!(
+            render_webdav_status(&remembered, Language::En).contains("this computer only"),
+            "{remembered}"
+        );
+        assert!(
+            !lines[3].contains("vault.mdbx.sync"),
             "the WebDAV line already names the sync root: {out}"
         );
         assert_eq!(
@@ -767,7 +794,7 @@ mod tests {
                 .lines()
                 .next()
                 .unwrap(),
-            "WebDAV  未启用"
+            "WebDAV    未启用"
         );
     }
 }

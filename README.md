@@ -241,20 +241,21 @@ AI 可先调用 `monica_list_connections`，参数为 `{}`，获取当前授权�
 
 在 TUI 中就能完成 WebDAV 登录和保险库管理：
 
-1. 按 `i`，填写 WebDAV 文件夹的 **HTTPS 地址、用户名、密码或应用密码**。
+1. 按 `i`，填写 WebDAV 文件夹的 **HTTPS 地址、用户名、密码或应用密码**（密码只需填这一次）。
 2. 在 WebDAV 列表中浏览目录，按 `Enter` 打开 `.mdbx` 文件，再输入保险库主密码。Monica 会建立本地加密副本，之后的网关使用不依赖 WebDAV 持续在线。
 3. 按 `s` 手动同步已连接的保险库。如果从本地保险库开始，先按 `P` 将其发布到一个新的远端文件名，再使用 `s` 同步。
 
-WebDAV 密码仅保留在本次 TUI 会话中，退出或输入 `:logout` 后清除；地址和用户名可以记住。命令行同样支持这些操作：
+WebDAV 密码只需输入一次：验证成功后它保存在**本机 Windows 凭据管理器**里，之后打开、同步只问保险库主密码，不再问 WebDAV 密码。地址和用户名照常保存，`:logout` 只结束本次会话、不会忘记已存的密码；要清除它用 `webdav forget-password`。命令行同样支持这些操作：
 
 ```sh
 monica-pass webdav login --url https://dav.example.com/monica/ --username your-name
 monica-pass webdav list
 monica-pass webdav open vault.mdbx
 monica-pass webdav sync
+monica-pass webdav forget-password
 ```
 
-命令行的每次 WebDAV 网络操作都需要会话密码，可隐藏输入或通过 `--secrets-stdin` 注入；密码在该命令结束后清除。`monica-pass dav st` 可直接查询已保存的连接信息。整文件同步比较本地与远端版本，双方都有变化时报告冲突；可将本地版本发布到新文件名后再处理。打开另一份保险库会保留原本地文件，并清除现有 AI 授权。
+命令行人工输入密码时同样走本机凭据管理器；`--secrets-stdin` 注入的密码**只在该进程内使用，一律不落盘**。`monica-pass dav st` 不联网即可查看连接信息和「已存密码」状态。整文件同步比较本地与远端版本，双方都有变化时报告冲突；可将本地版本发布到新文件名后再处理。打开另一份保险库会保留原本地文件，并清除现有 AI 授权。
 
 支持通过密码解锁、**不超过 64 MiB 的自包含 MDBX 文件**，不支持外置附件 `.blobs`。远端有两种形态：目录里只有单个 `.mdbx` 文件时按整文件同步，覆盖远端需要服务器支持强 ETag 与条件写入，不支持时仍可读取；存在同名加 `.sync` 的文件夹（Monica Android 的写法）时自动改用分段流合并，双方都有变化由引擎按提交合并，每台设备只写自己名下的不可变分段，一次性发布的初始副本永不覆盖，该模式也不依赖强 ETag——每个分段写完都会读回核对摘要。
 

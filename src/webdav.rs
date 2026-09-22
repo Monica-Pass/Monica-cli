@@ -22,7 +22,8 @@ const MAX_LIST_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ENTRIES: usize = 1024;
 const PROPFIND: &str = r#"<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontentlength/><d:getetag/></d:prop></d:propfind>"#;
 
-/// Only these non-secret preferences are persisted. Passwords are session-only.
+/// Only these non-secret preferences are persisted. The password belongs to
+/// `crate::credstore`: this computer's credential manager, never a file.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WebDavProfile {
