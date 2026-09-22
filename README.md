@@ -454,8 +454,6 @@ Monica 全项目共用同一个社区，CLI 的使用问题也欢迎在这里问
 
 ## 许可证
 
-本仓库按 `Cargo.toml` 声明的 **MIT OR Apache-2.0** 提供。
-
-> 需要注意：Monica 主仓库使用 **GPL-3.0**，与本仓库声明的许可并不相同，且本仓库当前没有 `LICENSE` 文件。若要与主项目统一，需要先修改 `Cargo.toml` 并补上 `LICENSE`。
+本仓库与 [Monica 主仓库](https://github.com/Monica-Pass/Monica) 使用同一份许可：**GNU General Public License v3.0**，全文见 [LICENSE](LICENSE)，`Cargo.toml` 中声明为 `GPL-3.0-only`。第三方组件与资源继续按其原有许可生效。
 
 品牌名称与 Logo 的商标权归各自权利人所有。

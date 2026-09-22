@@ -454,8 +454,6 @@ The whole Monica project shares one community, and CLI questions are welcome the
 
 ## License
 
-This repository is offered under **MIT OR Apache-2.0** as declared in `Cargo.toml`.
-
-> Note: the Monica main repository is **GPL-3.0**, which differs from what this repository declares, and no `LICENSE` file exists here yet. Aligning them means changing `Cargo.toml` first and adding `LICENSE`.
+This repository uses the same license as the [Monica main repository](https://github.com/Monica-Pass/Monica): **GNU General Public License v3.0**. The full text is in [LICENSE](LICENSE), and `Cargo.toml` declares `GPL-3.0-only`. Third-party components and assets remain under their own original licenses.
 
 Brand names and logos remain the property of their respective owners.
