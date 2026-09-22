@@ -10,6 +10,8 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use mdbx_storage::error::StorageError;
 use mdbx_storage::peer_sync::{PeerSyncSegmentOptions, PeerSyncService};
@@ -27,7 +29,7 @@ use crate::config::{ConfigStore, ensure_parent, private_file, read_json, write_j
 use crate::error::{GatewayError, Result};
 use crate::sync::{RemoteBinding, download_file};
 use crate::vault::Vault;
-use crate::webdav::{WebDavClient, normalize_path};
+use crate::webdav::{RemoteEntry, WebDavClient, normalize_path};
 
 /// Android names each generation a random UUID, so the listing order of a cold
 /// connect is not the order the segments apply in. Applicability is discovered by
@@ -54,6 +56,9 @@ pub struct Report {
     pub skipped_commits: u32,
     pub conflicts: u32,
     pub blocked_streams: usize,
+    /// The run stopped at a segment boundary because the user asked. Every applied
+    /// segment is already in the cursor, so the remainder is this same command again.
+    pub cancelled: bool,
 }
 
 impl Report {
@@ -61,6 +66,40 @@ impl Report {
     /// single-file sync reports when both copies already agree.
     pub fn is_quiet(&self) -> bool {
         self.downloaded_segments == 0 && self.uploaded_segments == 0
+    }
+}
+
+/// One line per transferred segment. A cold bootstrap replay is easily hundreds of
+/// segments and several minutes of network waits long, and silence in a terminal
+/// that is actually working looks exactly like a hang.
+#[derive(Clone, Debug)]
+pub enum Event {
+    /// This device's export landed in the remote tree.
+    Uploaded { commits: u32, bytes: u64 },
+    /// A peer segment landed in this vault: `commits` new, `already` present.
+    Applied {
+        stream: String,
+        sequence: u32,
+        commits: u32,
+        already: u32,
+    },
+}
+
+pub type Progress<'a> = dyn FnMut(&Event) + Send + 'a;
+
+/// Set by the caller's Ctrl+C handler and polled only between segments, so a
+/// half-applied commit is never a thing: the engine's work is synchronous and the
+/// cursor is written after every segment that lands.
+#[derive(Clone, Default)]
+pub struct Cancel(Arc<AtomicBool>);
+
+impl Cancel {
+    pub fn trigger(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    pub fn cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
     }
 }
 
@@ -95,12 +134,28 @@ pub struct Status {
     /// `WAITING_*` tokens below, so `--json` stays a stable key and the human renderer
     /// can translate it.
     pub waiting: Vec<Waiting>,
+    /// What the remote `.sync` tree held the last time a segment run walked it.
+    /// `None` until such a walk has happened.
+    pub usage: Option<Usage>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PendingUpload {
     pub remote: String,
     pub size: u64,
+}
+
+/// Sizes counted off a remote listing, so they are exactly what the server reported
+/// for the segment files: no directory or block overhead, and only as of that walk.
+/// Since the tree is append-only, that makes the number a lower bound on what the
+/// drive holds now.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Usage {
+    pub segments: usize,
+    pub bytes: u64,
+    /// Files a server gave no length for, so `bytes` understates the total.
+    pub unmeasured: usize,
 }
 
 /// A peer published segment N+1 while this device still holds N.
@@ -131,6 +186,10 @@ struct Cursor {
     /// retries the exact same bytes instead of exporting a different digest for one
     /// sequence number.
     pending: Option<Pending>,
+    /// The remote `.sync` tree as the last completed listing saw it. Not live state:
+    /// only a segment run re-measures it, because `webdav status` answers without a
+    /// password or a request.
+    usage: Option<Usage>,
     streams: BTreeMap<String, Stream>,
 }
 
@@ -176,17 +235,32 @@ pub(crate) async fn synchronize(
     store: &ConfigStore,
     client: &WebDavClient,
     binding: &RemoteBinding,
-    device_id: &str,
     password: &str,
+    progress: &mut Progress<'_>,
+    cancel: &Cancel,
 ) -> Result<(Report, Option<crate::vault::GatewayInventory>)> {
     let root = sync_root(binding)?;
+    let device_id = device_id(store)?;
     let vault_path = store.load()?.vault;
     let vault = open_vault(&vault_path, binding, password)?;
     let mut cursor = load_cursor(store, &binding.vault_id)?.unwrap_or(Cursor {
         vault_id: binding.vault_id.clone(),
         ..Cursor::default()
     });
-    let (report, drained) = settle(store, client, &root, &vault, device_id, &mut cursor).await?;
+    let mut report = Report::default();
+    let drained = settle(Run {
+        vault: &vault,
+        store,
+        client,
+        root: &root,
+        device_id: &device_id,
+        cursor: &mut cursor,
+        report: &mut report,
+        progress,
+        cancel,
+        fetched: BTreeMap::new(),
+    })
+    .await?;
     let merged = if report.downloaded_segments > 0 || report.conflicts > 0 {
         Some(vault.gateway_inventory()?)
     } else {
@@ -210,10 +284,12 @@ pub(crate) async fn bootstrap(
     client: &WebDavClient,
     path: &Path,
     binding: &RemoteBinding,
-    device_id: &str,
     password: &str,
+    progress: &mut Progress<'_>,
+    cancel: &Cancel,
 ) -> Result<(Report, crate::vault::GatewayInventory)> {
     let root = sync_root(binding)?;
+    let device_id = device_id(store)?;
     let vault = open_vault(path, binding, password)?;
     let mut cursor = Cursor {
         vault_id: binding.vault_id.clone(),
@@ -223,7 +299,20 @@ pub(crate) async fn bootstrap(
     // Written before the first request so a failed replay cannot leave the cursor a
     // previous session had for this vault ID.
     save_cursor(store, &cursor)?;
-    let (report, drained) = settle(store, client, &root, &vault, device_id, &mut cursor).await?;
+    let mut report = Report::default();
+    let drained = settle(Run {
+        vault: &vault,
+        store,
+        client,
+        root: &root,
+        device_id: &device_id,
+        cursor: &mut cursor,
+        report: &mut report,
+        progress,
+        cancel,
+        fetched: BTreeMap::new(),
+    })
+    .await?;
     let merged = vault.gateway_inventory()?;
     reanchor(store, &vault, &mut cursor, drained)?;
     vault.lock()?;
@@ -239,18 +328,11 @@ fn open_vault(path: &Path, binding: &RemoteBinding, password: &str) -> Result<Va
     Ok(vault)
 }
 
-async fn settle(
-    store: &ConfigStore,
-    client: &WebDavClient,
-    root: &str,
-    vault: &Vault,
-    device_id: &str,
-    cursor: &mut Cursor,
-) -> Result<(Report, bool)> {
-    let mut report = Report::default();
-    let drained = publish(vault, store, client, root, device_id, cursor, &mut report).await?;
-    receive(vault, store, client, root, device_id, cursor, &mut report).await?;
-    Ok((report, drained && report.conflicts == 0))
+async fn settle(mut run: Run<'_>) -> Result<bool> {
+    let drained = run.publish().await?;
+    run.receive().await?;
+    run.report.cancelled = run.cancel.cancelled();
+    Ok(drained && run.report.conflicts == 0)
 }
 
 /// Moves the export base to where this device stands once a run is over.
@@ -273,7 +355,7 @@ fn reanchor(store: &ConfigStore, vault: &Vault, cursor: &mut Cursor, drained: bo
 /// `monica-cli-<uuid>` is generated once and survives vault switches: the remote
 /// stream name is how peers recognise this device, and losing it would strand the
 /// published history under an orphan stream.
-pub fn device_id(store: &ConfigStore) -> Result<String> {
+fn device_id(store: &ConfigStore) -> Result<String> {
     let existing = store.load()?.webdav_device_id;
     if let Some(device_id) = existing {
         return Ok(device_id);
@@ -320,6 +402,7 @@ pub fn status(store: &ConfigStore, vault_id: &str) -> Result<Status> {
             .values()
             .filter(|stream| stream.complete)
             .count(),
+        usage: cursor.usage.clone(),
         waiting: cursor
             .streams
             .iter()
@@ -374,86 +457,100 @@ fn save_cursor(store: &ConfigStore, cursor: &Cursor) -> Result<()> {
 // publish
 // ---------------------------------------------------------------------------
 
-/// Uploads every segment this device owes. `Ok(true)` means the debt is gone: the
-/// export came back empty, so the caller may treat whatever the pull then writes
-/// locally as this device's own state rather than unpublished work.
-async fn publish(
-    vault: &Vault,
-    store: &ConfigStore,
-    client: &WebDavClient,
-    root: &str,
-    device_id: &str,
-    cursor: &mut Cursor,
-    report: &mut Report,
-) -> Result<bool> {
-    if cursor.export_base.is_none() {
-        cursor.export_base = Some(bootstrapped());
-        save_cursor(store, cursor)?;
-    }
-    let directory = pending_directory(store);
-    private_directory(&directory)?;
-    for _ in 0..MAX_SEGMENTS_PER_SYNC {
-        let base = cursor
-            .export_base
-            .clone()
-            .ok_or(GatewayError::StateUnavailable)?;
-        let (bundle, bytes) = match &cursor.pending {
-            Some(pending) => {
-                let bytes =
-                    std::fs::read(&pending.file).map_err(|_| GatewayError::SyncStateMissing)?;
-                if bytes.len() as u64 != pending.size {
-                    return Err(GatewayError::SyncSegmentCorrupt);
-                }
-                let bundle = parse_segment(vault, &bytes, &pending.digest)?;
-                if bundle.manifest.base != base {
-                    // The remote moved under the cursor; the stored bytes are for a
-                    // different starting point and must not be published.
-                    return Err(GatewayError::SyncStateMissing);
-                }
-                (bundle, bytes)
+impl Run<'_> {
+    /// Uploads every segment this device owes. `Ok(true)` means the debt is gone: the
+    /// export came back empty, so the caller may treat whatever the pull then writes
+    /// locally as this device's own state rather than unpublished work.
+    async fn publish(&mut self) -> Result<bool> {
+        if self.cursor.export_base.is_none() {
+            self.cursor.export_base = Some(bootstrapped());
+            save_cursor(self.store, self.cursor)?;
+        }
+        let directory = pending_directory(self.store);
+        private_directory(&directory)?;
+        for _ in 0..MAX_SEGMENTS_PER_SYNC {
+            if self.cancel.cancelled() {
+                return Ok(false);
             }
-            None => {
-                let (bundle, bytes) =
-                    export_segment(vault, device_id, &base, cursor.export_resume.as_ref())?;
-                if is_empty(&bundle) {
-                    return Ok(true);
+            let base = self
+                .cursor
+                .export_base
+                .clone()
+                .ok_or(GatewayError::StateUnavailable)?;
+            let (bundle, bytes) = match &self.cursor.pending {
+                Some(pending) => {
+                    let bytes =
+                        std::fs::read(&pending.file).map_err(|_| GatewayError::SyncStateMissing)?;
+                    if bytes.len() as u64 != pending.size {
+                        return Err(GatewayError::SyncSegmentCorrupt);
+                    }
+                    let bundle = parse_segment(self.vault, &bytes, &pending.digest)?;
+                    if bundle.manifest.base != base {
+                        // The remote moved under the cursor; the stored bytes are for a
+                        // different starting point and must not be published.
+                        return Err(GatewayError::SyncStateMissing);
+                    }
+                    (bundle, bytes)
                 }
-                let digest = payload_digest(&bundle)?;
-                let remote = segment_path(
-                    root,
-                    device_id,
-                    &bundle.manifest.transfer_id,
-                    bundle.manifest.segment_index,
-                    &digest,
-                );
-                let file = directory.join(format!(
-                    "segment-{}.{}",
-                    uuid::Uuid::new_v4(),
-                    SEGMENT_SUFFIX
-                ));
-                write_new_private(&file, &bytes)?;
-                cursor.pending = Some(Pending {
-                    file: file.clone(),
-                    remote: remote.clone(),
-                    digest,
-                    size: bytes.len() as u64,
-                });
-                save_cursor(store, cursor)?;
-                (bundle, bytes)
-            }
-        };
-        let pending = cursor
-            .pending
-            .take()
-            .ok_or(GatewayError::StateUnavailable)?;
-        upload_segment(client, store, &pending.remote, &pending.file, &bytes).await?;
-        report.uploaded_segments += 1;
-        cursor.export_base = Some(bundle.manifest.result.clone());
-        cursor.export_resume = next_resume(&bundle)?;
-        save_cursor(store, cursor)?;
-        let _ = std::fs::remove_file(&pending.file);
+                None => {
+                    let (bundle, bytes) = export_segment(
+                        self.vault,
+                        self.device_id,
+                        &base,
+                        self.cursor.export_resume.as_ref(),
+                    )?;
+                    if is_empty(&bundle) {
+                        return Ok(true);
+                    }
+                    let digest = payload_digest(&bundle)?;
+                    let remote = segment_path(
+                        self.root,
+                        self.device_id,
+                        &bundle.manifest.transfer_id,
+                        bundle.manifest.segment_index,
+                        &digest,
+                    );
+                    let file = directory.join(format!(
+                        "segment-{}.{}",
+                        uuid::Uuid::new_v4(),
+                        SEGMENT_SUFFIX
+                    ));
+                    write_new_private(&file, &bytes)?;
+                    self.cursor.pending = Some(Pending {
+                        file: file.clone(),
+                        remote: remote.clone(),
+                        digest,
+                        size: bytes.len() as u64,
+                    });
+                    save_cursor(self.store, self.cursor)?;
+                    (bundle, bytes)
+                }
+            };
+            let pending = self
+                .cursor
+                .pending
+                .take()
+                .ok_or(GatewayError::StateUnavailable)?;
+            upload_segment(
+                self.client,
+                self.store,
+                &pending.remote,
+                &pending.file,
+                &bytes,
+            )
+            .await?;
+            self.report.uploaded_segments += 1;
+            (self.progress)(&Event::Uploaded {
+                commits: bundle.commits.len() as u32,
+                bytes: pending.size,
+            });
+            self.cursor.export_base = Some(bundle.manifest.result.clone());
+            self.cursor.export_resume = next_resume(&bundle)?;
+            save_cursor(self.store, self.cursor)?;
+            let _ = std::fs::remove_file(&pending.file);
+        }
+        Ok(false)
     }
-    Ok(false)
 }
 
 /// The paired-empty marker the engine reads as "start of history".
@@ -595,67 +692,63 @@ struct Fetched {
     bundle: IncrementalSyncBundle,
 }
 
-struct Receive<'a> {
+/// Everything one segment run moves: the vault and transport cursor it advances,
+/// the remote tree it walks, and the sink and flag that let a user watch and stop
+/// it. Publish and receive are phases of the same walk, so they share this state
+/// instead of each threading nine arguments.
+struct Run<'a> {
     vault: &'a Vault,
     store: &'a ConfigStore,
     client: &'a WebDavClient,
+    root: &'a str,
     device_id: &'a str,
     cursor: &'a mut Cursor,
     report: &'a mut Report,
+    progress: &'a mut Progress<'a>,
+    cancel: &'a Cancel,
     /// Segments that are not applicable yet, so a retry never pays for another
     /// download.
     fetched: BTreeMap<String, Fetched>,
 }
 
-async fn receive(
-    vault: &Vault,
-    store: &ConfigStore,
-    client: &WebDavClient,
-    root: &str,
-    device_id: &str,
-    cursor: &mut Cursor,
-    report: &mut Report,
-) -> Result<()> {
-    let streams = list_streams(client, root, device_id).await?;
-    let mut state = Receive {
-        vault,
-        store,
-        client,
-        device_id,
-        cursor,
-        report,
-        fetched: BTreeMap::new(),
-    };
-    for _ in 0..MAX_RECEIVE_ROUNDS {
-        let mut progressed = false;
-        for (key, segments) in &streams {
-            progressed |= state.advance(key, segments).await?;
+impl Run<'_> {
+    async fn receive(&mut self) -> Result<()> {
+        let (streams, usage) = list_streams(self.client, self.root, self.device_id).await?;
+        for _ in 0..MAX_RECEIVE_ROUNDS {
+            if self.cancel.cancelled() {
+                break;
+            }
+            let mut progressed = false;
+            for (key, segments) in &streams {
+                progressed |= self.advance(key, segments).await?;
+            }
+            if !progressed {
+                break;
+            }
         }
-        if !progressed {
-            break;
-        }
+        let blocked = streams
+            .iter()
+            .filter(|(key, _)| {
+                self.cursor
+                    .streams
+                    .get(key.as_str())
+                    .is_some_and(|stream| stream.blocked.is_some())
+            })
+            .count();
+        self.report.blocked_streams = blocked;
+        self.cursor.usage = Some(usage);
+        save_cursor(self.store, self.cursor)
     }
-    state.report.blocked_streams = streams
-        .iter()
-        .filter(|(key, _)| {
-            state
-                .cursor
-                .streams
-                .get(key.as_str())
-                .is_some_and(|stream| stream.blocked.is_some())
-        })
-        .count();
-    save_cursor(state.store, state.cursor)?;
-    Ok(())
-}
 
-impl Receive<'_> {
     /// Applies one stream as far as causality allows and returns whether the cursor
     /// moved, so a stalled stream cannot spin the round loop.
     async fn advance(&mut self, key: &str, segments: &[Segment]) -> Result<bool> {
         let mut progressed = false;
         let (source, generation) = key.split_once('/').ok_or(GatewayError::InvalidWebDav)?;
         for segment in segments {
+            if self.cancel.cancelled() {
+                return Ok(progressed);
+            }
             let stream = self.cursor.streams.get(key).cloned().unwrap_or_default();
             if segment.sequence < stream.next_sequence {
                 continue;
@@ -724,6 +817,12 @@ impl Receive<'_> {
             self.report.applied_commits += applied.result.applied_commits;
             self.report.skipped_commits += applied.result.skipped_commits;
             self.report.conflicts += applied.result.conflict_count;
+            (self.progress)(&Event::Applied {
+                stream: key.to_owned(),
+                sequence: segment.sequence,
+                commits: applied.result.applied_commits,
+                already: applied.result.skipped_commits,
+            });
             self.fetched.remove(key);
             let complete = bundle.manifest.is_last;
             self.cursor.streams.insert(
@@ -764,32 +863,53 @@ impl Receive<'_> {
     }
 }
 
+/// A missing folder is a stream with nothing in it, not a failed sync: the `.sync`
+/// tree can be created ahead of its first segment, and a peer can prune a
+/// generation between two of these listings. Anything else still has to surface.
+async fn list_or_empty(client: &WebDavClient, path: &str) -> Result<Vec<RemoteEntry>> {
+    match client.list(path).await {
+        Ok(entries) => Ok(entries),
+        Err(GatewayError::RemoteNotFound) => Ok(Vec::new()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Walks the remote `.sync` tree once and returns both answers the receive phase
+/// needs: the peer streams to apply and the size of everything that walk saw, this
+/// device's own stream included. Own segments are measured, never applied.
 async fn list_streams(
     client: &WebDavClient,
     root: &str,
     device_id: &str,
-) -> Result<Vec<(String, Vec<Segment>)>> {
+) -> Result<(Vec<(String, Vec<Segment>)>, Usage)> {
     let mut streams = Vec::new();
+    let mut usage = Usage::default();
     let devices = format!("{root}/streams");
-    for device in client.list(&devices).await? {
-        if !device.is_directory || device.name() == device_id || !safe_part(device.name()) {
+    for device in list_or_empty(client, &devices).await? {
+        if !device.is_directory || !safe_part(device.name()) {
             continue;
         }
+        let own = device.name() == device_id;
         let device_path = format!("{devices}/{}", device.name());
-        for generation in client.list(&device_path).await? {
+        for generation in list_or_empty(client, &device_path).await? {
             if !generation.is_directory || !safe_part(generation.name()) {
                 continue;
             }
             let directory = format!("{device_path}/{}/segments", generation.name());
             let key = format!("{}/{}", device.name(), generation.name());
             let mut segments = Vec::new();
-            for entry in client.list(&directory).await? {
+            for entry in list_or_empty(client, &directory).await? {
                 if entry.is_directory || !safe_part(entry.name()) {
                     continue;
                 }
                 let Some((sequence, digest)) = parse_segment_name(entry.name()) else {
                     continue;
                 };
+                usage.segments += 1;
+                match entry.size {
+                    Some(size) => usage.bytes += size,
+                    None => usage.unmeasured += 1,
+                }
                 if segments
                     .iter()
                     .any(|seen: &Segment| seen.sequence == sequence)
@@ -805,12 +925,12 @@ async fn list_streams(
                 });
             }
             segments.sort_by_key(|segment| segment.sequence);
-            if !segments.is_empty() {
+            if !segments.is_empty() && !own {
                 streams.push((key, segments));
             }
         }
     }
-    Ok(streams)
+    Ok((streams, usage))
 }
 
 fn block(cursor: &mut Cursor, key: &str, reason: &str) {

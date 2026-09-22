@@ -14,6 +14,8 @@ Implemented and tested:
 
 Verification: 101 Rust tests passed (78 library, 10 binary, 9 CLI management, 3 language, 1 portable), Clippy all-targets with warnings denied, and formatting. Synthetic home renderings at 70×20 and 100×30 were visually inspected. These are Ratatui buffer renderings, not native Windows Terminal screenshots.
 
+That tally is the state at this milestone, not the current suite: the run of 2026-09-22 reports 221 passed (183 library, 20 binary, 12 CLI management, 2 clipboard, 3 language, 1 portable).
+
 The separate lifetimes were also demonstrated with the debug binary against a throwaway vault: a one-minute grant returned `reauthorization_required` while `list` and `status` still showed the connection, `refresh` succeeded with the master password only and rejected a payload that also carried a token, and revoking the grant left the stored credential in place.
 
 The release build and the `D:/Apps/MonicaCLI` install predate the grant window and the restructured public catalog; the installed executable reports `refresh` as an unknown command, so it still needs a rebuild and reinstall.

@@ -15,8 +15,10 @@ pub fn required_fields(command: &str) -> &'static [SecretField] {
     match command {
         "add" | "connect" | "token" => &[Password, Token],
         "init" | "note" | "open" | "grant" | "refresh" | "serve" | "library" | "category"
-        | "move" | "rename-category" | "rename-entry" | "use" | "keys" | "keys ssh"
-        | "keys gpg" | "keys edit" | "keys export" => &[Password],
+        | "move" | "delete" | "delete-category" | "rename-category" | "rename-entry" | "use"
+        | "keys" | "keys ssh" | "keys gpg" | "keys edit" | "keys delete" | "keys export" => {
+            &[Password]
+        }
         "webdav login" | "webdav list" => &[WebDavPassword],
         "webdav open" | "webdav publish" | "webdav sync" => &[Password, WebDavPassword],
         _ => &[],
@@ -150,6 +152,29 @@ impl SecretInput {
         } else {
             self.prompt(prompt)
         }
+    }
+
+    /// True only when a person is actually sitting at this terminal: nothing was
+    /// injected through a pipe, and nothing suppressed prompts.
+    pub fn can_prompt(&self) -> bool {
+        self.pipe.is_none() && !self.non_interactive && std::io::stdin().is_terminal()
+    }
+
+    /// One visible line a person types to confirm a destructive command by repeating
+    /// its target. The text is not a secret, so masking it would defeat the point.
+    /// Where nobody can be asked, the answer is a refusal rather than a silent yes.
+    pub fn typed(&self, prompt: &str) -> Result<String> {
+        if !self.can_prompt() {
+            return Err(GatewayError::ConfirmationRequired);
+        }
+        use std::io::Write;
+        eprint!("{prompt}");
+        std::io::stderr().flush().ok();
+        let mut line = String::new();
+        std::io::stdin()
+            .read_line(&mut line)
+            .map_err(|_| GatewayError::ConfirmationRequired)?;
+        Ok(line.trim().to_owned())
     }
 
     fn prompt(&self, prompt: &str) -> Result<Zeroizing<String>> {

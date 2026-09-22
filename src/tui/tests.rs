@@ -158,6 +158,141 @@ fn home_browses_categories_and_entries_as_one_tree() {
 }
 
 #[test]
+fn a_row_only_deletes_after_its_own_name_is_typed_back() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = App::new(
+        ConfigStore::new(directory.path().join("gateway.json")),
+        Language::En,
+    );
+    let bound = "11111111-1111-1111-1111-111111111111".to_owned();
+    let mut config = Config::new(directory.path().join("synthetic.mdbx"));
+    config.connections.insert(
+        "work-gitlab".to_owned(),
+        crate::config::Connection {
+            provider: crate::model::Provider::Gitlab,
+            credential_id: bound.clone(),
+            api_base: "https://gitlab.example.com/".to_owned(),
+            note: String::new(),
+        },
+    );
+    app.apply(browsed(crate::library::Library {
+        categories: vec![
+            crate::library::Category {
+                id: "work".into(),
+                parent: None,
+                title: "Work".into(),
+            },
+            crate::library::Category {
+                id: "archive".into(),
+                parent: None,
+                title: "Archive".into(),
+            },
+        ],
+        entries: vec![
+            crate::library::Entry {
+                id: bound.clone(),
+                category: "work".into(),
+                title: "GitLab".into(),
+                kind: "api-token".into(),
+            },
+            crate::library::Entry {
+                id: "scratch".into(),
+                category: "work".into(),
+                title: "Scratch".into(),
+                kind: "login".into(),
+            },
+        ],
+    }));
+    app.config = Some(config);
+    assert_eq!(
+        app.home_rows().iter().map(|r| r.id()).collect::<Vec<_>>(),
+        [
+            "action:grants",
+            "work",
+            bound.as_str(),
+            "scratch",
+            "archive"
+        ]
+    );
+    app.key(key(KeyCode::Down));
+    assert_eq!(app.selected_home_row().unwrap().id(), "work");
+    // The keybar advertises the binding on a row that can use it.
+    let footer = text(&mut app, 120, 24)
+        .lines()
+        .last()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(footer.contains("D delete"), "{footer}");
+    // Contents are never taken down with their category, so it is refused on the spot.
+    app.key(key(KeyCode::Char('D')));
+    assert!(matches!(app.mode, Mode::Normal));
+    assert!(app.pending.is_none());
+    assert!(
+        app.message.starts_with("'Work' still holds 2 entry(s)"),
+        "{}",
+        app.message
+    );
+
+    // A credential behind a saved connection is deleted as that connection.
+    app.key(key(KeyCode::Down));
+    assert_eq!(app.selected_home_row().unwrap().id(), bound);
+    app.key(key(KeyCode::Char('D')));
+    let Mode::Form(form) = &app.mode else {
+        panic!("delete form never opened")
+    };
+    assert_eq!(form.title, "Delete");
+    assert!(form.notice.contains("GitLab"));
+    assert!(form.fields[0].input.value.is_empty());
+    app.paste("Gitlab");
+    app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    assert!(
+        matches!(&app.mode, Mode::Form(form) if matches!(form.kind, Kind::Delete { .. })),
+        "a mistyped name left the form"
+    );
+    assert!(app.pending.is_none());
+    assert!(app.message.contains("did not match 'GitLab'"));
+
+    let delete = |app: &mut App| -> actions::DeleteTarget {
+        app.mode = Mode::Normal;
+        app.key(key(KeyCode::Char('D')));
+        let Mode::Form(mut form) = std::mem::replace(&mut app.mode, Mode::Normal) else {
+            panic!("delete form never opened")
+        };
+        let Kind::Delete { expect, .. } = form.kind.clone() else {
+            panic!("delete opened another form")
+        };
+        assert!(form.fields[0].input.value.is_empty());
+        form.fields[0].input = Input::new(&expect, 4096);
+        form.fields[1].input = Input::new("synthetic-password", 4096);
+        let Action::Delete { target, password } = form.action(app).unwrap() else {
+            panic!("delete form produced no action")
+        };
+        assert_eq!(password.as_str(), "synthetic-password");
+        target
+    };
+    let target = delete(&mut app);
+    assert!(
+        matches!(target, actions::DeleteTarget::Connection(name) if name == "work-gitlab"),
+        "a bound credential must remove its connection and grants"
+    );
+    app.mode = Mode::Normal;
+    app.key(key(KeyCode::Down));
+    assert_eq!(app.selected_home_row().unwrap().id(), "scratch");
+    assert!(matches!(
+        delete(&mut app),
+        actions::DeleteTarget::Entry(id) if id == "scratch"
+    ));
+    app.mode = Mode::Normal;
+    app.key(key(KeyCode::Down));
+    assert_eq!(app.selected_home_row().unwrap().id(), "archive");
+    assert!(matches!(
+        delete(&mut app),
+        actions::DeleteTarget::Category(id) if id == "archive"
+    ));
+}
+
+#[test]
 fn rails_stay_on_the_layout_columns_across_widths_languages_and_panes() {
     for language in [Language::En, Language::ZhCn] {
         let directory = tempfile::tempdir().unwrap();
@@ -1160,6 +1295,10 @@ fn tui_both_languages_cover_all_pages_forms_and_responsive_borders() {
             Kind::Unlock,
             Kind::Sync,
             Kind::Revoke,
+            Kind::Delete {
+                target: actions::DeleteTarget::Entry("aws".to_owned()),
+                expect: "AWS 控制台".to_owned(),
+            },
             Kind::AddSsh { generate: true },
             Kind::AddSsh { generate: false },
             Kind::AddGpg,
@@ -2123,13 +2262,21 @@ async fn tui_quick_add_unlocks_and_exposes_only_public_named_metadata_to_mcp() {
 
 /// This reaches the real OS credential manager, so it deletes exactly the entry it
 /// creates. The fake server answers on an ephemeral port, so the target name can
-/// never collide with a vault a person has actually logged into.
+/// never collide with a vault a person has actually logged into. The store is one
+/// machine-wide resource, so the test takes the shared turn (`credential_turn`) that
+/// keeps it from overlapping the other test writing real credentials.
+/// Waiting for that turn across an await is the point: `#[tokio::test]` drives this body on
+/// one thread, so the guard can never starve another task of this runtime.
 #[cfg(windows)]
+#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn a_typed_webdav_password_is_remembered_only_after_a_request_proves_it() {
     use crate::webdav::WebDavClient;
     use crate::webdav_tests::{DAV_PASSWORD, FakeWebDav};
 
+    let _turn = crate::test_support::credential_turn()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let directory = tempfile::tempdir().unwrap();
     let store = ConfigStore::new(directory.path().join("gateway.json"));
     let remote = FakeWebDav::new(Default::default()).await;

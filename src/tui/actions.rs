@@ -12,6 +12,15 @@ use crate::protocol::McpBridge;
 use crate::sync;
 use crate::webdav::{RemoteEntry, WebDavClient, WebDavProfile};
 
+/// Which owner a deleted tree row belongs to. A connection is removed through the
+/// gateway config so its grants go with it; a bound credential never is.
+#[derive(Clone)]
+pub(super) enum DeleteTarget {
+    Connection(String),
+    Entry(String),
+    Category(String),
+}
+
 pub(super) enum Action {
     SwitchDatabase {
         id: String,
@@ -40,6 +49,10 @@ pub(super) enum Action {
     Move {
         id: String,
         target: String,
+        password: Zeroizing<String>,
+    },
+    Delete {
+        target: DeleteTarget,
         password: Zeroizing<String>,
     },
     Library(Zeroizing<String>),
@@ -137,6 +150,7 @@ impl Action {
                 | Self::RenameEntry { .. }
                 | Self::Category { .. }
                 | Self::Move { .. }
+                | Self::Delete { .. }
                 | Self::Library(_)
                 | Self::Add { .. }
                 | Self::Note { .. }
@@ -164,6 +178,7 @@ impl Action {
             | Self::RenameEntry { .. }
             | Self::Category { .. }
             | Self::Move { .. } => Message::PendingConnect,
+            Self::Delete { .. } => Message::PendingDelete,
             Self::Library(_) => Message::PendingUnlock,
             Self::Add { .. } => Message::PendingAdd,
             Self::Note { .. } => Message::PendingNote,
@@ -303,6 +318,21 @@ pub(super) async fn perform(
             password,
         } => Ok(tokio::task::spawn_blocking(move || {
             crate::library::move_item(&store, &password, &id, &target)?;
+            browse(&store, &password)
+        })
+        .await
+        .map_err(|_| GatewayError::StateUnavailable)??),
+        Action::Delete { target, password } => Ok(tokio::task::spawn_blocking(move || {
+            match &target {
+                DeleteTarget::Connection(name) => {
+                    admin::delete_connection(&store, name, &password)?;
+                }
+                DeleteTarget::Entry(id) => crate::library::delete_entry(&store, &password, id)?,
+                DeleteTarget::Category(id) => {
+                    crate::library::delete_category(&store, &password, id)
+                        .map_err(|blocked| blocked.error())?;
+                }
+            }
             browse(&store, &password)
         })
         .await

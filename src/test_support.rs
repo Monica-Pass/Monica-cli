@@ -22,6 +22,16 @@ pub const PASSWORD: &str = "Synthetic vault passphrase for tests only 7283!";
 pub const TOKEN: &str = "synthetic-upstream-token-must-stay-inside-broker";
 pub const REPOSITORY: &str = "example/project";
 
+/// The credential store is one machine-wide resource. With the two tests that write it
+/// running side by side, a `CredReadW` has been seen answering "not found" for the other
+/// one (1 failure in 12 paired runs, 0 in 12 runs of either alone), so they take turns
+/// instead of overlapping. Nothing in production shares this lock.
+#[cfg(windows)]
+pub fn credential_turn() -> &'static std::sync::Mutex<()> {
+    static TURN: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    TURN.get_or_init(|| std::sync::Mutex::new(()))
+}
+
 #[derive(Clone, Debug)]
 pub struct CapturedRequest {
     pub method: String,

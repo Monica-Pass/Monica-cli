@@ -38,6 +38,15 @@ fn add(store: &ConfigStore, name: &str) {
     .unwrap();
 }
 
+fn get_requests(remote: &FakeWebDav) -> usize {
+    remote
+        .server
+        .requests()
+        .iter()
+        .filter(|request| request.method == "GET")
+        .count()
+}
+
 #[tokio::test]
 async fn sync_real_mdbx_roundtrip_preserves_old_copies_and_detects_divergence() {
     let directory = tempfile::tempdir().unwrap();
@@ -289,6 +298,28 @@ async fn segment_streams_converge_two_devices_without_replacing_any_file() {
         "only the peer stream is received: {view:?}"
     );
     assert!(view.waiting.is_empty(), "{view:?}");
+    let held: Vec<usize> = {
+        let files = remote.files.lock().unwrap();
+        files
+            .iter()
+            .filter(|(name, _)| {
+                name.starts_with("/dav/vault.mdbx.sync/") && name.ends_with(".mdbxsync")
+            })
+            .map(|(_, bytes)| bytes.len())
+            .collect()
+    };
+    let usage = view.usage.expect("the receive walk measured the tree");
+    assert_eq!(
+        usage.segments,
+        held.len(),
+        "every segment file in the tree counts, this device's own uploads included"
+    );
+    assert_eq!(
+        usage.bytes as usize,
+        held.iter().sum::<usize>(),
+        "the reported total is what the server actually holds"
+    );
+    assert_eq!(usage.unmeasured, 0, "{usage:?}");
     for secret in [TOKEN, PASSWORD, DAV_PASSWORD] {
         for bytes in remote.files.lock().unwrap().values() {
             assert!(
@@ -377,6 +408,115 @@ async fn segment_gap_in_a_peer_stream_waits_and_the_cursor_says_why() {
             reason: segment::WAITING_EARLIER_SEGMENT.to_owned(),
         }],
         "why a stream stopped is the one thing a status line has to carry"
+    );
+}
+
+#[tokio::test]
+async fn a_sync_folder_that_holds_no_segment_yet_reads_as_emptiness() {
+    let directory = tempfile::tempdir().unwrap();
+    let writer = initialized(directory.path(), "writer");
+    let remote = FakeWebDav::new(Default::default()).await;
+    sync::publish(&writer, &remote.client, "vault.mdbx", PASSWORD)
+        .await
+        .unwrap();
+    // Monica Android creates the folder when it sets sync up, before it has any
+    // history to cut, so the first client to connect reads an empty tree.
+    remote.seed_collection("vault.mdbx.sync");
+    let reader = initialized(directory.path(), "reader");
+    assert_eq!(
+        sync::open_remote(&reader, &remote.client, "vault.mdbx", PASSWORD)
+            .await
+            .unwrap(),
+        1
+    );
+    let quiet = sync::synchronize(&reader, &remote.client, PASSWORD)
+        .await
+        .unwrap();
+    assert_eq!(quiet.result, SyncResult::UpToDate);
+    assert_eq!(quiet.segments, None, "nothing crossed the wire");
+
+    add(&reader, "first");
+    assert_eq!(
+        sync::synchronize(&reader, &remote.client, PASSWORD)
+            .await
+            .unwrap()
+            .segments
+            .expect("this device now owes a segment")
+            .uploaded_segments,
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_cancelled_replay_stops_between_segments_and_resumes_without_loss() {
+    let directory = tempfile::tempdir().unwrap();
+    let writer = initialized(directory.path(), "writer");
+    let remote = FakeWebDav::new(Default::default()).await;
+    sync::publish(&writer, &remote.client, "vault.mdbx", PASSWORD)
+        .await
+        .unwrap();
+    remote.seed_collection("vault.mdbx.sync");
+    let reader = initialized(directory.path(), "reader");
+    sync::open_remote(&reader, &remote.client, "vault.mdbx", PASSWORD)
+        .await
+        .unwrap();
+    // Two peer generations published after the reader joined. Each run closes its
+    // generation, so the listing order is a UUID draw: one of them needs the other
+    // first and has to be fetched to find that out. What the stop owes is therefore
+    // "no read after it", not "exactly one read in total".
+    add(&writer, "peer-two");
+    sync::synchronize(&writer, &remote.client, PASSWORD)
+        .await
+        .unwrap();
+    add(&writer, "peer-three");
+    sync::synchronize(&writer, &remote.client, PASSWORD)
+        .await
+        .unwrap();
+
+    let cancel = segment::Cancel::default();
+    let mut seen: Vec<segment::Event> = Vec::new();
+    let mut fetched_at_stop: Option<usize> = None;
+    let mut sink = |event: &segment::Event| {
+        seen.push(event.clone());
+        if matches!(event, segment::Event::Applied { .. }) && fetched_at_stop.is_none() {
+            cancel.trigger();
+            fetched_at_stop = Some(get_requests(&remote));
+        }
+    };
+    let stopped =
+        sync::synchronize_with_progress(&reader, &remote.client, PASSWORD, &mut sink, &cancel)
+            .await
+            .unwrap();
+    let report = stopped.segments.expect("an interrupted run is reported");
+    assert!(report.cancelled);
+    assert_eq!(
+        get_requests(&remote),
+        fetched_at_stop.expect("the replay reached a segment it could apply"),
+        "the segment past the stop was never fetched: {report:?}"
+    );
+    assert!(
+        seen.iter()
+            .any(|event| matches!(event, segment::Event::Applied { sequence: 0, .. })),
+        "a replay that shows nothing per segment is what this fixes: {seen:?}"
+    );
+    let names = reader.load().unwrap().connections;
+    assert!(names.contains_key("peer-two"));
+    assert!(!names.contains_key("peer-three"));
+
+    let resumed = sync::synchronize(&reader, &remote.client, PASSWORD)
+        .await
+        .unwrap()
+        .segments
+        .expect("the rest of the history is still owed");
+    assert!(!resumed.cancelled);
+    assert_eq!(resumed.downloaded_segments, 1);
+    assert_eq!(resumed.conflicts, 0);
+    assert!(
+        reader
+            .load()
+            .unwrap()
+            .connections
+            .contains_key("peer-three")
     );
 }
 

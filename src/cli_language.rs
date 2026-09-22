@@ -149,43 +149,59 @@ fn language_for_args(args: &[OsString]) -> Language {
 
 pub(super) fn localize(mut command: Command, language: Language) -> Command {
     use Message::*;
-    let about = match command.get_name() {
-        "monica-pass" => CliAbout,
-        "tui" => CliTuiHelp,
-        "add" => CliAddHelp,
-        "list" => CliListHelp,
-        "show" => CliShowHelp,
-        "settings" => CliSettingsHelp,
-        "commands" => CliCommandsHelp,
-        "note" => CliNoteHelp,
-        "open" => CliOpenHelp,
-        "webdav" => CliWebdavHelp,
-        "check" => CliCheckHelp,
-        "init" => CliInitHelp,
-        "connect" => CliConnectHelp,
-        "grant" => CliGrantHelp,
-        "refresh" => CliRefreshHelp,
-        "call" => CliCallHelp,
-        "revoke" => CliRevokeHelp,
-        "serve" => CliServeHelp,
-        "lock" => CliLockHelp,
-        "status" => CliStatusHelp,
-        "mcp" => CliMcpHelp,
-        "language" => CliLanguageHelp,
-        "keys" => CliKeysHelp,
-        "ssh" => CliKeysSshHelp,
-        "gpg" => CliKeysGpgHelp,
-        "edit" => CliKeysEditHelp,
-        "export" => CliKeysExportHelp,
-        "login" => CliLoginHelp,
-        "publish" => CliDavPublishHelp,
-        "sync" => CliDavSyncHelp,
-        "help" => CliHelpCommandHelp,
-        _ => CliAbout,
+    // None keeps the about the parser derived from its doc comment. Falling back to
+    // CliAbout here used to relabel every unmapped command as the crate tagline.
+    let about: Option<Message> = match command.get_name() {
+        "monica-pass" => Some(CliAbout),
+        "tui" => Some(CliTuiHelp),
+        "add" => Some(CliAddHelp),
+        "list" => Some(CliListHelp),
+        "show" => Some(CliShowHelp),
+        "settings" => Some(CliSettingsHelp),
+        "commands" => Some(CliCommandsHelp),
+        "note" => Some(CliNoteHelp),
+        "open" => Some(CliOpenHelp),
+        "webdav" => Some(CliWebdavHelp),
+        "check" => Some(CliCheckHelp),
+        "init" => Some(CliInitHelp),
+        "connect" => Some(CliConnectHelp),
+        "grant" => Some(CliGrantHelp),
+        "refresh" => Some(CliRefreshHelp),
+        "call" => Some(CliCallHelp),
+        "revoke" => Some(CliRevokeHelp),
+        "serve" => Some(CliServeHelp),
+        "lock" => Some(CliLockHelp),
+        "status" => Some(CliStatusHelp),
+        "mcp" => Some(CliMcpHelp),
+        "language" => Some(CliLanguageHelp),
+        "keys" => Some(CliKeysHelp),
+        "ssh" => Some(CliKeysSshHelp),
+        "gpg" => Some(CliKeysGpgHelp),
+        "edit" => Some(CliKeysEditHelp),
+        "export" => Some(CliKeysExportHelp),
+        "databases" => Some(CliDatabasesHelp),
+        "use" => Some(CliUseHelp),
+        "token" => Some(CliTokenHelp),
+        "rename-category" => Some(CliRenameCategoryHelp),
+        "rename-entry" => Some(CliRenameEntryHelp),
+        "library" => Some(CliLibraryHelp),
+        "category" => Some(CliCategoryCreateHelp),
+        "move" => Some(CliMoveHelp),
+        "delete" => Some(CliDeleteHelp),
+        "delete-category" => Some(CliDeleteCategoryHelp),
+        "login" => Some(CliLoginHelp),
+        "forget-password" => Some(CliDavForgetPasswordHelp),
+        "publish" => Some(CliDavPublishHelp),
+        "sync" => Some(CliDavSyncHelp),
+        "help" => Some(CliHelpCommandHelp),
+        _ => None,
     };
     let webdav = command.get_name() == "webdav";
+    let keys = command.get_name() == "keys";
+    if let Some(about) = about {
+        command = command.about(language.text(about));
+    }
     command = command
-        .about(language.text(about))
         .subcommand_help_heading(tr!(language, CliCommandsHeading))
         .help_template(format!(
             "{{before-help}}{{about-with-newline}}\n{} {{usage}}\n\n{{all-args}}{{after-help}}",
@@ -215,6 +231,7 @@ pub(super) fn localize(mut command: Command, language: Language) -> Command {
             "list" if webdav => Some(CliDavListHelp),
             "open" if webdav => Some(CliDavOpenHelp),
             "status" if webdav => Some(CliDavStatusHelp),
+            "delete" if keys => Some(CliKeysDeleteHelp),
             _ => None,
         };
         let child = localize(child, language);
@@ -236,6 +253,9 @@ fn argument_message(id: &str) -> Option<Message> {
         "topic" => CliCommandTopicHelp,
         "language" => CliLanguageValueHelp,
         "name" => CliNameHelp,
+        "target" => CliDeleteTargetHelp,
+        "category_id" => CliCategoryDeleteIdHelp,
+        "force_delete" => CliForceDeleteHelp,
         "entry" => CliKeyEntryHelp,
         "key_name" => CliKeyTitleHelp,
         "new_title" => CliKeyNewTitleHelp,
@@ -378,5 +398,37 @@ mod tests {
             help("help").is_some(),
             "built-in arguments are out of reach of the translation pass"
         );
+    }
+
+    fn walk(command: &Command, path: &str, out: &mut Vec<(String, Option<String>)>) {
+        for child in command.get_subcommands() {
+            let name = if path.is_empty() {
+                child.get_name().to_owned()
+            } else {
+                format!("{path} {}", child.get_name())
+            };
+            out.push((
+                name.clone(),
+                child.get_about().map(|about| about.to_string()),
+            ));
+            walk(child, &name, out);
+        }
+    }
+
+    #[test]
+    fn no_command_borrows_the_crate_tagline_as_its_summary() {
+        for language in [Language::En, Language::ZhCn] {
+            let tagline = language.text(Message::CliAbout).to_string();
+            let mut commands = Vec::new();
+            walk(&localized_command(language), "", &mut commands);
+            assert!(commands.len() > 30, "the walk missed most of the grammar");
+            for (name, about) in commands {
+                let summary = about.unwrap_or_else(|| panic!("{name} has no help summary"));
+                assert!(
+                    !summary.is_empty() && summary != tagline,
+                    "{name} shows the crate tagline instead of its own summary"
+                );
+            }
+        }
     }
 }

@@ -271,6 +271,28 @@ pub async fn open_remote(
     path: &str,
     password: &str,
 ) -> Result<usize> {
+    open_remote_with_progress(
+        store,
+        client,
+        path,
+        password,
+        &mut |_| {},
+        &crate::segment::Cancel::default(),
+    )
+    .await
+}
+
+/// As `open_remote`, with a line per replayed segment and a way to stop at a
+/// boundary. A cold copy of an active vault has to replay every peer segment the
+/// bootstrap does not carry, which is minutes of otherwise silent network waits.
+pub async fn open_remote_with_progress(
+    store: &ConfigStore,
+    client: &WebDavClient,
+    path: &str,
+    password: &str,
+    progress: &mut crate::segment::Progress<'_>,
+    cancel: &crate::segment::Cancel,
+) -> Result<usize> {
     let _guard = store.acquire_broker_lock()?;
     let mut download = download_file(store)?;
     let revision = client.download(path, &mut download.file).await?;
@@ -291,9 +313,8 @@ pub async fn open_remote(
         // revisions that matter live in the `.sync` tree. Replay them into the
         // installed copy before the configuration starts using it. The replay
         // report is not surfaced here; `webdav sync` prints it from then on.
-        let device_id = crate::segment::device_id(store)?;
         let (_, inventory) =
-            crate::segment::bootstrap(store, client, &local, &binding, &device_id, password)
+            crate::segment::bootstrap(store, client, &local, &binding, password, progress, cancel)
                 .await?;
         // `local_sha256` still means "the digest of the configured vault".
         binding.local_sha256 = Snapshot::new(store, &local)?.sha256;
@@ -429,6 +450,25 @@ pub async fn synchronize(
     client: &WebDavClient,
     password: &str,
 ) -> Result<SyncOutcome> {
+    synchronize_with_progress(
+        store,
+        client,
+        password,
+        &mut |_| {},
+        &crate::segment::Cancel::default(),
+    )
+    .await
+}
+
+/// As `synchronize`, for a terminal that has to show a long run moving and let the
+/// user stop it between segments.
+pub async fn synchronize_with_progress(
+    store: &ConfigStore,
+    client: &WebDavClient,
+    password: &str,
+    progress: &mut crate::segment::Progress<'_>,
+    cancel: &crate::segment::Cancel,
+) -> Result<SyncOutcome> {
     // This OS lock excludes broker startup, grants, connections and other syncs.
     // Revocation remains allowed; every final config update preserves it.
     let _guard = store.acquire_broker_lock()?;
@@ -441,16 +481,19 @@ pub async fn synchronize(
         return Err(GatewayError::InvalidWebDav);
     }
     if segment_sync_managed(client, &binding.path).await {
-        let device_id = crate::segment::device_id(store)?;
         let (report, inventory) =
-            crate::segment::synchronize(store, client, &binding, &device_id, password).await?;
+            crate::segment::synchronize(store, client, &binding, password, progress, cancel)
+                .await?;
         // The merge rewrote commits inside the configured vault, so the local
         // digest the single-file protocol compares no longer describes it; only
         // `last_sync` is meaningful here, and a segment remote never reads the
         // pair back.
         binding.last_sync = chrono::Utc::now().timestamp();
         apply_remote_vault(store, &config, config.vault.clone(), binding, inventory)?;
-        let active = !report.is_quiet() || report.conflicts > 0 || report.blocked_streams > 0;
+        let active = !report.is_quiet()
+            || report.conflicts > 0
+            || report.blocked_streams > 0
+            || report.cancelled;
         return Ok(SyncOutcome {
             result: if active {
                 SyncResult::Merged

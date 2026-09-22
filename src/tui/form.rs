@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use zeroize::Zeroizing;
 
 use super::App;
-use super::actions::Action;
+use super::actions::{Action, DeleteTarget};
 use crate::admin::{AddOptions, GrantOptions, validate_new_password};
 use crate::config::DEFAULT_PORT;
 use crate::error::{GatewayError, Result};
@@ -164,6 +164,10 @@ pub(super) enum Kind {
         name: String,
         title: String,
     },
+    Delete {
+        target: DeleteTarget,
+        expect: String,
+    },
     Category(Option<String>),
     Move(String),
     Library,
@@ -300,6 +304,14 @@ impl Form {
                         title,
                         tr!(lang, DisplayTitleHint),
                     ),
+                    Field::secret(tr!(lang, MasterPasswordLabel)),
+                ],
+            ),
+            Kind::Delete { expect, .. } => (
+                tr!(lang, DeleteFormTitle),
+                tr!(lang, DeleteFormNotice, expect = expect),
+                vec![
+                    Field::text(tr!(lang, DeleteConfirmLabel), "", ""),
                     Field::secret(tr!(lang, MasterPasswordLabel)),
                 ],
             ),
@@ -649,6 +661,7 @@ impl Form {
             Kind::Token(_)
             | Kind::RenameCategory { .. }
             | Kind::RenameEntry { .. }
+            | Kind::Delete { .. }
             | Kind::Category(_)
             | Kind::Move(_)
             | Kind::Add { new_vault: false }
@@ -779,6 +792,15 @@ impl Form {
                 title: self.text(0).to_owned(),
                 password: self.secret(1),
             },
+            Kind::Delete { target, expect } => {
+                if self.text(0) != expect {
+                    return Err(GatewayError::InvalidRequest);
+                }
+                Action::Delete {
+                    target: target.clone(),
+                    password: self.secret(1),
+                }
+            }
             Kind::Category(parent) => Action::Category {
                 title: self.text(0).to_owned(),
                 parent: parent.clone(),

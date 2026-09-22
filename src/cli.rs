@@ -65,6 +65,25 @@ pub enum Command {
     /// Move an entry or category into another category by ID.
     #[command(visible_alias = "mv")]
     Move { id: String, target: String },
+    /// Delete a connection or entry by handle or ID; confirm by typing the target.
+    #[command(visible_aliases = ["rm", "del"])]
+    Delete {
+        /// Connection name, or the entry ID shown by monica-pass library.
+        target: String,
+        /// Delete without the typed confirmation, after checking the target.
+        #[arg(long = "force", id = "force_delete")]
+        force: bool,
+    },
+    /// Remove an empty native category by ID. Never deletes what is inside it.
+    #[command(visible_alias = "rmdir")]
+    DeleteCategory {
+        /// Existing category ID, as listed by monica-pass library.
+        #[arg(id = "category_id")]
+        id: String,
+        /// Delete without the typed confirmation, after checking the target.
+        #[arg(long = "force", id = "force_delete")]
+        force: bool,
+    },
     /// Show or save the interface language.
     #[command(visible_alias = "lang")]
     Language {
@@ -221,6 +240,13 @@ pub enum KeysCommand {
         #[arg(long)]
         comment: Option<String>,
     },
+    /// Delete a key entry. Its public text stays in any file already exported.
+    Delete {
+        entry: String,
+        /// Delete without the typed confirmation, after checking the target.
+        #[arg(long = "force", id = "force_delete")]
+        force: bool,
+    },
     /// Write the public or private half of a key entry to a file. Never prints key material.
     Export {
         entry: String,
@@ -280,11 +306,14 @@ impl Command {
                 Some(KeysCommand::Ssh { .. }) => "keys ssh",
                 Some(KeysCommand::Gpg { .. }) => "keys gpg",
                 Some(KeysCommand::Edit { .. }) => "keys edit",
+                Some(KeysCommand::Delete { .. }) => "keys delete",
                 Some(KeysCommand::Export { .. }) => "keys export",
             },
             Self::Library => "library",
             Self::Category { .. } => "category",
             Self::Move { .. } => "move",
+            Self::Delete { .. } => "delete",
+            Self::DeleteCategory { .. } => "delete-category",
             Self::Language { .. } => "language",
             Self::Commands { .. } => "commands",
             Self::Tui => "tui",

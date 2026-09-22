@@ -71,12 +71,13 @@ While the database is locked, the middle pane lists selectable action rows (open
 | Copy the public line or user id / copy the fingerprint (key rows) | `y` / `Y` |
 | Rename category / replace Token | `e` |
 | Move to another category | `m` |
+| Delete the selected row (type its name back; a category must be empty) | `D` |
 | Open an MDBX file | `o` |
 | Help / last message / commands (e.g. `:lock`) | `?` / `!` / `:` |
 | Home / settings | `F3` or `,` |
 | Language / quit | `F2` / `q` |
 
-`/` matches a subsequence and ranks by relevance: `sk` finds `ssh-key`, spaces still narrow term by term, and the closest hit stays at the top. `y` and `Y` write only a key entry's public fields to the clipboard (the public key line, the user id, the fingerprint); Tokens and private key material have no path to the clipboard, and the command line never writes it either.
+`/` matches a subsequence and ranks by relevance: `sk` finds `ssh-key`, spaces still narrow term by term, and the closest hit stays at the top. `y` and `Y` write only a key entry's public fields to the clipboard (the public key line, the user id, the fingerprint); Tokens and private key material have no path to the clipboard, and the command line never writes it either. `D` deletes the selected row: the confirmation form asks you to type the name yourself, an empty field never stands in for your consent. A credential bound to a connection is deleted through that connection, which revokes its grants, and a category that still holds anything only tells you how much is left.
 
 In edit forms, `Tab` moves between fields and `Ctrl+S` opens a separate database-password step. `Esc` in that step returns to the draft and clears the password. Each management operation unlocks the database only while it runs; summary metadata is cached for at most five minutes. This is separate from the AI broker's five-minute unlock session.
 
@@ -136,6 +137,17 @@ monica-pass lock
 
 You can also use `init`, `connect`, and `grant` to create a vault, save a connection, and configure a grant separately. Run `monica-pass --help` or `monica-pass <subcommand> --help` for the available options.
 
+Deletion is three commands by target: `delete CONNECTION` removes the connection, the credential it binds and every grant under it; `delete ENTRY_ID` removes one entry that no connection binds; `delete-category CATEGORY_ID` (`rmdir`) removes an empty category only and refuses while anything is left inside, reporting the counts. Key entries go through `keys delete NAME`.
+
+```sh
+monica-pass library                       # entry and category IDs
+monica-pass delete work-github            # asks you to type work-github back
+monica-pass delete-category 3f2a…-id      # the category must already be empty
+monica-pass keys delete laptop --force
+```
+
+In a human terminal you must type the target back exactly before anything happens; `--force` is the opt-out once you have checked the target. A scripted caller injecting secrets through `--secrets-stdin` has no person to ask, so without `--force` it gets `confirmation_required` — silence is never read as consent. A delete writes a tombstone: every listing and the AI side stop seeing the row, and the tombstone rides segment sync to your other devices. The ciphertext itself stays inside the database file (the engine has no purge path yet), and key text you already exported to disk is not retracted. Nothing undoes a delete; restoring an earlier backup is the only way back (see [human-guide.md section 8](docs/human-guide.md)).
+
 ### Short commands and names
 
 Aliases are equivalent to the full commands. Common options also have short forms:
@@ -158,6 +170,7 @@ monica-pass ck work-github
 | Unlock and serve / lock | `serve` / `lock` | `u` / `lk` |
 | MCP settings / check discovery | `settings` / `check` | `m` / `ck` |
 | Status / WebDAV / command discovery | `status` / `webdav` / `commands` | `st` / `dav` / `cmds` |
+| Delete a connection or entry / delete an empty category | `delete` / `delete-category` | `rm`, `del` / `rmdir` |
 
 Use `-r` for a repository, `-p` for the provider, `-n` for a purpose note, `-t` for grant lifetime, and `-s` to serve after adding. Global `-C` selects the configuration file and `-l` selects the language. TUI keys remain as shown in its footer.
 
@@ -245,7 +258,7 @@ Sign in and manage WebDAV vaults directly from the TUI:
 2. Browse the WebDAV list and press `Enter` to open an `.mdbx` file, then enter its master password. Monica creates a local encrypted copy, so later gateway use does not require an ongoing WebDAV connection.
 3. Press `s` to manually sync the connected vault. If you are starting with a local vault, first press `P` to publish it under a new remote filename, then use `s` to sync.
 
-You enter the WebDAV password once. After the sign-in succeeds it is kept in **this computer's Windows credential manager**, so opening and syncing only ask for the vault master password. The URL and username are saved as before, and `:logout` ends just this session — it does not forget the stored password. Use `webdav forget-password` to remove it. These operations are also available from the command line:
+You enter the WebDAV password once. After the sign-in succeeds it is kept in **this computer's credential store** (Windows Credential Manager, the macOS Keychain, or a Linux Secret Service entry; the password never becomes a process argument), so opening and syncing only ask for the vault master password. The URL and username are saved as before, and `:logout` ends just this session — it does not forget the stored password. Use `webdav forget-password` to remove it. These operations are also available from the command line:
 
 ```sh
 monica-pass webdav login --url https://dav.example.com/monica/ --username your-name
@@ -257,7 +270,7 @@ monica-pass webdav forget-password
 
 A password you type at the prompt follows the same route into the credential manager; a password injected through `--secrets-stdin` is **used only inside that process and never stored**. `monica-pass dav st` shows the saved connection and whether a password is stored, without touching the network. Single-file sync compares local and remote versions and reports a conflict if both have changed. You can publish the local version under a new filename before resolving the conflict. Opening a different vault preserves the previous local file and clears existing AI grants.
 
-Supported vaults are password-unlocked, **self-contained MDBX files up to 64 MiB**. External `.blobs` attachments are not supported. A remote comes in two shapes: a lone `.mdbx` file syncs whole-file, which needs strong ETags and conditional writes from the server to replace it and stays readable without them; a same-named `.sync` folder — what Monica Android maintains — switches to segment-stream merging, where the engine merges commits, each device only writes immutable segments into its own stream, the one-time bootstrap is never replaced, and no strong ETag is required because every segment is read back and digest-checked after upload.
+Supported vaults are password-unlocked, **self-contained MDBX files up to 64 MiB**. External `.blobs` attachments are not supported. A remote comes in two shapes: a lone `.mdbx` file syncs whole-file, which needs strong ETags and conditional writes from the server to replace it and stays readable without them; a same-named `.sync` folder — what Monica Android maintains — switches to segment-stream merging, where the engine merges commits, each device only writes immutable segments into its own stream, the one-time bootstrap is never replaced, and no strong ETag is required because every segment is read back and digest-checked after upload. A replay prints one progress line per segment; `Ctrl+C` stops it at a segment boundary with the cursor already on disk, so the next run resumes where it left off, and a second press exits immediately.
 
 In single-file mode, some services, including the tested Jianguoyun endpoint, do not return strong ETags. Creating, reading, and downloading files still work; save later local changes under a new remote filename with `P` or `webdav publish NEW_NAME.mdbx`. The TUI preview and `safe_remote_replace: false` in `webdav status --json` make this limitation explicit. Monica does not force an overwrite.
 

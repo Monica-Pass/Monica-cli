@@ -413,6 +413,48 @@ pub fn rename_entry(store: &ConfigStore, name: &str, title: &str, password: &str
     result
 }
 
+/// Whether the credential row was removed or had already gone missing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntryDelete {
+    Deleted,
+    Absent,
+}
+
+/// Drops one connection: the encrypted credential goes first, then the binding and
+/// every grant that pointed at it. The vault write leads because a config write that
+/// fails afterwards leaves an orphan row, never a live grant bound to a deleted token.
+/// A credential the person already deleted elsewhere is not a reason to refuse - the
+/// binding still names a connection that can never answer again.
+pub fn delete_connection(
+    store: &ConfigStore,
+    name: &str,
+    password: &str,
+) -> Result<(EntryDelete, usize)> {
+    validate_name(name)?;
+    let _guard = store.acquire_broker_lock()?;
+    let config = store.load()?;
+    let binding = config.connections.get(name).ok_or(GatewayError::NotFound)?;
+    let vault = Vault::open(&config.vault, password)?;
+    let result = vault.delete_entry(&binding.credential_id);
+    vault.lock()?;
+    let entry = match result {
+        Ok(()) => EntryDelete::Deleted,
+        Err(GatewayError::NotFound) => EntryDelete::Absent,
+        Err(error) => return Err(error),
+    };
+    let grants = store.update(|config| {
+        let mut config = config.ok_or(GatewayError::NotFound)?;
+        if config.connections.remove(name).is_none() {
+            return Err(GatewayError::NotFound);
+        }
+        let before = config.grants.len();
+        config.grants.retain(|grant| grant.connection != name);
+        let revoked = before - config.grants.len();
+        Ok((config, revoked))
+    })?;
+    Ok((entry, grants))
+}
+
 /// Replace an encrypted token in place and require new authorization for it.
 pub fn update_token(
     store: &ConfigStore,
@@ -1012,6 +1054,70 @@ mod tests {
         assert!(store.load().unwrap().connections.contains_key("work"));
         // A display title that would leak the master password is rejected.
         assert!(rename_entry(&store, "work", PASSWORD, PASSWORD).is_err());
+    }
+
+    #[test]
+    fn deleting_a_connection_removes_its_credential_and_only_its_own_grants() {
+        use crate::test_support::{PASSWORD, TOKEN};
+        let directory = tempfile::tempdir().unwrap();
+        let store = ConfigStore::new(directory.path().join("gateway.json"));
+        quick_add(
+            &store,
+            &quick_options("work"),
+            PASSWORD,
+            Some(PASSWORD),
+            Zeroizing::new(TOKEN.to_owned()),
+        )
+        .unwrap();
+        add_connection(
+            &store,
+            "other",
+            Provider::Github,
+            Provider::Github.default_api_base(),
+            "",
+            PASSWORD,
+            Zeroizing::new(TOKEN.to_owned()),
+        )
+        .unwrap();
+        issue_grant(
+            &store,
+            &GrantOptions {
+                name: "other-agent".to_owned(),
+                connection: "other".to_owned(),
+                repositories: vec!["example/project".to_owned()],
+                operations: vec![Operation::GetIssue],
+                ttl_minutes: 60,
+                requests_per_minute: 10,
+                max_calls: 0,
+                out: None,
+            },
+            PASSWORD,
+        )
+        .unwrap();
+        let (work, other) = {
+            let config = store.load().unwrap();
+            (
+                config.connections["work"].credential_id.clone(),
+                config.connections["other"].credential_id.clone(),
+            )
+        };
+        assert_eq!(
+            delete_connection(&store, "work", PASSWORD).unwrap(),
+            (EntryDelete::Deleted, 1)
+        );
+        let config = store.load().unwrap();
+        assert!(!config.connections.contains_key("work"));
+        assert!(config.connections.contains_key("other"));
+        assert_eq!(config.grants.len(), 1);
+        assert_eq!(config.grants[0].connection, "other");
+        let library = crate::library::read(&store, PASSWORD).unwrap();
+        assert!(library.entries.iter().all(|entry| entry.id != work));
+        assert!(library.entries.iter().any(|entry| entry.id == other));
+        // An absent connection is reported, never quietly accepted.
+        assert!(matches!(
+            delete_connection(&store, "work", PASSWORD),
+            Err(GatewayError::NotFound)
+        ));
     }
 
     #[test]

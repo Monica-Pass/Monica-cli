@@ -967,3 +967,212 @@ fn key_administration_is_documented_without_private_export() {
     assert!(keys_text.contains("\"ssh\""));
     assert!(!keys_text.contains("keys export"));
 }
+
+#[test]
+fn a_delete_tombstones_only_what_a_person_confirmed_or_forced() {
+    let directory = tempfile::tempdir().unwrap();
+    let dir = directory.path();
+    add(dir);
+    let library = success(cli(
+        dir,
+        &["library", "-j", "--secrets-stdin"],
+        Some(&password()),
+    ));
+    let entries = library["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1, "quick add stores exactly one credential");
+    let bound = entries[0]["id"].as_str().unwrap().to_owned();
+    let collection = entries[0]["category"].as_str().unwrap().to_owned();
+    assert_eq!(
+        success(cli(dir, &["status", "-j"], None))["grants"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // A trusted producer may pipe a password; it may never pipe consent.
+    failure(
+        cli(
+            dir,
+            &["delete", &bound, "-j", "--secrets-stdin"],
+            Some(&password()),
+        ),
+        "confirmation_required",
+    );
+    // A row a connection still binds is never taken down as a bare entry, and neither is a
+    // category that still holds contents.
+    failure(
+        cli(
+            dir,
+            &["delete", &bound, "--force", "-j", "--secrets-stdin"],
+            Some(&password()),
+        ),
+        "invalid_request",
+    );
+    failure(
+        cli(
+            dir,
+            &[
+                "delete-category",
+                &collection,
+                "--force",
+                "-j",
+                "--secrets-stdin",
+            ],
+            Some(&password()),
+        ),
+        "invalid_request",
+    );
+    let library = success(cli(
+        dir,
+        &["library", "-j", "--secrets-stdin"],
+        Some(&password()),
+    ));
+    assert_eq!(library["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        success(cli(dir, &["status", "-j"], None))["grants"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "a refused delete must leave the grant in force"
+    );
+
+    let deleted = success(cli(
+        dir,
+        &["delete", "work", "--force", "-j", "--secrets-stdin"],
+        Some(&password()),
+    ));
+    assert_eq!(deleted["kind"], "connection");
+    assert_eq!(deleted["credential_removed"], true);
+    assert_eq!(deleted["grants_revoked"], 1);
+    assert_eq!(deleted["tombstone"], true);
+    assert!(
+        success(cli(dir, &["status", "-j"], None))["grants"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let library = success(cli(
+        dir,
+        &["library", "-j", "--secrets-stdin"],
+        Some(&password()),
+    ));
+    assert!(library["entries"].as_array().unwrap().is_empty());
+    // The same flags now succeed because the category really is empty.
+    let category = success(cli(
+        dir,
+        &[
+            "delete-category",
+            &collection,
+            "--force",
+            "-j",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    ));
+    assert_eq!(category["kind"], "category");
+    assert_eq!(category["tombstone"], true);
+    let library = success(cli(
+        dir,
+        &["library", "-j", "--secrets-stdin"],
+        Some(&password()),
+    ));
+    assert!(
+        library["categories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["id"] != collection),
+        "a tombstone must not read back as a live row"
+    );
+    failure(
+        cli(
+            dir,
+            &["delete", "work", "--force", "-j", "--secrets-stdin"],
+            Some(&password()),
+        ),
+        "not_found",
+    );
+
+    success(cli(
+        dir,
+        &[
+            "keys",
+            "ssh",
+            "laptop",
+            "--generate",
+            "ed25519",
+            "-j",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    ));
+    failure(
+        cli(
+            dir,
+            &["keys", "delete", "laptop", "-j", "--secrets-stdin"],
+            Some(&password()),
+        ),
+        "confirmation_required",
+    );
+    let private_path = dir.join("id_ed25519");
+    success(cli(
+        dir,
+        &[
+            "keys",
+            "export",
+            "laptop",
+            "--private",
+            "-o",
+            private_path.to_str().unwrap(),
+            "-j",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    ));
+    let removed = success(cli(
+        dir,
+        &[
+            "keys",
+            "delete",
+            "laptop",
+            "--force",
+            "-j",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    ));
+    assert_eq!(removed["name"], "laptop");
+    assert_eq!(removed["kind"], "key");
+    assert_eq!(removed["tombstone"], true);
+    assert!(
+        success(cli(
+            dir,
+            &["keys", "-j", "--secrets-stdin"],
+            Some(&password())
+        ))["keys"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    failure(
+        cli(
+            dir,
+            &[
+                "keys",
+                "delete",
+                "laptop",
+                "--force",
+                "-j",
+                "--secrets-stdin",
+            ],
+            Some(&password()),
+        ),
+        "not_found",
+    );
+    assert!(
+        private_path.is_file(),
+        "text a person already exported is never retracted"
+    );
+}

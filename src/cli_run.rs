@@ -7,9 +7,10 @@ use monica_pass_cli::error::{GatewayError, Result};
 use monica_pass_cli::i18n::{self, Language, Message, Preferences};
 use monica_pass_cli::model::{validate_api_base, validate_name, validate_note};
 use monica_pass_cli::protocol::{McpBridge, serve_mcp};
+use monica_pass_cli::segment;
 use monica_pass_cli::tr;
 use monica_pass_cli::webdav::{WebDavClient, WebDavProfile};
-use serde_json::json;
+use serde_json::{Value, json};
 use zeroize::Zeroizing;
 
 use crate::cli::{Cli, Command, KeysCommand, WebDavCommand};
@@ -123,6 +124,44 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             monica_pass_cli::library::move_item(&store, &password, &id, &target)?;
             let data = json!({"id":id,"target":target});
             output.result("move", data.clone(), Some(&data))?;
+        }
+        Command::Delete { target, force } => {
+            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            if !force {
+                confirm_deletion(&input, lang, output, &target)?;
+            }
+            admin::lock_broker(&store).await?;
+            let data = delete_target(&store, &target, &password, lang, output)?;
+            output.note(tr!(lang, CliDeletedTombstone, target = target));
+            output.result("delete", data.clone(), Some(&data))?;
+        }
+        Command::DeleteCategory { id, force } => {
+            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            if !force {
+                confirm_deletion(&input, lang, output, &id)?;
+            }
+            admin::lock_broker(&store).await?;
+            let category = match monica_pass_cli::library::delete_category(&store, &password, &id) {
+                Ok(category) => category,
+                Err(monica_pass_cli::library::DeleteBlocked::NotEmpty {
+                    category,
+                    entries,
+                    children,
+                }) => {
+                    output.note(tr!(
+                        lang,
+                        CliDeleteCategoryNotEmpty,
+                        title = category.title,
+                        entries = entries,
+                        children = children
+                    ));
+                    return Err(GatewayError::InvalidRequest);
+                }
+                Err(blocked) => return Err(blocked.error()),
+            };
+            let data = json!({"id":id,"title":category.title,"kind":"category","tombstone":true});
+            output.note(tr!(lang, CliDeletedTombstone, target = id));
+            output.result("delete-category", data.clone(), Some(&data))?;
         }
         Command::Keys { command } => {
             return keys_command(store, command, lang, &mut input, output).await;
@@ -499,14 +538,25 @@ async fn webdav_command(
         WebDavCommand::Open { path } => {
             let password = input.take(SecretField::Password, tr!(lang, PromptRemotePassword))?;
             admin::lock_broker(&store).await?;
-            let count =
-                monica_pass_cli::sync::open_remote(&store, &client, &path, &password).await?;
+            let cancel = segment::Cancel::default();
+            let mut sink = |event: &segment::Event| output.note(lang.segment_progress(event));
+            let count = until_cancelled(
+                &cancel,
+                monica_pass_cli::sync::open_remote_with_progress(
+                    &store, &client, &path, &password, &mut sink, &cancel,
+                ),
+            )
+            .await?;
             output.result(
                 "webdav open",
-                json!({"connections":count,"vault":store.load()?.vault,"grants_reset":true}),
+                json!({"connections":count,"vault":store.load()?.vault,"grants_reset":true,
+                       "cancelled":cancel.cancelled()}),
                 None,
             )?;
             output.note(tr!(lang, CliOpenedRemote, count = count));
+            if cancel.cancelled() {
+                output.note(tr!(lang, CliOpenPartiallyReplayed));
+            }
         }
         WebDavCommand::Publish { path } => {
             let password = input.take(SecretField::Password, tr!(lang, PromptLocalPassword))?;
@@ -520,7 +570,15 @@ async fn webdav_command(
         WebDavCommand::Sync => {
             let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;
-            let outcome = monica_pass_cli::sync::synchronize(&store, &client, &password).await?;
+            let cancel = segment::Cancel::default();
+            let mut sink = |event: &segment::Event| output.note(lang.segment_progress(event));
+            let outcome = until_cancelled(
+                &cancel,
+                monica_pass_cli::sync::synchronize_with_progress(
+                    &store, &client, &password, &mut sink, &cancel,
+                ),
+            )
+            .await?;
             let data = match &outcome.segments {
                 Some(report) => json!({"result":outcome.result,"segments":report}),
                 None => json!({"result":outcome.result}),
@@ -536,6 +594,31 @@ async fn webdav_command(
     }
     remember_password(&account.0, &account.1, &mut typed, &output, lang);
     Ok(())
+}
+
+/// Runs a long remote operation under Ctrl+C. The first press asks the segment run
+/// to stop at its next boundary, which keeps the saved cursor exact and lets the
+/// result still be printed; a second press ends the process at once, because a user
+/// who presses twice wants out now rather than after one more segment.
+async fn until_cancelled<T>(
+    cancel: &segment::Cancel,
+    operation: impl std::future::Future<Output = T>,
+) -> T {
+    let armed = {
+        let cancel = cancel.clone();
+        tokio::spawn(async move {
+            if tokio::signal::ctrl_c().await.is_err() {
+                return;
+            }
+            cancel.trigger();
+            if tokio::signal::ctrl_c().await.is_ok() {
+                std::process::exit(130);
+            }
+        })
+    };
+    let value = operation.await;
+    armed.abort();
+    value
 }
 
 /// Stores a password a person just typed in this computer's credential manager.
@@ -571,6 +654,60 @@ fn map_store_error(_: credstore::StoreError) -> GatewayError {
     GatewayError::StateUnavailable
 }
 
+/// Nothing is removed until a person types the target back. `--force` is the explicit
+/// opt-out for a target already checked, and where no prompt is possible the command
+/// refuses rather than reading silence as consent.
+fn confirm_deletion(
+    input: &SecretInput,
+    lang: Language,
+    output: Output,
+    target: &str,
+) -> Result<()> {
+    if input.typed(&tr!(lang, PromptConfirmDelete, target = target))? != target {
+        output.note(tr!(lang, CliDeleteUnconfirmed, target = target));
+        return Err(GatewayError::InvalidRequest);
+    }
+    Ok(())
+}
+
+/// One target, two meanings: a saved connection name wins, and anything else is a native
+/// entry ID as shown by `library`. An entry holding a connection's credential is refused,
+/// because deleting the row alone would leave the binding pointing at a deleted secret.
+fn delete_target(
+    store: &ConfigStore,
+    target: &str,
+    password: &str,
+    lang: Language,
+    output: Output,
+) -> Result<Value> {
+    let config = store.load()?;
+    if config.connections.contains_key(target) {
+        let (entry, grants) = admin::delete_connection(store, target, password)?;
+        return Ok(json!({
+            "target": target,
+            "kind": "connection",
+            "credential_removed": matches!(entry, admin::EntryDelete::Deleted),
+            "grants_revoked": grants,
+            "tombstone": true,
+        }));
+    }
+    if let Some((name, _)) = config
+        .connections
+        .iter()
+        .find(|(_, binding)| binding.credential_id == target)
+    {
+        output.note(tr!(
+            lang,
+            CliDeleteBoundCredential,
+            target = target,
+            name = name
+        ));
+        return Err(GatewayError::InvalidRequest);
+    }
+    monica_pass_cli::library::delete_entry(store, password, target)?;
+    Ok(json!({"target":target,"kind":"entry","tombstone":true}))
+}
+
 /// SSH and GPG entries are managed locally: the vault is unlocked, the work is done through
 /// `keys::manage`, and only public projections or export bookkeeping reach the response.
 async fn keys_command(
@@ -582,6 +719,14 @@ async fn keys_command(
 ) -> Result<()> {
     use monica_pass_cli::keys::manage;
     let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+    // Confirmed before the broker is stopped: declining a delete should not cost a session.
+    if let Some(KeysCommand::Delete {
+        entry,
+        force: false,
+    }) = &command
+    {
+        confirm_deletion(input, lang, output, entry)?;
+    }
     admin::lock_broker(&store).await?;
     let Some(command) = command else {
         let entries = manage::list(&store, &password)?;
@@ -671,6 +816,21 @@ async fn keys_command(
             )?;
             output.result("keys edit", json!({"key": saved}), None)?;
             output.note(tr!(lang, CliKeyEdited, name = saved.title));
+        }
+        KeysCommand::Delete { entry, .. } => {
+            let removed = manage::delete(&store, &password, &entry)?;
+            output.result(
+                "keys delete",
+                json!({
+                    "name": removed.title,
+                    "entry_id": removed.entry_id,
+                    "algorithm": removed.algorithm,
+                    "kind": "key",
+                    "tombstone": true,
+                }),
+                None,
+            )?;
+            output.note(tr!(lang, CliDeletedTombstone, target = removed.title));
         }
         KeysCommand::Export {
             entry,

@@ -9,6 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use zeroize::Zeroizing;
 
+use super::actions::DeleteTarget;
 use super::browser::{Filter, Focus};
 use super::form::{Input, Kind};
 use super::fuzzy;
@@ -526,6 +527,42 @@ impl App {
                         title: title.clone(),
                     });
                 }
+            }
+            KeyCode::Char('D') if self.library.is_some() => {
+                let Some(row) = self.selected_home_row() else {
+                    return;
+                };
+                let (target, expect) = match &row {
+                    HomeRow::Category {
+                        id,
+                        title,
+                        entries,
+                        subs,
+                        ..
+                    } => {
+                        if *entries > 0 || *subs > 0 {
+                            // Contents are never taken down with a category; the engine agrees.
+                            self.warning(tr!(
+                                self.language,
+                                CliDeleteCategoryNotEmpty,
+                                title = title,
+                                entries = entries,
+                                children = subs
+                            ));
+                            return;
+                        }
+                        (DeleteTarget::Category(id.clone()), title.clone())
+                    }
+                    HomeRow::Entry { id, title, .. } => {
+                        match self.home_entry_connection(&row) {
+                            // A bound credential leaves with its connection and grants.
+                            Some((name, _)) => (DeleteTarget::Connection(name), title.clone()),
+                            None => (DeleteTarget::Entry(id.clone()), title.clone()),
+                        }
+                    }
+                    HomeRow::Action { .. } => return,
+                };
+                self.show_form(Kind::Delete { target, expect });
             }
             _ => {}
         }

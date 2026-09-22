@@ -213,7 +213,11 @@ README / `docs/human-guide.md` / `docs/ai-guide.md` / `SECURITY.md` 的「不支
 3. 坚果云对 `If-None-Match` 的真实语义未测（当前只能确认 PUT 能创建）。若它无条件覆盖，写后核对是唯一防线。
    ——**仍未测**：故障注入是在假服务器上做的（第 10 节阶段 2），真实端点还没跑过一次写。
 4. 首连的重放成本：26 段 × (GET + apply)。需要进度输出与可中断恢复，不能让人对着黑屏等待。
-   ——**未满足**：现在仍然只有结束时一行结果，重放过程中没有进度，也不能中途取消。
+   ——**已满足**：`Progress` 回调在每个分段被引擎应用后、以及每个分段被远端确认接收后各出一行（人类路径走
+   stderr，`--json` 下静默，机器契约只剩结尾那一个 report）；`Cancel` 只在分段边界被轮询——那时游标已落盘，
+   停下不丢已完成的工作，下次 `webdav sync` 从原位继续。Ctrl+C 第一次请求边界处优雅停止，第二次直接
+   `exit(130)`。`Report` 新增 `cancelled`，`--json` 与被中断的那次不会声称「已是最新」。进度与取消本身只在
+   假服务器上实测过，真实坚果云仍列在第 12 节第 8 条第 5 点。
 
 ## 12. 实现结果与偏差（2026-09-21）
 
@@ -226,7 +230,7 @@ README / `docs/human-guide.md` / `docs/ai-guide.md` / `SECURITY.md` 的「不支
 | --- | --- |
 | `src/segment.rs` | 游标读写、推送、拉取、`status`。合并判定全部交给 `PeerSyncService` |
 | `src/sync.rs` | `segment_sync_managed` 模式判定；`open_remote` 走「bootstrap + 重放」；`SyncOutcome.segments: Option<Report>` |
-| `src/cli_run.rs` | `webdav sync` / `publish` 把 report 放进 `--json`，人类路径仍只打印一行结论 |
+| `src/cli_run.rs` | `webdav sync` / `publish` / `open` 把 report 放进 `--json`；人类路径逐分段打进度（stderr），`until_cancelled` 把 Ctrl+C 接到 `Cancel` |
 | `src/cli_table.rs` | `webdav status` 的分段区块与译文 |
 | `src/config.rs` | `gateway.json` 新增 `webdav_device_id` |
 
@@ -299,19 +303,32 @@ README / `docs/human-guide.md` / `docs/ai-guide.md` / `SECURITY.md` 的「不支
 
 ### 7. 已有的测试证据（全部本地，不联网）
 
-`cargo test --offline --no-fail-fast` → 196 passed / 0 failed；`cargo fmt --check` 与
+`cargo test --offline --no-fail-fast` → 221 passed / 0 failed（183 library、20 binary、12 CLI management、2 clipboard、3 language、1 portable，2026-09-22 实测）；`cargo fmt --check` 与
 `clippy --offline --all-targets -- -D warnings` 干净。分段相关：
 
 - `sync_tests.rs::segment_streams_converge_two_devices_without_replacing_any_file`：两台设备双向收敛，
   bootstrap 逐字节不变，只 PUT 自己的流，收到的一律不回推，冷连接之后本地无待推分段，远端字节里不含 token /
-  保险库密码 / DAV 密码。
+  保险库密码 / DAV 密码。同一用例还把游标里的 `usage` 与假服务器自己字节 map 中全部路径下的 `.mdbxsync` 文件的
+  长度求和比对（个数与字节都要相等，`unmeasured == 0`），所以「远端占用」那一行报的是服务器真实持有的字节，
+  且本设备自己上传的分段也在内。
 - `android_segment_layout_is_joined_without_replacing_the_bootstrap`：解析不了的分段名跳过而非致命。
 - `segment_gap_in_a_peer_stream_waits_and_the_cursor_says_why`：空洞停在流上并写明原因。
 - `segment_replay_after_losing_the_cursor_skips_commits_it_already_has`：丢游标靠全量重放恢复。
 - `segment_stream_bytes_that_do_not_hash_to_their_name_are_refused`：摘要与文件名不符的分段进不了引擎，
   且失败的重放不会留下一个已配置的远端。
 - `webdav_tests.rs`：条件写/强 ETag/重定向/超大响应，以及 MKCOL 顶层向下与四种 `WriteFault`。
-- `cli_table.rs`：`webdav status` 的分段区块，含中英文与未知令牌透传。
+- `cli_table.rs`：`webdav status` 的分段区块，含中英文与未知令牌透传；「远端占用」一行在中英文下都出现，
+  有未报大小的文件时补「合计为下限」，而尚未走过分段的游标绝不出现这一行（宁可不显示也不报 0）。
+- `sync_tests.rs::a_sync_folder_that_holds_no_segment_yet_reads_as_emptiness`：`.sync` 树已建但还没有分段时
+  读作「没有东西可收」，冷连接判为已最新，而不是把 404 冒成同步失败。
+- `sync_tests.rs::a_cancelled_replay_stops_between_segments_and_resumes_without_loss`：每次推送都会关掉一个代，
+  所以两次 `add` 是两条各含 `0000000000` 的流，谁先被列出由 UUID 决定——先列出的那条可能要等另一条才能应用，
+  于是「取消之前多读一段」是合法行为。用例因此按服务器实际答过的 GET 数取证：在第一次 `Applied` 事件里记下
+  当前 GET 计数，跑完后计数必须没有再变，report 标 `cancelled`；随后一次普通 `synchronize` 从游标续上，把剩下
+  那段收完且 `conflicts == 0`。
+- `i18n/tests.rs`：每种 `Event` 在中英文下都渲染成带数字的一行（`1.5 MiB`、流名截断到 8 位），被中断的
+  report 与零计数的 report 都绝不映射成 `SyncUpToDate`，以及 `0 B`／`1.0 KiB`／`1024.0 KiB`／`1.0 MiB`
+  的字节边界与 `short_stream` 缩写。
 
 ### 8. 尚未验证（不要把上面这些当成已联网）
 
@@ -320,7 +337,10 @@ README / `docs/human-guide.md` / `docs/ai-guide.md` / `SECURITY.md` 的「不支
 2. **CLI ↔ Android 真机互通**（第 10 节阶段 3 未做完的部分）。
 3. **坚果云 `If-None-Match` 的真实语义**（第 11 节第 3 条）。
 4. **`integrity_subkey` 跨设备恒定**（第 11 节第 1 条）。
-5. **首连重放的进度与可中断**（第 11 节第 4 条）。
+5. **首连重跑的进度与取消对真实坚果云的效果**（第 11 节第 4 条已实现）：逐分段进度、分段边界取消与续传
+   都在假 HTTPS 服务器 + 真引擎上实测过；真服务器要跑多少次 GET、会不会因列表延迟让 `list_streams` 更慢，
+   只能等第 1 条那一次联网才能确认。TUI 走的仍是无回调的 `sync::open_remote` / `sync::synchronize` 包装，
+   逐分段进度目前只在 `webdav` 子命令的人类路径出现。
 
 ### 9. `webdav status` 实测输出
 
@@ -330,6 +350,7 @@ README / `docs/human-guide.md` / `docs/ai-guide.md` / `SECURITY.md` 的「不支
 ```text
 WebDAV          lichaoran8@gmail.com@https://dav.jianguoyun.com/dav/ · Mdbx/Monicacli.mdbx
 Segments        anchored · 2 stream(s), 1 complete
+Remote usage    10.0 MiB across 18 segment(s)
 Pending upload  streams/monica-cli-8e0d/51e0b7c1/segments/0000000004-aaaaaaaa…aaaaaaaa.mdbxsync · 168432 B
 
 Stream                                           Reason
@@ -341,6 +362,7 @@ Galaxy-S24/7b3d1e90-2a6c-4f81-90de-3c5a17f6d904  waiting for an earlier segment
 ```text
 WebDAV    lichaoran8@gmail.com@https://dav.jianguoyun.com/dav/ · Mdbx/Monicacli.mdbx
 分段同步  已锚定 · 2 个流，1 个已完成
+远端占用  18 个分段共 10.0 MiB
 待上传    streams/monica-cli-8e0d/51e0b7c1/segments/0000000004-aaaaaaaa…aaaaaaaa.mdbxsync · 168432 B
 
 流                                               原因
@@ -350,6 +372,18 @@ Galaxy-S24/7b3d1e90-2a6c-4f81-90de-3c5a17f6d904  等待更早的分段
 `-j` 保留完整机器契约：`segments.pending_upload.remote` 是完整远端路径（含 64 位摘要），
 `segments.waiting[0].reason` 是令牌 `waiting_for_earlier_segment`。人类渲染才做 trimming——待上传行去掉
 `<vault>.sync/` 前缀（WebDAV 那行已经写了它）并把摘要缩到首尾各 8 位，原因令牌才在渲染层翻译。
+
+「远端占用」（`segments.usage = {segments, bytes, unmeasured}`）的准确含义：
+
+- 它是一次分段遍历（`list_streams` 走 `<vault>.sync/streams/**`）看到的全部分段文件的
+  `getcontentlength` 之和与个数，**含本设备自己上传的流**（自己的分段只量不收），所以对的是网盘上那棵树的
+  整体，不是「对端还欠多少」。
+- 数字随遍历写进游标 `gateway.sync.json`，只有同步会刷新；`webdav status` 不联网、不要密码，因此它回答的是
+  「上一次遍历看到多少」。`.sync` 只增不减（第 11 节），所以这个数读作「当前至少占这么多」。
+- 服务器没报长度的文件计入 `unmeasured`，人类行附「另有 N 个未报大小（合计为下限）」。只含分段载荷字节，
+  不含目录本身与网盘的块/元数据开销。
+- 升级前写下的游标没有这个字段：`--json` 里 `segments.usage` 为 `null`，人类渲染整行不出现（已用真实二进制
+  验证），下一次同步补上，程序不会用 0 冒充测过。
 
 ### 10. 重锚定策略（一处与 Android 不同，需要产品确认）
 
@@ -365,3 +399,5 @@ Android 会把自己应用的辅助批次再发布一次，CLI 不发布。这�
 
 - 换库或游标被判定不可复用时，`gateway.sync/` 里暂存的待推字节不会随手清理，会留到下次同名写入覆盖。
 - 待上传那一行仍有 106 列：WebDAV 绑定行本身就要 90 列，再截就丢掉可复制粘贴的路径了，所以停在这里。
+- 「远端占用」要量自己的流，所以每次分段同步都会多对**本设备**的 `streams/<自己>/` 与各代目录发 PROPFIND
+  （自己那份只量不收，不产生 GET）。设备多代时这部分请求数随代数增长，网盘列表延迟也一起摊到同步上。

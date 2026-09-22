@@ -490,6 +490,7 @@ impl App {
                     | Action::RenameCategory { .. }
                     | Action::RenameEntry { .. }
                     | Action::Move { .. }
+                    | Action::Delete { .. }
             ) {
                 let row = self
                     .home_rows()
@@ -571,6 +572,7 @@ impl App {
                 tr!(lang, HelpHomeSearch).to_owned(),
                 tr!(lang, HelpHomeNew).to_owned(),
                 tr!(lang, HelpHomeEdit).to_owned(),
+                tr!(lang, HelpHomeDelete).to_owned(),
                 tr!(lang, HelpHomeKeys).to_owned(),
                 tr!(lang, HelpHomeCopy).to_owned(),
             ]);
@@ -888,7 +890,15 @@ impl App {
                 FormEvent::Submit => match form.action(self) {
                     Ok(action) => self.start(action),
                     Err(error) => {
-                        self.error(error);
+                        // A delete form only ever refuses a mistyped name, so say which one.
+                        match &form.kind {
+                            Kind::Delete { expect, .. } => self.warning(tr!(
+                                self.language,
+                                CliDeleteUnconfirmed,
+                                target = expect
+                            )),
+                            _ => self.error(error),
+                        }
                         self.mode = Mode::Form(form);
                     }
                 },

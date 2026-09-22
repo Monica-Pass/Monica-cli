@@ -228,6 +228,16 @@ pub fn edit_entry(
     })
 }
 
+/// Tombstones one key entry addressed by its title, and hands back what was removed.
+/// Text a person already exported keeps living on disk; only the vault stops carrying it.
+pub fn delete(store: &ConfigStore, password: &str, name: &str) -> Result<KeyEntrySummary> {
+    with_vault(store, password, |vault| {
+        let found = vault.key_entry_by_title(name)?;
+        vault.delete_entry(&found.entry_id)?;
+        Ok(found)
+    })
+}
+
 /// Writes the half a person asked for to the file they named. The only path out of the vault.
 pub fn export(
     store: &ConfigStore,
@@ -369,6 +379,45 @@ mod tests {
         assert!(reimported.public_key.ends_with(" imported@test"));
         assert_eq!(reimported.comment, "imported@test");
         assert_eq!(list(&store, PASSWORD).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_deleted_key_leaves_the_vault_but_not_the_files_already_written() {
+        let (directory, store) = fixture();
+        let created = generated(&store, "laptop");
+        let exported = directory.path().join("id_ed25519_copy");
+        export(&store, PASSWORD, "laptop", &exported, true, false).unwrap();
+
+        assert_eq!(
+            delete(&store, PASSWORD, "laptop").unwrap().entry_id,
+            created.entry_id
+        );
+        assert!(list(&store, PASSWORD).unwrap().is_empty());
+        assert!(matches!(
+            find(&store, PASSWORD, "laptop"),
+            Err(GatewayError::NotFound)
+        ));
+        assert!(matches!(
+            export(
+                &store,
+                PASSWORD,
+                "laptop",
+                &directory.path().join("again"),
+                false,
+                false
+            ),
+            Err(GatewayError::NotFound)
+        ));
+        assert!(matches!(
+            delete(&store, PASSWORD, "laptop"),
+            Err(GatewayError::NotFound)
+        ));
+        // A tombstone is not a shredder: text already taken out of the vault stays put.
+        assert!(
+            std::fs::read_to_string(&exported)
+                .unwrap()
+                .contains("BEGIN OPENSSH PRIVATE KEY")
+        );
     }
 
     #[test]

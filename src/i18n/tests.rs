@@ -87,3 +87,87 @@ fn human_localization_preserves_machine_error_codes_and_messages() {
     assert_eq!(error.response(), original);
     assert_eq!(original["error"]["code"], "permission_denied");
 }
+
+#[test]
+fn every_segment_event_renders_a_line_that_carries_its_numbers() {
+    let uuid = "0f4c8a2b-7d3e-4a1f-9b6c-2d5e8f1a3b4c";
+    for language in [Language::En, Language::ZhCn] {
+        let uploaded = language.segment_progress(&crate::segment::Event::Uploaded {
+            commits: 7,
+            bytes: 1_572_864,
+        });
+        assert!(
+            uploaded.contains('7') && uploaded.contains("1.5 MiB"),
+            "{uploaded}"
+        );
+        let applied = language.segment_progress(&crate::segment::Event::Applied {
+            stream: format!("{uuid}/{uuid}"),
+            sequence: 3,
+            commits: 12,
+            already: 5,
+        });
+        let short = language.segment_progress(&crate::segment::Event::Applied {
+            stream: "peer-only".to_owned(),
+            sequence: 0,
+            commits: 1,
+            already: 0,
+        });
+        for line in [&uploaded, &applied, &short] {
+            assert!(!line.contains(['{', '}']), "unfilled placeholder: {line}");
+            assert!(!line.trim().is_empty(), "blank progress line");
+        }
+        assert!(
+            applied.contains(&uuid[..8]) && !applied.contains(uuid),
+            "{applied}"
+        );
+    }
+}
+
+#[test]
+fn an_interrupted_replay_is_never_reported_as_up_to_date() {
+    for language in [Language::En, Language::ZhCn] {
+        let cancelled = crate::segment::Report {
+            cancelled: true,
+            downloaded_segments: 1,
+            applied_commits: 4,
+            ..Default::default()
+        };
+        let line = language.segment_report(&cancelled);
+        assert!(
+            !line.contains(language.text(Message::SyncUpToDate)),
+            "{line}"
+        );
+        assert!(!line.contains(['{', '}']), "unfilled placeholder: {line}");
+        assert_ne!(
+            line,
+            language.segment_report(&crate::segment::Report {
+                cancelled: true,
+                ..Default::default()
+            }),
+            "the counts have to show up in the line"
+        );
+        assert_eq!(
+            language.segment_report(&crate::segment::Report::default()),
+            language.text(Message::SyncUpToDate)
+        );
+    }
+}
+
+#[test]
+fn byte_and_stream_abbreviations_stay_readable_at_every_boundary() {
+    for (bytes, expected) in [
+        (0, "0 B"),
+        (1023, "1023 B"),
+        (1024, "1.0 KiB"),
+        (1024 * 1024 - 1, "1024.0 KiB"),
+        (1024 * 1024, "1.0 MiB"),
+        (31_457_280, "30.0 MiB"),
+    ] {
+        assert_eq!(human_bytes(bytes), expected, "{bytes}");
+    }
+    assert_eq!(
+        short_stream("0f4c8a2b7d3e4a1f/9b6c2d5e8f1a3b4c"),
+        "0f4c8a2b/9b6c2d5e"
+    );
+    assert_eq!(short_stream("solo"), "solo");
+}

@@ -63,6 +63,73 @@ mod tests {
         );
         reopened.lock().unwrap();
     }
+
+    #[test]
+    fn a_deleted_row_hides_behind_its_tombstone_and_a_category_empties_first() {
+        use crate::model::Provider;
+        use zeroize::Zeroizing;
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("library.mdbx");
+        let vault = Vault::create(&path, "test-password", TigaMode::Multi).unwrap();
+        let work = vault.create_category("Work", None).unwrap();
+        let (collection, stored) = vault
+            .store_credential(
+                Some(&work),
+                "work-gh",
+                "",
+                Provider::Github,
+                Provider::Github.default_api_base(),
+                "",
+                Zeroizing::new("test-upstream-secret-32-characters".to_owned()),
+            )
+            .unwrap();
+        assert_eq!(collection, work);
+        let credential = stored.credential_id;
+        // Contents are never taken down with their category.
+        assert!(matches!(
+            vault.delete_category(&work),
+            Err(DeleteBlocked::NotEmpty {
+                entries: 1,
+                children: 0,
+                ..
+            })
+        ));
+        vault.delete_entry(&credential).unwrap();
+        let library = vault.library().unwrap();
+        assert!(library.entries.is_empty());
+        // A tombstone is not a row any reader is offered, so there is nothing left to delete.
+        assert!(matches!(
+            vault.delete_entry(&credential),
+            Err(GatewayError::NotFound)
+        ));
+        assert!(matches!(
+            vault.delete_category("missing"),
+            Err(DeleteBlocked::Absent)
+        ));
+        assert_eq!(vault.delete_category(&work).unwrap().title, "Work");
+        assert!(
+            vault
+                .library()
+                .unwrap()
+                .categories
+                .iter()
+                .all(|category| category.id != work)
+        );
+        vault.lock().unwrap();
+        drop(vault);
+        let reopened = Vault::open(&path, "test-password").unwrap();
+        let library = reopened.library().unwrap();
+        assert!(library.entries.is_empty());
+        assert!(
+            library
+                .categories
+                .iter()
+                .all(|category| category.id != work),
+            "a tombstone must not read back as a live row"
+        );
+        reopened.lock().unwrap();
+    }
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -70,7 +137,7 @@ pub struct Library {
     pub categories: Vec<Category>,
     pub entries: Vec<Entry>,
 }
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Category {
     pub id: String,
     pub parent: Option<String>,
@@ -82,6 +149,30 @@ pub struct Entry {
     pub category: String,
     pub title: String,
     pub kind: String,
+}
+
+/// Why one category delete stopped before the engine was asked. The stable code is what
+/// `--json` reports; the counts are what a person needs to hear to move things out.
+#[derive(Debug)]
+pub enum DeleteBlocked {
+    Absent,
+    NotEmpty {
+        category: Category,
+        entries: usize,
+        children: usize,
+    },
+    /// Unlocking, foreign vault, engine refusal: the vault already had a code for this.
+    Failed(GatewayError),
+}
+
+impl DeleteBlocked {
+    pub fn error(&self) -> GatewayError {
+        match self {
+            Self::Absent => GatewayError::NotFound,
+            Self::NotEmpty { .. } => GatewayError::InvalidRequest,
+            Self::Failed(error) => *error,
+        }
+    }
 }
 
 impl Library {
@@ -252,6 +343,58 @@ impl Vault {
         };
         self.library_write(command)
     }
+
+    /// Tombstones one entry. The engine hides the row from every listing and rides the delete
+    /// to the other devices with the next segment; the encrypted bytes stay in the vault file
+    /// until it gains a purge path, which neither the engine nor Android has yet.
+    pub fn delete_entry(&self, id: &str) -> Result<()> {
+        let project_id = self
+            .library()?
+            .entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .map(|entry| entry.category.clone())
+            .ok_or(GatewayError::NotFound)?;
+        self.library_write(WriteCommand::DeleteEntry {
+            entry_id: id.to_owned(),
+            project_id,
+        })
+    }
+
+    /// Removes one category. Only an empty one: the engine refuses to orphan children, and a
+    /// recursive delete from here would be the kind of surprise a person did not ask for.
+    pub fn delete_category(&self, id: &str) -> std::result::Result<Category, DeleteBlocked> {
+        let library = self.library().map_err(DeleteBlocked::Failed)?;
+        let category = library
+            .categories
+            .iter()
+            .find(|category| category.id == id)
+            .ok_or(DeleteBlocked::Absent)?
+            .clone();
+        let entries = library
+            .entries
+            .iter()
+            .filter(|entry| entry.category == id)
+            .count();
+        let children = library
+            .categories
+            .iter()
+            .filter(|category| category.parent.as_deref() == Some(id))
+            .count();
+        if entries > 0 || children > 0 {
+            return Err(DeleteBlocked::NotEmpty {
+                category,
+                entries,
+                children,
+            });
+        }
+        self.library_write(WriteCommand::DeleteProject {
+            project_id: id.to_owned(),
+        })
+        .map_err(DeleteBlocked::Failed)?;
+        Ok(category)
+    }
+
     fn library_write(&self, command: WriteCommand) -> Result<()> {
         let connection = self
             .runtime
@@ -325,6 +468,27 @@ pub fn move_item(store: &ConfigStore, password: &str, id: &str, target: &str) ->
     let vault = Vault::open(&store.load()?.vault, password)?;
     let result = vault.move_library_item(id, target);
     vault.lock()?;
+    result
+}
+
+pub fn delete_entry(store: &ConfigStore, password: &str, id: &str) -> Result<()> {
+    let _guard = store.acquire_broker_lock()?;
+    let vault = Vault::open(&store.load()?.vault, password)?;
+    let result = vault.delete_entry(id);
+    vault.lock()?;
+    result
+}
+
+pub fn delete_category(
+    store: &ConfigStore,
+    password: &str,
+    id: &str,
+) -> std::result::Result<Category, DeleteBlocked> {
+    let _guard = store.acquire_broker_lock().map_err(DeleteBlocked::Failed)?;
+    let config = store.load().map_err(DeleteBlocked::Failed)?;
+    let vault = Vault::open(&config.vault, password).map_err(DeleteBlocked::Failed)?;
+    let result = vault.delete_category(id);
+    vault.lock().map_err(DeleteBlocked::Failed)?;
     result
 }
 

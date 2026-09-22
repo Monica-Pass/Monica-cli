@@ -213,6 +213,7 @@ impl Language {
             GatewayError::HumanTerminalRequired => Message::ErrorHumanTerminalRequired,
             GatewayError::SecretInputRequired => Message::ErrorSecretInputRequired,
             GatewayError::InvalidSecretInput => Message::ErrorInvalidSecretInput,
+            GatewayError::ConfirmationRequired => Message::ErrorConfirmationRequired,
             GatewayError::Unauthorized => Message::ErrorUnauthorized,
             GatewayError::ReauthorizationRequired => Message::ErrorReauthorizationRequired,
             GatewayError::PermissionDenied => Message::ErrorPermissionDenied,
@@ -267,6 +268,7 @@ impl Language {
             && report.applied_commits == 0
             && report.conflicts == 0
             && report.blocked_streams == 0
+            && !report.cancelled
         {
             return self.text(Message::SyncUpToDate).to_owned();
         }
@@ -291,7 +293,37 @@ impl Language {
                 &[("streams", &report.blocked_streams)],
             ));
         }
+        if report.cancelled {
+            line.push_str(self.text(Message::CliSegmentCancelled));
+        }
         line
+    }
+
+    /// One line per transferred segment, so minutes of network waits are visibly
+    /// progress rather than a hang. Peers and generations are UUIDs; the leading
+    /// characters are enough to tell one stream from the next.
+    pub fn segment_progress(self, event: &crate::segment::Event) -> String {
+        use crate::segment::Event;
+        match event {
+            Event::Uploaded { commits, bytes } => self.format(
+                Message::CliSegmentUploadedProgress,
+                &[("commits", commits), ("bytes", &human_bytes(*bytes))],
+            ),
+            Event::Applied {
+                stream,
+                sequence,
+                commits,
+                already,
+            } => self.format(
+                Message::CliSegmentAppliedProgress,
+                &[
+                    ("stream", &short_stream(stream)),
+                    ("sequence", sequence),
+                    ("commits", commits),
+                    ("already", already),
+                ],
+            ),
+        }
     }
 
     /// The one line a sync run reports, whichever remote layout it used.
@@ -300,6 +332,33 @@ impl Language {
             Some(report) => self.segment_report(report),
             None => self.sync_result(outcome.result).to_owned(),
         }
+    }
+}
+
+/// Compact size for a line a person reads once per segment; nobody scans a
+/// five-digit byte count for "is it moving?".
+pub fn human_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KiB", bytes as f64 / KIB)
+    } else {
+        format!("{:.1} MiB", bytes as f64 / (KIB * KIB))
+    }
+}
+
+/// `"<peer device>/<generation>"` shortened to the characters that tell streams
+/// apart, because both halves are UUIDs and a progress line is not a place to
+/// read them in full.
+pub fn short_stream(stream: &str) -> String {
+    let mut parts = stream
+        .split('/')
+        .map(|part| part.chars().take(8).collect::<String>());
+    match (parts.next(), parts.next()) {
+        (Some(source), Some(generation)) => format!("{source}/{generation}"),
+        (Some(source), None) => source,
+        (None, _) => stream.to_owned(),
     }
 }
 

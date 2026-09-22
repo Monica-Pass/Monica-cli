@@ -50,6 +50,10 @@ pub enum GatewayError {
         "Secret input must be one UTF-8 JSON object of at most 16384 bytes with exactly the required string fields. Values are never echoed."
     )]
     InvalidSecretInput,
+    #[error(
+        "This command asks you to type the target back to confirm it, in a human terminal. Use --force only after verifying the target."
+    )]
+    ConfirmationRequired,
     #[error("The gateway capability is invalid, expired or revoked.")]
     Unauthorized,
     #[error(

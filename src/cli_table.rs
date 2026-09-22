@@ -2,7 +2,7 @@
 //! Only the non-`--json` path uses this; `--json` stays machine-stable.
 
 use chrono::{Local, TimeZone};
-use monica_pass_cli::i18n::Language;
+use monica_pass_cli::i18n::{Language, human_bytes};
 use monica_pass_cli::keys::payload::LOGIN_TYPE_SSH;
 use monica_pass_cli::model::Provider;
 use monica_pass_cli::tr;
@@ -368,6 +368,23 @@ pub fn render_webdav_status(status: &Value, lang: Language) -> String {
                 )
             ));
             fields.push((tr!(lang, StatusSegmentsLabel).to_string(), text));
+            if segments["usage"].is_object() {
+                let usage = &segments["usage"];
+                let mut text = tr!(
+                    lang,
+                    StatusSegmentUsage,
+                    bytes = human_bytes(usage["bytes"].as_u64().unwrap_or(0)),
+                    segments = usage["segments"].as_u64().unwrap_or(0),
+                );
+                let unmeasured = usage["unmeasured"].as_u64().unwrap_or(0);
+                if unmeasured > 0 {
+                    text = format!(
+                        "{text} · {}",
+                        tr!(lang, StatusSegmentUnmeasured, count = unmeasured)
+                    );
+                }
+                fields.push((tr!(lang, StatusSegmentUsageLabel).to_string(), text));
+            }
         } else {
             fields.push((
                 tr!(lang, StatusSegmentsLabel).to_string(),
@@ -689,6 +706,7 @@ mod tests {
                 },
                 "streams": 12,
                 "complete_streams": 5,
+                "usage": {"segments": 34, "bytes": 4404019, "unmeasured": 0},
                 "waiting": (0..waiting)
                     .map(|index| json!({
                         "stream": format!("dev{index}/generation"),
@@ -715,9 +733,15 @@ mod tests {
             "{}",
             lines[2]
         );
-        assert!(lines[3].starts_with("Pending upload"), "{out}");
+        assert!(lines[3].starts_with("Remote usage"), "{out}");
         assert!(
+            lines[3].contains("4.2 MiB across 34 segment(s)"),
+            "{}",
             lines[3]
+        );
+        assert!(lines[4].starts_with("Pending upload"), "{out}");
+        assert!(
+            lines[4]
                 .ends_with("streams/dev/1/segments/0000000001-cccccccc…cccccccc.mdbxsync · 4096 B"),
             "{out}"
         );
@@ -728,7 +752,12 @@ mod tests {
         );
         assert_eq!(
             lines[0].find("joy@").unwrap(),
-            lines[3].find("streams/").unwrap(),
+            lines[3].find("4.2 MiB").unwrap(),
+            "the measured footprint is a value like every other one"
+        );
+        assert_eq!(
+            lines[0].find("joy@").unwrap(),
+            lines[4].find("streams/").unwrap(),
             "the longest label still has to keep that column"
         );
         assert_eq!(
@@ -747,7 +776,7 @@ mod tests {
             "{remembered}"
         );
         assert!(
-            !lines[3].contains("vault.mdbx.sync"),
+            !lines[4].contains("vault.mdbx.sync"),
             "the WebDAV line already names the sync root: {out}"
         );
         assert_eq!(
@@ -765,9 +794,22 @@ mod tests {
         let zh = render_webdav_status(&webdav_status_fixture(1), Language::ZhCn);
         assert!(zh.contains("分段同步") && zh.contains("已锚定"), "{zh}");
         assert!(zh.contains("12 个流，5 个已完成"), "{zh}");
+        assert!(zh.contains("34 个分段共 4.2 MiB"), "{zh}");
         assert!(!zh.contains("Waiting"), "{zh}");
         assert!(zh.contains("等待父提交"), "{zh}");
         assert!(!zh.contains("waiting_for_parent_commit"), "{zh}");
+
+        let mut unmeasured = webdav_status_fixture(0);
+        unmeasured["segments"]["usage"]["unmeasured"] = json!(3);
+        assert!(
+            render_webdav_status(&unmeasured, Language::En)
+                .contains("3 without a reported size (total is a floor)"),
+            "a server that hides lengths must not let the total read as exact"
+        );
+        assert!(
+            render_webdav_status(&unmeasured, Language::ZhCn).contains("另有 3 个未报大小"),
+            "{unmeasured}"
+        );
 
         let mut future = webdav_status_fixture(1);
         future["segments"]["waiting"][0]["reason"] = json!("reason_from_a_newer_client");
@@ -786,6 +828,10 @@ mod tests {
             "{idle}"
         );
         assert!(!idle.contains("Pending upload"), "{idle}");
+        assert!(
+            !idle.contains("Remote usage"),
+            "nothing was ever measured, so no number may appear: {idle}"
+        );
 
         unstarted["sync"] = json!(null);
         unstarted["segments"] = json!(null);
