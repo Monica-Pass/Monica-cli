@@ -136,8 +136,8 @@ fn copy(text: &str) -> Result<(), ClipboardError> {
 /// The external-helper half of this module: which program, which options, and where the
 /// text goes. It uses only standard library calls and compiles on every platform under
 /// `cargo test`, so the argument lists and the pipe plumbing are checked even where no
-/// clipboard exists. No call below has been made to a real `pbcopy`, `wl-copy`, `xclip`
-/// or `xsel` from this repository.
+/// clipboard exists. Of the helpers below, a real `xclip -selection clipboard` has been
+/// driven from this code on a live X session; `pbcopy`, `wl-copy` and `xsel` have not.
 #[cfg(any(unix, test))]
 mod unix {
     use super::ClipboardError;

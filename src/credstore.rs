@@ -192,7 +192,9 @@ mod platform {
 /// password goes. It is written with plain standard library calls and compiled on every
 /// platform under `cargo test`, so the argument lists and the pipe plumbing are checked
 /// even where no keychain exists. The dispatch below only exists on a Mac or a Linux
-/// desktop, and no call here has ever been made to a real keychain from this repository.
+/// desktop, and a real `secret-tool` has been reached from it on two Linux machines —
+/// one without the tool, one with a provider-less install. No `/usr/bin/security` call
+/// has ever run: this workspace has no macOS host.
 #[cfg(any(unix, test))]
 mod unix {
     use super::StoreError;

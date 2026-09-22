@@ -17,25 +17,26 @@ fn empty_and_over_long_text_are_refused_before_the_os_is_called() {
 }
 
 #[test]
-#[cfg(not(windows))]
-fn a_platform_without_a_backend_says_so_instead_of_shelling_out() {
-    assert_eq!(
-        copy_text("ssh-ed25519 AAAAMOCK"),
-        Err(ClipboardError::Unsupported)
-    );
-}
-
-#[test]
-#[cfg(windows)]
-fn a_public_key_line_round_trips_through_the_real_clipboard() {
+fn the_copied_text_comes_back_out_of_the_real_clipboard() {
     if std::env::var("MONICA_CLIPBOARD_TEST").as_deref() != Ok("1") {
         eprintln!("set MONICA_CLIPBOARD_TEST=1 to write the real clipboard");
         return;
     }
     // The shape y copies: a public line, and a comment that is not ASCII, since the
-    // transfer has to survive UTF-16 on the way in and back out again.
+    // transfer has to survive the platform's own text encoding on the way in and back
+    // out again.
     let text = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMOCKJOESTER 跳板机";
-    copy_text(text).expect("the clipboard refused the text");
+    match copy_text(text) {
+        Ok(()) => {}
+        // Nothing to read back where the machine has none of this platform's helpers.
+        // Which helper each platform tries, and that the text is never an argument,
+        // stays pinned by the unit tests in `src/clipboard.rs`.
+        Err(ClipboardError::Unsupported) => {
+            eprintln!("skip: this machine has no clipboard helper");
+            return;
+        }
+        Err(other) => panic!("the clipboard refused the text: {other}"),
+    }
     assert_eq!(read_clipboard(), Some(text.to_owned()));
 }
 
@@ -52,12 +53,35 @@ fn read_clipboard() -> Option<String> {
         ])
         .output()
         .ok()?;
+    text_from(&output)
+}
+
+#[cfg(not(windows))]
+fn read_clipboard() -> Option<String> {
+    // The same rule, with this session's desktop readers, tried in the order the crate
+    // tries its writers so the answer comes from the channel actually in use.
+    let readers: [(&str, &[&str]); 3] = [
+        ("wl-paste", &[][..]),
+        ("xclip", &["-o", "-selection", "clipboard"][..]),
+        ("xsel", &["--clipboard", "--output"][..]),
+    ];
+    for (program, args) in readers {
+        let Ok(output) = std::process::Command::new(program).args(args).output() else {
+            continue;
+        };
+        if let Some(text) = text_from(&output) {
+            return Some(text);
+        }
+    }
+    None
+}
+
+fn text_from(output: &std::process::Output) -> Option<String> {
     if !output.status.success() {
         return None;
     }
-    Some(
-        String::from_utf8_lossy(&output.stdout)
-            .trim_end_matches(['\r', '\n'])
-            .to_owned(),
-    )
+    let text = String::from_utf8_lossy(&output.stdout)
+        .trim_end_matches(['\r', '\n'])
+        .to_owned();
+    (!text.is_empty()).then_some(text)
 }
