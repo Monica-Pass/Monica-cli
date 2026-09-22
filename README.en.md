@@ -8,9 +8,9 @@
 <br/>
 <img src="docs/images/banner.png" alt="MONICA CLI" width="880" />
 
-**A local credential gateway for AI — not another password manager.**
+**Monica's local credential gateway: let AI use service tokens within the permissions you grant.**
 
-<p>Service tokens stay in a local encrypted MDBX3 vault · AI asks through MCP · every authorization expires · you unlock and revoke</p>
+<p>Day-to-day password management lives in Monica for Android; this end owns only the boundary between AI and its credentials · service tokens stay in a local encrypted MDBX3 vault · every authorization expires · you unlock and revoke</p>
 
 <p>
 Part of the <a href="https://github.com/Monica-Pass/Monica"><strong>Monica local password manager</strong></a> family ·
@@ -44,7 +44,7 @@ Monica CLI stores service tokens in a local, encrypted MDBX3 vault. AI requests 
 
 ## What this actually is
 
-Monica CLI is **not a password manager for people**. The day-to-day vault for accounts, passwords, and 2FA is [Monica for Android](https://github.com/Monica-Pass/Monica), which has TOTP, autofill, card and identity entries, and browser integration. This tool does one job: **it stands between AI and your remote services, holding the tokens and deciding what AI may do with them.**
+**Monica is the password manager. Monica CLI is not.** The day-to-day vault for accounts, passwords, and 2FA is [Monica for Android](https://github.com/Monica-Pass/Monica), which has TOTP, autofill, card and identity entries, and browser integration. This tool does one job: **it stands between AI and your remote services, holding the tokens and deciding what AI may do with them.**
 
 Concretely:
 

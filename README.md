@@ -8,9 +8,9 @@
 <br/>
 <img src="docs/images/banner.png" alt="MONICA CLI" width="880" />
 
-**面向 AI 的本地凭据代理，不是又一个密码管理器。**
+**Monica 的本地凭据代理端：让 AI 在你的授权范围内使用服务 Token。**
 
-<p>服务 Token 留在本地 MDBX3 加密保险库 · AI 通过 MCP 请求 · 授权一律会到期 · 解锁与撤销由你执行</p>
+<p>日常密码管理在 Monica for Android，这一端只管 AI 与凭据之间的边界 · 服务 Token 留在本地 MDBX3 加密保险库 · 授权一律会到期 · 解锁与撤销由你执行</p>
 
 <p>
 隶属 <a href="https://github.com/Monica-Pass/Monica"><strong>Monica 本地密码库</strong></a> 生态 ·
@@ -44,7 +44,7 @@ Monica CLI 将服务 Token 保存在本地 MDBX3 加密保险库中。AI 通过 
 
 ## 先说清楚它是什么
 
-Monica CLI **不是给人存密码的密码管理器**。日常管账号、密码、2FA 的是 [Monica for Android](https://github.com/Monica-Pass/Monica)，那边有 TOTP、自动填充、卡片与身份条目、浏览器联动。本工具只做一件事：**站在 AI 和远端服务之间，替你保管并授权使用服务 Token。**
+**Monica 是密码管理器，Monica CLI 不是。** 日常管账号、密码、2FA 的是 [Monica for Android](https://github.com/Monica-Pass/Monica)，那边有 TOTP、自动填充、卡片与身份条目、浏览器联动。本工具只做一件事：**站在 AI 和远端服务之间，替你保管并授权使用服务 Token。**
 
 具体一点：
 

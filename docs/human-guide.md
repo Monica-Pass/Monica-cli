@@ -4,7 +4,7 @@
 
 本手册面向**使用 Monica CLI 的人**：如何建库、如何存 Token、如何设计一份授权、如何把它接到 AI 客户端、出错时该做什么。第 4 节专门讲 AI 接入，第 11 节是排障对照表。
 
-先说清定位：**Monica CLI 不是给人存密码的密码管理器**。日常保险库、TOTP、自动填充都在 [Monica for Android](https://github.com/Monica-Pass/Monica)；本工具负责的是"把要交给 AI 去用的服务 Token 挡在授权后面"，顺带提供管理这份库的命令行与 TUI。两端读写同一份 MDBX3 数据库，完整说明见 [README 的「先说清楚它是什么」](../README.md#先说清楚它是什么)。
+先说清定位：**Monica 是密码管理器，Monica CLI 不是**。日常保险库、TOTP、自动填充都在 [Monica for Android](https://github.com/Monica-Pass/Monica)；本工具负责的是"把要交给 AI 去用的服务 Token 挡在授权后面"，顺带提供管理这份库的命令行与 TUI。两端读写同一份 MDBX3 数据库，完整说明见 [README 的「先说清楚它是什么」](../README.md#先说清楚它是什么)。
 
 适用版本 0.4.0。文中 Monica 侧的命令行与输出均在本机 Windows x64 的 0.4.0 构建上实测；AI 客户端的配置文件位置请以该客户端的官方文档为准。
 
