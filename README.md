@@ -278,6 +278,16 @@ Monica 提供 **MCP stdio** 服务。优先使用程序生成的 MCP 配置：�
 
 每份授权绑定一个连接。需要同时使用多个连接时，在 AI 客户端中添加对应的多个 MCP 服务器条目。MCP 客户端负责启动调用入口，人工 TUI 或 `serve` 终端负责解锁代理。
 
+不想手工粘贴时，一条命令可以把这一条合并进客户端自己的配置文件——先备份、只动这一个条目、结构读不回来的文件直接不碰：
+
+```sh
+monica-pass settings <授权名> --install claude   # 或 cursor / codex / vscode
+```
+
+Claude Desktop 与项目级配置文件仍走上面的手工粘贴。行为边界与被写文件的位置见 [人工手册](docs/human-guide.md)第 4 节。
+
+给 AI 的行为约束也有一份现成的：把 [docs/agent-policies/AGENTS.md](docs/agent-policies/AGENTS.md) 拷进客户端读取的规则文件（`CLAUDE.md`、项目 `AGENTS.md`、Cursor rules、Copilot instructions），就不用每次口头交代。
+
 ### 让 AI 知道连接的用途
 
 AI 可先调用 `monica_list_connections`，参数为 `{}`，获取当前授权连接的名称、服务、用途备注、仓库范围、可用工具，以及这份 AI 授权的到期时间（保存在保险库里的令牌本身不会过期）。

@@ -40,6 +40,18 @@ fn cli(directory: &Path, args: &[&str], secrets: Option<&[u8]>) -> Output {
     child.wait_with_output().unwrap()
 }
 
+/// The same command run against a fake home directory, so a test can point the
+/// CLI at an AI client's configuration file without touching the person's own.
+fn cli_in_home(home: &Path, directory: &Path, args: &[&str]) -> Output {
+    let mut child = command(directory, args)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .spawn()
+        .unwrap();
+    drop(child.stdin.take());
+    child.wait_with_output().unwrap()
+}
+
 fn no_secrets(output: &Output) {
     for stream in [&output.stdout, &output.stderr] {
         let text = String::from_utf8_lossy(stream);
@@ -1357,4 +1369,174 @@ fn a_person_can_widen_a_grant_to_ask_before_every_call() {
         .find(|line| line.contains("gated"))
         .unwrap_or_else(|| panic!("no gated grant in:\n{text}"));
     assert!(row.contains("all"), "{header}\n{row}");
+}
+
+#[test]
+fn one_command_writes_the_entry_into_an_ai_clients_own_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    add(directory.path());
+    success(cli(
+        directory.path(),
+        &[
+            "grant",
+            "work-agent",
+            "--connection",
+            "work",
+            "--repo",
+            "example/project",
+            "--json",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    ));
+
+    // The client file starts out as somebody else's, carrying their servers and
+    // their settings; installing must leave all of that in place.
+    let claude = home.path().join(".claude.json");
+    let original = serde_json::to_vec_pretty(&json!({
+        "theme": "dark",
+        "mcpServers": {"keepme": {"command": "keepme", "args": []}}
+    }))
+    .unwrap();
+    std::fs::write(&claude, &original).unwrap();
+
+    let data = success(cli_in_home(
+        home.path(),
+        directory.path(),
+        &["settings", "work-agent", "--install", "claude", "--json"],
+    ));
+    assert_eq!(data["name"], "work-agent");
+    assert_eq!(data["install"]["client"], "claude");
+    assert_eq!(data["install"]["changed"], true);
+    assert_eq!(Path::new(data["install"]["file"].as_str().unwrap()), claude);
+    let written: Value = serde_json::from_str(&std::fs::read_to_string(&claude).unwrap()).unwrap();
+    assert_eq!(written["theme"], "dark");
+    assert_eq!(written["mcpServers"]["keepme"]["command"], "keepme");
+    let entry = &written["mcpServers"]["work-agent"];
+    assert_eq!(entry["args"][0], "mcp");
+    assert_eq!(entry["args"][1], "--client");
+    assert!(
+        Path::new(entry["command"].as_str().unwrap()).is_file(),
+        "the entry names an executable that is not there"
+    );
+    // What the settings command printed and what landed in the file are the same
+    // entry, so a person is not approving one thing and installing another.
+    assert_eq!(
+        written["mcpServers"]["work-agent"],
+        data["mcp"]["mcpServers"]["work-agent"]
+    );
+    let backup = Path::new(data["install"]["backup"].as_str().unwrap());
+    assert_eq!(std::fs::read(backup).unwrap(), original);
+
+    // Running it again changes nothing, and leaves no second copy behind.
+    let again = success(cli_in_home(
+        home.path(),
+        directory.path(),
+        &["settings", "work-agent", "--install", "claude", "--json"],
+    ));
+    assert_eq!(again["install"]["changed"], false);
+    assert_eq!(again["install"]["backup"], Value::Null);
+    assert_eq!(std::fs::read_to_string(&claude).unwrap(), {
+        serde_json::to_string_pretty(&written).unwrap()
+    });
+    let human = cli_in_home(
+        home.path(),
+        directory.path(),
+        &[
+            "settings",
+            "work-agent",
+            "--install",
+            "claude",
+            "--lang",
+            "en",
+        ],
+    );
+    no_secrets(&human);
+    // The entry itself is stdout, the notes about what was written are stderr.
+    let spoken = format!(
+        "{}{}",
+        String::from_utf8_lossy(&human.stdout),
+        String::from_utf8_lossy(&human.stderr)
+    )
+    .replace('\r', "");
+    assert!(
+        spoken.contains("already carried exactly this entry"),
+        "{spoken}"
+    );
+    assert!(spoken.contains("MCP settings saved to"), "{spoken}");
+
+    // Codex keeps TOML, and the same command has to produce its own shape.
+    let codex = success(cli_in_home(
+        home.path(),
+        directory.path(),
+        &["settings", "work-agent", "--install", "codex", "--json"],
+    ));
+    let codex_path = Path::new(codex["install"]["file"].as_str().unwrap());
+    assert_eq!(codex_path, home.path().join(".codex").join("config.toml"));
+    let toml = std::fs::read_to_string(codex_path).unwrap();
+    assert!(toml.contains("[mcp_servers.work-agent]\n"), "{toml}");
+    assert!(toml.contains("command = "), "{toml}");
+
+    // A first install says where the entry went, in the language asked for.
+    let installed = cli_in_home(
+        home.path(),
+        directory.path(),
+        &[
+            "settings",
+            "work-agent",
+            "--install",
+            "vscode",
+            "--lang",
+            "zh-CN",
+        ],
+    );
+    no_secrets(&installed);
+    let spoken = String::from_utf8_lossy(&installed.stderr).replace('\r', "");
+    assert!(
+        spoken.contains(&format!(
+            "已写入 vscode 配置：{}",
+            home.path().join(".vscode").join("mcp.json").display()
+        )),
+        "{spoken}"
+    );
+
+    // A file this tool cannot read back is refused with the file untouched.
+    let cursor = home.path().join(".cursor").join("mcp.json");
+    std::fs::create_dir_all(cursor.parent().unwrap()).unwrap();
+    std::fs::write(&cursor, b"half a thought {").unwrap();
+    failure(
+        cli_in_home(
+            home.path(),
+            directory.path(),
+            &["settings", "work-agent", "--install", "cursor", "--json"],
+        ),
+        "client_config_unusable",
+    );
+    assert_eq!(
+        std::fs::read_to_string(&cursor).unwrap(),
+        "half a thought {"
+    );
+
+    // No capability, credential or vault password reaches a client file.
+    for path in [&claude, &cursor, codex_path] {
+        let text = std::fs::read_to_string(path).unwrap();
+        assert!(
+            !text.contains(TOKEN) && !text.contains(PASSWORD),
+            "{path:?}"
+        );
+    }
+    let states: Vec<_> = std::fs::read_dir(home.path())
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        states
+            .iter()
+            .filter(|name| name.starts_with('.') && name.contains(".monica-"))
+            .count()
+            == 1,
+        "exactly one backup for the one file that changed: {states:?}"
+    );
 }

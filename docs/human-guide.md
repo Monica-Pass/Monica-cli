@@ -269,20 +269,93 @@ monica -C %CFG% rf work
 
 第 2 步产出的那段 `mcpServers` JSON 就是全部所需信息：一条 `command` 加一组 `args`，指向那个客户端文件。
 
+### 4.1 让它自己写进去
+
+常见的四种客户端有一个共性配置概念，`settings --install` 就是往它们的用户级配置文件里合并这一条：
+
+| `--install` 取值 | 被写的文件 | 条目所在的键 |
+| --- | --- | --- |
+| `claude` | `~/.claude.json` | `mcpServers` |
+| `cursor` | `~/.cursor/mcp.json` | `mcpServers` |
+| `codex` | `~/.codex/config.toml` | `[mcp_servers.<授权名>]` |
+| `vscode` | `~/.vscode/mcp.json` | `servers` |
+
+实测（临时目录里造了一份只放了示例内容的 `~/.claude.json`，`HOME` / `USERPROFILE` 指过去后运行；下面的输出用的就是 `target/release/monica-pass.exe`，所以条目里的 `command` 也就是那个路径，你自己跑时会是你的可执行文件）：
+
+```console
+$ monica settings work --install claude
+{
+  "mcpServers": {
+    "work": {
+      "args": [
+        "mcp",
+        "--client",
+        "C:\\Users\\joyins\\AppData\\Local\\Temp\\monica-install-rel\\home\\AppData\\Local\\MonicaPass\\clients\\work.client.json"
+      ],
+      "command": "C:\\Users\\joyins\\Desktop\\Monica-all\\monica-pass-cli\\target\\release\\monica-pass.exe"
+    }
+  }
+}
+MCP settings saved to C:\Users\joyins\AppData\Local\Temp\monica-install-rel\home\AppData\Local\MonicaPass\clients\work.client.mcp.json
+Written into the claude configuration at C:/Users/joyins/AppData/Local/Temp/monica-install-rel/home\.claude.json
+Previous file kept at C:/Users/joyins/AppData/Local/Temp/monica-install-rel/home\.claude.json.monica-1790107891-0
+```
+
+那段 JSON 走标准输出，三行说明走标准错误。被写入的文件里原来那个 `example-other` 条目和 `theme` 键都还在，只是键序被 JSON 规范化重排了。再执行一次同一条命令，只有说明行不同：
+
+```console
+$ monica settings work --install claude
+MCP settings saved to C:\Users\joyins\AppData\Local\Temp\monica-install-rel\home\AppData\Local\MonicaPass\clients\work.client.mcp.json
+claude already carried exactly this entry, so its file was left alone
+```
+
+Codex 是同一条命令换一种落盘格式（中文提示，且原文件里已有的 `model` 与 `other` 条目都保留，新条目追加在末尾）：
+
+```console
+$ monica settings work --install codex --lang zh-CN
+MCP 配置已保存到 C:\Users\joyins\AppData\Local\Temp\monica-install-rel\home\AppData\Local\MonicaPass\clients\work.client.mcp.json
+已写入 codex 配置：C:/Users/joyins/AppData/Local/Temp/monica-install-rel/home\.codex\config.toml
+原文件已备份至 C:/Users/joyins/AppData/Local/Temp/monica-install-rel/home\.codex\config.toml.monica-1790107899-0
+```
+
+而一份它读不懂的客户端文件会被原样退回，不写盘也不留备份：
+
+```console
+$ monica settings work --install cursor
+monica-pass: The AI client's own configuration file is missing its expected shape, oversized or unreadable, so nothing was written to it. Add the printed MCP entry to that file by hand instead.
+$ echo $?
+1
+```
+
+它的行为边界：
+
+1. **只合并，不覆盖**：文件里其他键、其他 server 条目原样保留；`command` 与 `args` 之外你手工加在条目上的键（例如 `env`）也保留。
+2. **会改动就先备份**：备份名形如 `config.toml.monica-<时间戳>-<序号>`，路径会打印出来。
+3. **读不回来的文件不碰**：非法 JSON、顶层结构不对、Codex 用了 `[[mcp_servers]]` 写法、同一授权名定义了两遍，一律报错退出且不写盘，错误文案会提示你改用手工粘贴。
+4. **重复执行幂等**：条目已经是这一份时报"未作改动"，不再产生新备份。
+5. **写进去的只有可执行文件路径和 `mcp --client <文件>`**：Token、主密码、capability 都不进客户端配置。
+6. 两个副作用：JSON 客户端文件会按 JSON 规范化重写（键序变字母序）；合并后的文件权限收紧为仅所有者可读写（客户端配置里可能带着别家的 `env`）。要还原就拷回备份。
+7. Claude Desktop 不在表里：它的应用数据目录随平台不同，本机没有验证过，仍走下面的手工粘贴。
+
+### 4.2 手工粘贴
+
 | 客户端 | 填到哪里 | 格式 |
 | --- | --- | --- |
 | Claude Code | 项目的 `.mcp.json`，或 `claude mcp add` 的 stdio 入口 | `mcpServers` JSON |
 | Claude Desktop | 其设置目录下的 `claude_desktop_config.json` | `mcpServers` JSON |
 | Cursor | 其 MCP 设置面板 / `.cursor/mcp.json` | `mcpServers` JSON |
 | Codex CLI | `~/.codex/config.toml` | TOML `[mcp_servers.work]`，`command` 与 `args` 同值 |
+| VS Code Copilot | `.vscode/mcp.json` 或 `~/.vscode/mcp.json` | `servers` JSON（`type` 可省） |
 
 规则：
 
-1. **一份授权 = 一个 MCP 服务器条目**。条目名建议直接用授权名，方便和 `monica st` 对得上。
+1. **一份授权 = 一个 MCP 服务器条目**。条目名直接用授权名，方便和 `monica st` 对得上。
 2. **多个连接就是多个条目**。同一份授权只绑一个连接，不要指望一个条目看到所有服务。
 3. 客户端文件等同访问凭证，不要提交进仓库、不要贴进对话。
 4. **每次 `rf` 续期后都要重启对应的 MCP 入口**，否则桥还在用旧 capability。
-5. AI 侧调用出错、工具看不到、结果异常时，先按 [给 AI 的使用说明](ai-guide.md) 的口径核对，再回到本手册排障。
+5. 把 [docs/agent-policies/AGENTS.md](agent-policies/AGENTS.md) 拷进客户端读取的规则文件，AI 侧的行为约束就不用你每次口头交代。
+6. AI 侧调用出错、工具看不到、结果异常时，先按 [给 AI 的使用说明](ai-guide.md) 的口径核对，再回到本手册排障。
+
 
 ## 5. 日常操作
 
@@ -312,7 +385,7 @@ monica -C %CFG% rf work
 | 打开另一个 MDBX | `open` | `o` | 是 | 主密码 |
 | 切换已记录数据库 | `use` | — | 是 | 该库主密码 |
 | 浏览分类树 | `library` | `tree` | 是 | 主密码 |
-| 生成 MCP 配置 | `settings` | `m` | 否 | 无 |
+| 生成 MCP 配置（可顺带写进客户端自己的文件） | `settings [--install claude\|cursor\|codex\|vscode]` | `m` / `mcp-config` | 否 | 无 |
 | 验证工具发现 | `check` | `ck` / `p` | 否（需代理在跑） | 无 |
 | 本地执行一次调用 | `call <授权名> --request <文件>` | — | 否（需代理在跑） | 无 |
 | 查询命令与参数 | `commands` | `cmds` | 否 | 无 |

@@ -293,14 +293,30 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
         Command::Webdav { command } => {
             return webdav_command(store, command, lang, &mut input, output).await;
         }
-        Command::Settings { name } => {
-            let data = admin::settings_for_grant(&store, &name)?;
+        Command::Settings { name, install } => {
+            let data = admin::settings_for_grant(&store, &name, install)?;
             output.result("settings", data.clone(), Some(&data["mcp"]))?;
             output.note(tr!(
                 lang,
                 CliSettingsSaved,
                 path = data["settings_file"].as_str().unwrap_or_default()
             ));
+            if let Some(written) = data.get("install") {
+                let client = written["client"].as_str().unwrap_or_default();
+                if written["changed"].as_bool().unwrap_or(false) {
+                    output.note(tr!(
+                        lang,
+                        CliInstalledInto,
+                        client = client,
+                        path = written["file"].as_str().unwrap_or_default()
+                    ));
+                    if let Some(backup) = written["backup"].as_str() {
+                        output.note(tr!(lang, CliInstalledBackup, path = backup));
+                    }
+                } else {
+                    output.note(tr!(lang, CliInstalledUnchanged, client = client));
+                }
+            }
         }
         Command::Check {
             name: Some(name),

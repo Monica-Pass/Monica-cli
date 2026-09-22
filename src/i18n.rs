@@ -252,6 +252,7 @@ impl Language {
             GatewayError::KeyEntryTypeMismatch => Message::ErrorKeyEntryTypeMismatch,
             GatewayError::InvalidKeyMaterial => Message::ErrorInvalidKeyMaterial,
             GatewayError::KeySecretMissing => Message::ErrorKeySecretMissing,
+            GatewayError::ClientConfigUnusable => Message::ErrorClientConfigUnusable,
         })
     }
 

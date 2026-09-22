@@ -283,6 +283,7 @@ fn argument_message(id: &str) -> Option<Message> {
         "window" => CliRefreshTtlHelp,
         "call_cap" => CliRefreshMaxCallsHelp,
         "approval" => CliApprovalHelp,
+        "install" => CliInstallHelp,
         "requests_per_minute" => CliRateHelp,
         "out" => CliOutHelp,
         "allow_write" => CliAllowWriteHelp,

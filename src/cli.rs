@@ -129,7 +129,12 @@ pub enum Command {
     },
     /// Print and save MCP settings for an existing grant, selected by name.
     #[command(visible_aliases = ["m", "mcp-config"])]
-    Settings { name: String },
+    Settings {
+        name: String,
+        /// Write the entry into this AI client's own MCP configuration file.
+        #[arg(long, value_name = "CLIENT", value_enum)]
+        install: Option<monica_pass_cli::install::Client>,
+    },
     /// Check authenticated MCP discovery using a grant name or a client file.
     #[command(visible_aliases = ["ck", "p"], group(clap::ArgGroup::new("target").required(true).args(["name", "client"])))]
     Check {

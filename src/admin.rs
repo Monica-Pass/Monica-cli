@@ -707,12 +707,19 @@ pub fn client_path(store: &ConfigStore, name: &str) -> Result<PathBuf> {
         .join(format!("{name}.client.json")))
 }
 
-pub fn mcp_settings(name: &str, client: &Path) -> Result<Value> {
+/// The single server entry this grant needs. It names the broker binary and the
+/// client file to read, never the capability itself, so copying it into another
+/// program's configuration moves no secret.
+pub fn mcp_entry(name: &str, client: &Path) -> Result<Value> {
     validate_name(name)?;
     let executable = std::env::current_exe().map_err(|_| GatewayError::StateUnavailable)?;
-    Ok(json!({"mcpServers": {(name): {
+    Ok(json!({name: {
         "command": executable, "args": ["mcp", "--client", client]
-    }}}))
+    }}))
+}
+
+pub fn mcp_settings(name: &str, client: &Path) -> Result<Value> {
+    Ok(json!({"mcpServers": mcp_entry(name, client)?}))
 }
 
 /// Resolve only an exact grant name; never silently select a different grant.
@@ -739,12 +746,32 @@ pub fn grant_client(store: &ConfigStore, name: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
-pub fn settings_for_grant(store: &ConfigStore, name: &str) -> Result<Value> {
+/// Save the MCP settings for a grant and, when asked, write the same entry into
+/// an AI client's own configuration file. The client file is merged, never
+/// replaced, and the entry this writes is the one it prints.
+pub fn settings_for_grant(
+    store: &ConfigStore,
+    name: &str,
+    install: Option<crate::install::Client>,
+) -> Result<Value> {
     let client = grant_client(store, name)?;
-    let settings = mcp_settings(name, &client)?;
+    let entry = mcp_entry(name, &client)?;
+    let settings = json!({"mcpServers": entry.clone()});
     let path = client.with_extension("mcp.json");
     write_json(&path, &settings, true)?;
-    Ok(json!({"name": name, "client_file": client, "settings_file": path, "mcp": settings}))
+    let mut data =
+        json!({"name": name, "client_file": client, "settings_file": path, "mcp": settings});
+    if let Some(client) = install {
+        let home = crate::install::home_directory().ok_or(GatewayError::ClientConfigUnusable)?;
+        let outcome = crate::install::install(client, &home, &entry)?;
+        data["install"] = json!({
+            "client": client.name(),
+            "file": outcome.path,
+            "backup": outcome.backup,
+            "changed": outcome.changed,
+        });
+    }
+    Ok(data)
 }
 
 pub fn show_connection(store: &ConfigStore, name: &str) -> Result<Value> {

@@ -46,6 +46,7 @@ Global options work before or after subcommands. With no subcommand, normal mode
 | Put a human approval gate on a grant | `g reader … --approval write` / `rf reader --approval all` | `password` |
 | Revoke a grant | `rv reader` | None |
 | Get and save MCP settings | `m reader` | None |
+| Also write the entry into the AI client's own file | `m reader --install claude` (`cursor` / `codex` / `vscode`) | None; the file is backed up first and left untouched if the merge is refused |
 | Verify MCP discovery | `ck reader` or `check --client FILE` | None; the broker must be unlocked |
 | Open a managed local MDBX copy | `o vault.mdbx` | `password` |
 | Unlock and serve | `u` | `password` |

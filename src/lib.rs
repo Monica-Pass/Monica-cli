@@ -7,6 +7,7 @@ pub mod databases;
 pub mod error;
 pub mod gateway;
 pub mod i18n;
+pub mod install;
 pub mod keys;
 pub mod model;
 pub mod protocol;

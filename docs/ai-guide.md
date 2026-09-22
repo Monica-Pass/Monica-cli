@@ -298,7 +298,7 @@ monica cmds <命令> --json   # 查询命令、别名、参数与所需凭据字
 
 `audit` 是你自己行为的全部可见面：只有时间、授权名、操作、范围、阶段（`authorized` 是副作用前的放行，`finished` 是结局）和固定错误码。请求正文、响应正文、Token 与 capability 都不在里面，所以它不能用来找回你上一次调用拿到的内容——那些只存在于对话里。
 
-以下**不属于你的权限**，即使你知道怎么做：任何需要主密码或 Token 的命令（`add` / `connect` / `grant` / `refresh` / `token` / `note` / `init` / `open` / `use` / `lock` / `serve` / `delete` / `delete-category` / `keys` 全族 / WebDAV 全部子命令）、读取或改写保险库与客户端文件、`revoke` 别人的授权。要撤销一份授权，只能由人决定。
+以下**不属于你的权限**，即使你知道怎么做：任何需要主密码或 Token 的命令（`add` / `connect` / `grant` / `refresh` / `token` / `note` / `init` / `open` / `use` / `lock` / `serve` / `delete` / `delete-category` / `keys` 全族 / WebDAV 全部子命令）、`settings --install <客户端>`（它会改写 AI 客户端自己的配置文件，是人的动作）、读取或改写保险库与客户端文件、`revoke` 别人的授权。要撤销一份授权，只能由人决定。
 
 `delete` 与 `delete-category` 尤其不要碰：它们写入的墓碑会随同步消失在你主人的其他设备上，而且没有撤销删除的命令。即使人在 shell 里给了你凭据，删除也应当由他自己在能键回目标名称的终端里执行。
 

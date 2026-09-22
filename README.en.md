@@ -278,6 +278,16 @@ The following is a common JSON configuration format. Both paths are examples; us
 
 Each grant binds to one connection. To use multiple connections, add their corresponding MCP server entries to your AI client. The AI client starts the MCP entry point; the human-operated TUI or `serve` terminal unlocks the gateway.
 
+Rather than pasting by hand, one command merges that entry into the client's own configuration file — it backs the file up first, touches only this one entry, and refuses a file whose shape it cannot read back:
+
+```sh
+monica-pass settings GRANT --install claude   # or cursor / codex / vscode
+```
+
+Claude Desktop and project-level config files still take the JSON above. Section 4 of the [human guide](docs/human-guide.md) lists which file each client gets written into and the exact guarantees.
+
+There is also a ready-made behavioral rulebook for the AI side: copy [docs/agent-policies/AGENTS.md](docs/agent-policies/AGENTS.md) into whatever rules file your client reads (`CLAUDE.md`, a project `AGENTS.md`, Cursor rules, Copilot instructions). It is Simplified Chinese only so far.
+
 ### Help AI understand a connection's purpose
 
 AI can call `monica_list_connections` with `{}` to discover the connection covered by its grant: its name, provider, purpose note, repository scope, available tools, and the expiry of that AI authorization. The credential stored in your vault does not expire.

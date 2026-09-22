@@ -46,6 +46,7 @@ monica-pass cmds dav open --json
 | 给授权设人工门槛 | `g reader … --approval write` / `rf reader --approval all` | `password` |
 | 撤销授权 | `rv reader` | 无 |
 | 获取并保存 MCP 配置 | `m reader` | 无 |
+| 顺带写进 AI 客户端自己的配置文件 | `m reader --install claude`（`cursor` / `codex` / `vscode`） | 无；改动前先备份，合并失败即原样退出 |
 | 验证 MCP 工具发现 | `ck reader` 或 `check --client FILE` | 无；代理需要已解锁 |
 | 打开本地 MDBX 副本 | `o vault.mdbx` | `password` |
 | 解锁并运行代理 | `u` | `password` |

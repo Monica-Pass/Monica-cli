@@ -166,6 +166,10 @@ pub enum GatewayError {
         "This key entry stores no private material. Import the secret ring or the private PEM first."
     )]
     KeySecretMissing,
+    #[error(
+        "The AI client's own configuration file is missing its expected shape, oversized or unreadable, so nothing was written to it. Add the printed MCP entry to that file by hand instead."
+    )]
+    ClientConfigUnusable,
 }
 
 impl GatewayError {
