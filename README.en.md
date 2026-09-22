@@ -8,7 +8,7 @@
 <br/>
 <img src="docs/images/banner.png" alt="MONICA CLI" width="880" />
 
-**A local credential gateway that lets AI use services within the permissions you grant.**
+**A local credential gateway for AI — not another password manager.**
 
 <p>Service tokens stay in a local encrypted MDBX3 vault · AI asks through MCP · every authorization expires · you unlock and revoke</p>
 
@@ -36,11 +36,26 @@ Part of the <a href="https://github.com/Monica-Pass/Monica"><strong>Monica local
 
 Monica CLI stores service tokens in a local, encrypted MDBX3 vault. AI requests an operation through MCP; Monica checks the grant, injects the credential, sends the request, and returns the service result. You manage credentials and permissions, while AI uses connection names and purpose notes to understand which service to use without directly holding the raw token.
 
-[Quick start](#quick-start) · [Connect an AI client](#connect-an-ai-client) · [WebDAV vaults](#webdav-vaults) · [Build from source](#build-from-source) · [Monica main repository](https://github.com/Monica-Pass/Monica) · [This repository](https://github.com/Monica-Pass/Monica-cli)
+[What this is](#what-this-actually-is) · [Quick start](#quick-start) · [Connect an AI client](#connect-an-ai-client) · [WebDAV vaults](#webdav-vaults) · [Build from source](#build-from-source) · [Monica main repository](https://github.com/Monica-Pass/Monica) · [This repository](https://github.com/Monica-Pass/Monica-cli)
 
 ![Monica CLI database and category home](docs/images/home.png)
 
 *Database and nested-category home rendered from synthetic test data. The interface supports English and Simplified Chinese.*
+
+## What this actually is
+
+Monica CLI is **not a password manager for people**. The day-to-day vault for accounts, passwords, and 2FA is [Monica for Android](https://github.com/Monica-Pass/Monica), which has TOTP, autofill, card and identity entries, and browser integration. This tool does one job: **it stands between AI and your remote services, holding the tokens and deciding what AI may do with them.**
+
+Concretely:
+
+- **It manages the credentials you hand to AI**, such as GitHub / GitLab API tokens — not your entire password set.
+- **It keeps the token away from AI.** AI can only ask for an operation, like "list the Issues in this repository"; grant checks, token injection, request sending, and leak checks on the response all happen in the local gateway. The raw token never enters the model's context.
+- **It puts time on permissions.** Every AI authorization expires, can carry a call budget, and can only be renewed by a person running `refresh` locally — **no grant is permanent**. The credential stored in your vault does not expire and is not deleted when a grant ends.
+- **It also manages this database**, because configuring grants, checking status, and syncing over WebDAV should not require picking up a phone.
+
+It reads and writes **the same MDBX3 database** as the phone app, so the two are entry points into one vault rather than two unrelated stores. What it deliberately does not do: no TOTP generation, no autofill, no browser extension, no KeePass / Bitwarden import, and no external attachments — a vault with `.blobs` is refused outright with `external_blobs_unsupported`.
+
+> If you want "one app for all my passwords", that is the [main repository](https://github.com/Monica-Pass/Monica). If you want "let AI open Issues and review PRs for me, without ever holding my token", that is this one.
 
 ## The Monica family
 
