@@ -137,7 +137,7 @@ monica-pass lock
 
 `init`、`connect`、`grant` 也支持分别创建保险库、保存连接、配置授权。使用 `monica-pass --help` 或 `monica-pass <子命令> --help` 查看参数。
 
-删除按目标分三条命令：`delete <连接名>` 移除连接、它绑定的凭据与该连接下的全部授权；`delete <条目ID>` 移除一条不属于任何连接的条目；`delete-category <分类ID>`（`rmdir`）只移除空分类，分类里还有条目或子分类时直接拒绝并报出数量。密钥条目用 `keys delete <名称>`。
+删除按目标分三条命令：`delete <连接名>` 移除连接、它绑定的凭据与该连接下的全部授权；`delete <条目ID>` 移除一条不属于任何连接的条目；`delete-category <分类ID>`（`rmdir`）只移除空分类，分类里还有条目或子分类时直接拒绝并报出数量。手机 Monica 存新条目的那个根分类删不掉也挪不走（`protected_collection`），删掉它这份库在手机侧就变回只读。密钥条目用 `keys delete <名称>`。
 
 ```sh
 monica-pass library                       # 取条目与分类 ID
@@ -189,6 +189,8 @@ monica-pass m work-github --json
 ```
 
 `--json`（`-j`）统一输出 `ok`、`command`、`data` 或固定错误码，并禁用交互提示；结果不随界面语言变化。`--non-interactive` 也可单独用于禁止提示。无子命令时，普通模式打开 TUI，JSON / 非交互模式查询状态。
+
+不带 `--json` 时，`databases` / `library` / `webdav list` 输出随界面语言翻译表头的对齐表格，每行都带下一步要用的 ID；写命令只回一行确认。JSON 结构不随这些变化改变，脚本一律用 `--json`。
 
 需要凭据的操作使用 `--secrets-stdin`。例如，AI 可以发起以下命令，由**可信本地启动器**把 `password` 和 `token` 两个字段直接送入该进程的标准输入：
 
@@ -275,6 +277,8 @@ monica-pass webdav forget-password
 整文件模式下，部分服务（如本次验证的坚果云）不返回强 ETag。此时可新建上传、读取和下载，但有本地改动后需按 `P` 或使用 `webdav publish NEW_NAME.mdbx` 保存为新的远端文件。`webdav status --json` 的 `safe_remote_replace: false` 和 TUI 预览会明确提示，程序不会强制覆盖。
 
 MDBX3 指运行库版本，当前原生文件格式标记为 `MDBX-2`。部分旧 Android 客户端生成的 `MDBX-1` 使用另一套加密和解锁结构，无法直接打开；程序会返回 `vault_schema_unsupported`，保留原文件。此时应使用原生 MDBX3 保险库，不能仅修改扩展名或格式标记。
+
+手机 Monica 写入前会按数据库 ID 派生出根分类的固定 ID（`nameUUIDFromBytes("monica-root:" + 数据库 ID)`，version-3）并在那里落条目；读取不需要这一行，写入需要。本工具建库时即写入这一行，打开旧版本建的库时也会在一次解锁动作里补写或按原 ID 恢复，**已有库不需要重建、不需要重新同步**就能在手机上正常新增条目。这一行在 `library` 里显示为标题 `Monica`，可放条目、可改名，但不允许删除或移入其他分类。Android 端把它显示成什么标题、以及手机上「未知版本（版本 0）」提示读的是哪个字段，本仓库未做实测。
 
 <details>
 <summary>查看 WebDAV 登录界面</summary>

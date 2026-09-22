@@ -137,7 +137,7 @@ monica-pass lock
 
 You can also use `init`, `connect`, and `grant` to create a vault, save a connection, and configure a grant separately. Run `monica-pass --help` or `monica-pass <subcommand> --help` for the available options.
 
-Deletion is three commands by target: `delete CONNECTION` removes the connection, the credential it binds and every grant under it; `delete ENTRY_ID` removes one entry that no connection binds; `delete-category CATEGORY_ID` (`rmdir`) removes an empty category only and refuses while anything is left inside, reporting the counts. Key entries go through `keys delete NAME`.
+Deletion is three commands by target: `delete CONNECTION` removes the connection, the credential it binds and every grant under it; `delete ENTRY_ID` removes one entry that no connection binds; `delete-category CATEGORY_ID` (`rmdir`) removes an empty category only and refuses while anything is left inside, reporting the counts. The folder Monica for Android saves new entries into can neither be deleted nor moved (`protected_collection`) — without it the vault turns read-only on the phone again. Key entries go through `keys delete NAME`.
 
 ```sh
 monica-pass library                       # entry and category IDs
@@ -189,6 +189,8 @@ monica-pass m work-github --json
 ```
 
 `--json` (`-j`) returns `ok`, `command`, `data` or a fixed error code and disables prompts. Results do not depend on the interface language. `--non-interactive` disables prompts without changing the output format. With no subcommand, normal mode opens the TUI; JSON or non-interactive mode shows status.
+
+Without `--json`, `databases`, `library` and `webdav list` print aligned tables whose headers follow the interface language, each row carrying the ID the next command needs, and write commands answer with a single confirmation line. The JSON shapes are unchanged; scripts always use `--json`.
 
 Operations needing credentials accept `--secrets-stdin`. For example, AI can start this command while a **trusted local launcher** sends the `password` and `token` fields directly to its stdin:
 
@@ -275,6 +277,8 @@ Supported vaults are password-unlocked, **self-contained MDBX files up to 64 MiB
 In single-file mode, some services, including the tested Jianguoyun endpoint, do not return strong ETags. Creating, reading, and downloading files still work; save later local changes under a new remote filename with `P` or `webdav publish NEW_NAME.mdbx`. The TUI preview and `safe_remote_replace: false` in `webdav status --json` make this limitation explicit. Monica does not force an overwrite.
 
 MDBX3 is the runtime version; native vaults currently carry the `MDBX-2` format marker. Some older Android clients produced `MDBX-1` vaults with different encryption and unlock structures. These cannot be opened directly: Monica returns `vault_schema_unsupported` and preserves the original. Use a native MDBX3 vault; renaming the extension or changing the format marker does not convert a vault.
+
+Before writing, Monica for Android looks up its root folder by a fixed id derived from the vault id (`nameUUIDFromBytes("monica-root:" + vault id)`, a version-3 UUID). Reading does not need that row, writing does. This tool seeds it when creating a vault and re-creates or restores it during any unlock of a vault built by an older release, so **existing vaults become writable on the phone without being rebuilt or re-synced**. The row appears in `library` under the title `Monica`; it can hold entries and can be renamed, but not deleted or moved. What Android displays for that folder, and which field the phone's "unknown version (version 0)" label reads, have not been measured from this side.
 
 <details>
 <summary>View the WebDAV sign-in screen</summary>

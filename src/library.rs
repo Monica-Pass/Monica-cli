@@ -28,7 +28,24 @@ mod tests {
         drop(vault);
         let reopened = Vault::open(&path, "test-password").unwrap();
         let library = reopened.library().unwrap();
-        assert_eq!(library.categories.len(), 3);
+        // The folder Monica for Android writes into is seeded beside the user's own categories.
+        assert_eq!(
+            library
+                .categories
+                .iter()
+                .filter(|category| !reopened.is_android_root(&category.id))
+                .count(),
+            3
+        );
+        assert_eq!(
+            library
+                .categories
+                .iter()
+                .filter(|category| reopened.is_android_root(&category.id))
+                .count(),
+            1,
+            "exactly one folder may be the Android write target"
+        );
         assert_eq!(
             library
                 .categories
@@ -41,11 +58,15 @@ mod tests {
         let tree = library.category_tree();
         assert_eq!(
             tree.iter()
+                .filter(|(c, _)| !reopened.is_android_root(&c.id))
                 .map(|(c, _)| c.title.as_str())
                 .collect::<Vec<_>>(),
             ["Archive", "Renamed", "Work"]
         );
-        assert_eq!(tree[1].1, 1);
+        assert_eq!(
+            tree.iter().find(|(c, _)| c.title == "Renamed").unwrap().1,
+            1
+        );
         assert_eq!(
             library
                 .categories
@@ -130,6 +151,82 @@ mod tests {
         );
         reopened.lock().unwrap();
     }
+
+    /// The folder named after the vault id is what Monica for Android saves into, so opening a
+    /// vault repairs it and no edit command may take it away again.
+    #[test]
+    fn the_android_root_folder_is_seeded_repaired_and_protected() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("library.mdbx");
+        let vault = Vault::create(&path, "test-password", TigaMode::Multi).unwrap();
+        let root = vault
+            .library()
+            .unwrap()
+            .categories
+            .iter()
+            .find(|category| vault.is_android_root(&category.id))
+            .expect("a new vault offers Android its write folder")
+            .id
+            .clone();
+        let other = vault.create_category("Work", None).unwrap();
+        // Simulate a vault that lost the folder: the engine's own soft delete, which the CLI
+        // refuses to issue for this id.
+        vault
+            .library_write(WriteCommand::DeleteProject {
+                project_id: root.clone(),
+            })
+            .unwrap();
+        assert!(
+            !vault
+                .library()
+                .unwrap()
+                .categories
+                .iter()
+                .any(|category| category.id == root),
+            "a deleted folder is hidden while it is still a row"
+        );
+        vault.lock().unwrap();
+        drop(vault);
+
+        let reopened = Vault::open(&path, "test-password").unwrap();
+        let library = reopened.library().unwrap();
+        let matches = library
+            .categories
+            .iter()
+            .filter(|category| category.id == root)
+            .count();
+        assert_eq!(
+            matches, 1,
+            "opening a vault restores the folder Android writes into"
+        );
+        assert!(matches!(
+            reopened.delete_category(&root),
+            Err(DeleteBlocked::Protected(_))
+        ));
+        assert!(matches!(
+            reopened.move_library_item(&root, &other),
+            Err(GatewayError::ProtectedCollection)
+        ));
+        // Entries may still be filed into it, and it can be renamed.
+        reopened
+            .move_library_item(&other, &root)
+            .expect("the protected folder stays a usable destination");
+        reopened.lock().unwrap();
+        drop(reopened);
+        // Reopening a healthy vault must not seed a second copy.
+        let again = Vault::open(&path, "test-password").unwrap();
+        assert_eq!(
+            again
+                .library()
+                .unwrap()
+                .categories
+                .iter()
+                .filter(|category| category.id == root)
+                .count(),
+            1
+        );
+        again.lock().unwrap();
+    }
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -161,6 +258,9 @@ pub enum DeleteBlocked {
         entries: usize,
         children: usize,
     },
+    /// Monica for Android saves the entries it creates into the collection named after the vault
+    /// id. Deleting it would make the vault read-only on the phone again.
+    Protected(Category),
     /// Unlocking, foreign vault, engine refusal: the vault already had a code for this.
     Failed(GatewayError),
 }
@@ -170,6 +270,7 @@ impl DeleteBlocked {
         match self {
             Self::Absent => GatewayError::NotFound,
             Self::NotEmpty { .. } => GatewayError::InvalidRequest,
+            Self::Protected(_) => GatewayError::ProtectedCollection,
             Self::Failed(error) => *error,
         }
     }
@@ -310,6 +411,9 @@ impl Vault {
         if !inventory.categories.iter().any(|c| c.id == target) {
             return Err(GatewayError::NotFound);
         }
+        if self.is_android_root(id) {
+            return Err(GatewayError::ProtectedCollection);
+        }
         let command = if let Some(entry) = inventory.entries.iter().find(|e| e.id == id) {
             WriteCommand::MoveEntry {
                 entry_id: id.to_owned(),
@@ -371,6 +475,9 @@ impl Vault {
             .find(|category| category.id == id)
             .ok_or(DeleteBlocked::Absent)?
             .clone();
+        if self.is_android_root(&category.id) {
+            return Err(DeleteBlocked::Protected(category));
+        }
         let entries = library
             .entries
             .iter()

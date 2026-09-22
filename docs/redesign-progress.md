@@ -7,6 +7,8 @@ Implemented and tested:
 - `d` lists current and previous databases; `n` creates another database without overwriting the previous one. Switching verifies its password and discards old grants.
 - Token creation targets the selected category. Dedicated masked Token replacement preserves the native entry ID and revokes existing grants before replacing the encrypted payload.
 - Shared CLI operations: `databases/db`, `use`, `library/tree`, `category/mkdir`, `rename-category`, `move/mv`, `connect --category`, `token`.
+- The collection Monica for Android saves new entries into (`nameUUIDFromBytes("monica-root:" + vault id)`, a version-3 id) is seeded when a vault is created and re-created or restored on every unlock, so vaults built by earlier releases become writable on the phone without being rebuilt. Reads never needed the row, which is why such a vault browsed but saved nothing. Deleting or re-parenting it is refused with `protected_collection`; renaming it and filing entries into it stay allowed.
+- Without `--json`, `databases`, `library` and `webdav list` print aligned tables with translated headers and the ID each follow-up command needs, and write commands answer with one confirmation line instead of a JSON dump. `--json` envelopes are byte-for-byte unchanged.
 - Every AI grant is time-boxed: omitting a duration means the 240-minute default, the configurable range is 1–1440 minutes, and an optional call budget is persisted so a broker restart cannot reset it. Legacy zero windows only survive in older config files. When a window or budget closes, calls return `reauthorization_required` until a person runs `monica refresh <grant>`, which rotates the bearer. Authorization stays revocable and requires an unlocked broker session. The stored credential is permanent until a person replaces it and has no expiry of its own.
 - Edit forms separate business fields from the database-password confirmation. Esc from confirmation preserves the draft and clears the password. Every management operation closes its engine session; only summary metadata is cached for up to five minutes. Passwords are not cached to simulate an unlocked vault.
 - Settings Token creation remains in settings after saving; the WebDAV/MCP end-to-end test covers this navigation regression.
@@ -14,7 +16,16 @@ Implemented and tested:
 
 Verification: 101 Rust tests passed (78 library, 10 binary, 9 CLI management, 3 language, 1 portable), Clippy all-targets with warnings denied, and formatting. Synthetic home renderings at 70×20 and 100×30 were visually inspected. These are Ratatui buffer renderings, not native Windows Terminal screenshots.
 
-That tally is the state at this milestone, not the current suite: the run of 2026-09-22 reports 221 passed (183 library, 20 binary, 12 CLI management, 2 clipboard, 3 language, 1 portable).
+That tally is the state at this milestone, not the current suite: the run of 2026-09-22 that added the Android write folder and the human-mode tables reports 225 passed (184 library, 23 binary, 12 CLI management, 2 clipboard, 3 language, 1 portable), with formatting and `clippy --all-targets -D warnings` clean.
+
+The same build was driven end to end against a throwaway vault under `%TEMP%` with synthetic secrets only: `init`, `connect`, `databases`, `library`, `category`, `rename-category`, `rename-entry`, `token`, `move`, a non-empty `delete-category`, and `delete-category` / `move` aimed at the Android folder. The seeded row carries a version-3 id (`713580e8-7409-3cf3-83c6-c9915bebee2d` in that run) and is the only such id in the file, appearing seven times; the two protected operations both answered `protected_collection`. The derivation is additionally pinned in `keys::id` against an independent MD5 implementation, and reproduces the collection id a real Android failure log asked for.
+
+Not measured, and deliberately not claimed:
+
+- what title or position Monica for Android gives that folder — only the id and its derivation are guaranteed to match;
+- which field the phone's "unknown version (version 0)" label reads; this CLI writes `format_version = MDBX-2` and `schema_version = 17`;
+- the repair across a real phone plus a real WebDAV account — the evidence above is one engine file on one machine;
+- the count mismatch between a phone screenshot's "6 entries" and the `entries=8` in that same log.
 
 The separate lifetimes were also demonstrated with the debug binary against a throwaway vault: a one-minute grant returned `reauthorization_required` while `list` and `status` still showed the connection, `refresh` succeeded with the master password only and rejected a payload that also carried a token, and revoking the grant left the stored credential in place.
 

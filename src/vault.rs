@@ -8,8 +8,8 @@ use mdbx_storage::error::StorageError;
 use mdbx_storage::init::{VaultInitParams, initialize_vault};
 use mdbx_storage::object_disclosure::{ObjectDisclosureLimits, ObjectDisclosureService};
 use mdbx_storage::repo::{
-    CollectionSummaryRepo, CommitContext, ObjectSummaryRepo, OperationCoordinator, WriteCommand,
-    WriteOperationRequest,
+    CollectionSummaryRepo, CommitContext, ObjectSummaryRepo, OperationCoordinator, ProjectRepo,
+    WriteCommand, WriteOperationRequest,
 };
 use mdbx_storage::runtime::VaultRuntime;
 use mdbx_storage::unlock::UnlockService;
@@ -19,7 +19,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::config::{Connection, private_file};
 use crate::error::{GatewayError, Result};
-use crate::keys::id::{new_logical_entry_id, physical_entry_id};
+use crate::keys::id::{new_logical_entry_id, physical_entry_id, root_collection_id};
 use crate::keys::limits::KEY_DISCLOSURE_LIMIT_BYTES;
 use crate::keys::openpgp;
 use crate::keys::openssh;
@@ -36,6 +36,10 @@ const GATEWAY_PAYLOAD_LIMIT_BYTES: u64 = 16 * 1024;
 /// Folder created for key entries when the caller does not name one. English and fixed, like the
 /// gateway collection, because Android users can move the entries out of it afterwards.
 const KEY_FOLDER_TITLE: &str = "Monica Keys";
+/// Label of the collection Android itself writes new entries into. Only the id matters for
+/// interoperability — Android looks the row up by id and shows its own heading — so this is what
+/// this CLI's own listings call the folder.
+const ANDROID_ROOT_TITLE: &str = "Monica";
 /// Upper bound on login rows a single key listing will decrypt.
 const MAX_KEY_SCAN_ENTRIES: usize = 4096;
 
@@ -147,9 +151,11 @@ impl Vault {
         .map_err(|_| GatewayError::StateUnavailable)?;
         UnlockService::setup_password_with_mode(pending.connection_mut(), password, mode)
             .map_err(|_| GatewayError::UnlockRequired)?;
-        Ok(Self {
+        let vault = Self {
             runtime: VaultRuntime::from_connection(pending.commit()),
-        })
+        };
+        vault.ensure_android_root();
+        Ok(vault)
     }
 
     pub fn open(path: &Path, password: &str) -> Result<Self> {
@@ -173,9 +179,55 @@ impl Vault {
         if connection.keyring().is_none() || connection.active_session().is_none() {
             return Err(GatewayError::UnlockRequired);
         }
-        Ok(Self {
+        let vault = Self {
             runtime: VaultRuntime::from_connection(connection),
-        })
+        };
+        vault.ensure_android_root();
+        Ok(vault)
+    }
+
+    /// Make the vault writable by Monica for Android, and repair the vaults that were not.
+    ///
+    /// Android names the folder it saves new entries into after the vault itself —
+    /// `monica-root:{vault_id}` as a version-3 UUID — while every id minted here is version 4, so
+    /// a database created by this CLI simply has no row for Android to write to. The read path
+    /// never asks for one, which is why such a vault browses and opens but rejects every save.
+    ///
+    /// Deliberately best effort: a vault that cannot be seeded yet still opens, and the next
+    /// unlock tries again. Nothing here can turn a working open into a failing one.
+    pub(crate) fn ensure_android_root(&self) {
+        let Ok(vault_id) = self.vault_id() else {
+            return;
+        };
+        let root_id = root_collection_id(&vault_id).to_string();
+        let existing = {
+            let Ok(connection) = self.runtime.read() else {
+                return;
+            };
+            match ProjectRepo::get_by_id(&connection, &root_id) {
+                Ok(project) => project.map(|project| project.deleted),
+                Err(_) => return,
+            }
+        };
+        let command = match existing {
+            None => WriteCommand::CreateProject {
+                project_id: root_id,
+                title: ANDROID_ROOT_TITLE.to_owned(),
+            },
+            Some(true) => WriteCommand::RestoreProject {
+                project_id: root_id,
+                parent_project_id: None,
+            },
+            Some(false) => return,
+        };
+        let _ = self.key_write("android-root-seed", vec![command]);
+    }
+
+    /// True for the folder Android saves into. Deleting or nesting it would make the vault
+    /// read-only in Monica again, so the editing commands refuse to touch it as a target.
+    pub(crate) fn is_android_root(&self, id: &str) -> bool {
+        self.vault_id()
+            .is_ok_and(|vault_id| root_collection_id(&vault_id).to_string() == id)
     }
 
     /// Local management only. The broker/MCP protocol has no route to this method.

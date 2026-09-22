@@ -67,14 +67,16 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
         }
         Command::Databases => {
             let data = json!({"databases":monica_pass_cli::databases::list(&store)?});
-            output.result("databases", data.clone(), Some(&data))?;
+            let human = cli_table::render_databases(&data["databases"], lang);
+            output.result_text("databases", data, Some(human))?;
         }
         Command::Use { id } => {
             let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;
             monica_pass_cli::databases::switch(&store, &id, &password)?;
             let data = json!({"switched":true,"grants_reset":true});
-            output.result("use", data.clone(), Some(&data))?;
+            output.note(tr!(lang, CliSwitchedDatabase, id = id));
+            output.result("use", data, None)?;
         }
         Command::Token { name } => {
             validate_name(&name)?;
@@ -83,28 +85,32 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             admin::lock_broker(&store).await?;
             admin::update_token(&store, &name, &password, token)?;
             let data = json!({"name":name,"token_updated":true,"previous_grants_revoked":true});
-            output.result("token", data.clone(), Some(&data))?;
+            output.note(tr!(lang, CliTokenRotated, name = name));
+            output.result("token", data, None)?;
         }
         Command::RenameCategory { id, title } => {
             let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;
             monica_pass_cli::library::rename_category(&store, &password, &id, &title)?;
             let data = json!({"id":id,"title":title});
-            output.result("rename-category", data.clone(), Some(&data))?;
+            output.note(tr!(lang, CliCategoryRenamed, id = id, title = title));
+            output.result("rename-category", data, None)?;
         }
         Command::RenameEntry { name, title } => {
             let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;
             admin::rename_entry(&store, &name, &title, &password)?;
             let data = json!({"name":name,"title":title});
-            output.result("rename-entry", data.clone(), Some(&data))?;
+            output.note(tr!(lang, CliEntryRenamed, name = name, title = title));
+            output.result("rename-entry", data, None)?;
         }
         Command::Library => {
             let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;
             let library = monica_pass_cli::library::read(&store, &password)?;
             let data = json!(library);
-            output.result("library", data.clone(), Some(&data))?;
+            let human = cli_table::render_library(&data, lang);
+            output.result_text("library", data, Some(human))?;
         }
         Command::Category { title, parent } => {
             let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
@@ -116,14 +122,16 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
                 parent.as_deref(),
             )?;
             let data = json!({"id":id,"title":title,"parent":parent});
-            output.result("category", data.clone(), Some(&data))?;
+            output.note(tr!(lang, CliCategoryCreated, title = title, id = id));
+            output.result("category", data, None)?;
         }
         Command::Move { id, target } => {
             let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;
             monica_pass_cli::library::move_item(&store, &password, &id, &target)?;
             let data = json!({"id":id,"target":target});
-            output.result("move", data.clone(), Some(&data))?;
+            output.note(tr!(lang, CliMoved, id = id, target = target));
+            output.result("move", data, None)?;
         }
         Command::Delete { target, force } => {
             let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
@@ -133,7 +141,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             admin::lock_broker(&store).await?;
             let data = delete_target(&store, &target, &password, lang, output)?;
             output.note(tr!(lang, CliDeletedTombstone, target = target));
-            output.result("delete", data.clone(), Some(&data))?;
+            output.result("delete", data, None)?;
         }
         Command::DeleteCategory { id, force } => {
             let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
@@ -161,7 +169,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             };
             let data = json!({"id":id,"title":category.title,"kind":"category","tombstone":true});
             output.note(tr!(lang, CliDeletedTombstone, target = id));
-            output.result("delete-category", data.clone(), Some(&data))?;
+            output.result("delete-category", data, None)?;
         }
         Command::Keys { command } => {
             return keys_command(store, command, lang, &mut input, output).await;
@@ -533,7 +541,8 @@ async fn webdav_command(
         WebDavCommand::List { path } => {
             let entries = client.list(&path).await?;
             let data = json!({"path":path,"entries":entries});
-            output.result("webdav list", data.clone(), Some(&data))?;
+            let human = cli_table::render_webdav_list(&data["entries"], lang);
+            output.result_text("webdav list", data, Some(human))?;
         }
         WebDavCommand::Open { path } => {
             let password = input.take(SecretField::Password, tr!(lang, PromptRemotePassword))?;

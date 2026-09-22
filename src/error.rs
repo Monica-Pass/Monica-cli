@@ -28,6 +28,10 @@ pub enum GatewayError {
     AlreadyExists,
     #[error("The requested local configuration, connection or grant does not exist.")]
     NotFound,
+    #[error(
+        "This is the folder Monica for Android saves new entries into. It can hold entries but cannot be deleted or moved."
+    )]
+    ProtectedCollection,
     #[error("The new password must not be empty or whitespace-only, and both entries must match.")]
     PasswordRequirements,
     #[error("The configured loopback port is unavailable. Check for another running broker.")]

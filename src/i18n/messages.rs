@@ -516,7 +516,7 @@ catalog! {
     CliGrantRefreshed => ["Re-authorized '{name}' with a new capability. Restart its MCP client to load it.", "已用新凭据重新授权“{name}”。请重启对应的 MCP 客户端以加载新凭据。"],
     CliDeleteUnconfirmed => ["What you typed did not match '{target}'; nothing was deleted.", "键入内容与“{target}”不一致；未删除任何内容。"],
     CliDeletedTombstone => ["Deleted '{target}'. A tombstone reaches your other devices at the next sync; the encrypted bytes stay in this vault file.", "已删除“{target}”。删除标记会在下次同步时传给其他设备；加密内容仍保留在本保险库文件中。"],
-    CliDeleteCategoryNotEmpty => ["'{title}' still holds {entries} entry(s) and {children} subcategor(ies). Move them out first; nothing was deleted.", "“{title}”仍包含 {entries} 个条目和 {children} 个子分类。请先移出内容；未删除任何内容。"],
+    CliDeleteCategoryNotEmpty => ["'{title}' still holds {entries} entry(s) and {children} subcategory(s). Move them out first; nothing was deleted.", "“{title}”仍包含 {entries} 个条目和 {children} 个子分类。请先移出内容；未删除任何内容。"],
     CliDeleteBoundCredential => ["{target} is the credential behind connection '{name}'. Delete the connection instead.", "{target} 是连接“{name}”所使用的凭据。请改为删除该连接。"],
     CliBrokerReady => ["Gateway ready at http://{address}/. Keep this human terminal open.", "代理已就绪：http://{address}/。请保持此人工终端运行。"],
     CliSessionLifetime => ["The session locks after five minutes. Ctrl+C or 'monica-pass lock' also stops the gateway.", "会话在 5 分钟后锁定。Ctrl+C 或 monica-pass lock 也会停止代理。"],
@@ -670,4 +670,52 @@ catalog! {
     StatusWaitingPathMismatch => ["segment does not match its path", "分段与路径不符"],
     TableColumnStream => ["Stream", "流"],
     TableColumnReason => ["Reason", "原因"],
+    TableColumnDatabase => ["Database", "数据库"],
+    TableColumnId => ["ID", "ID"],
+    TableColumnPath => ["Path", "路径"],
+    TableColumnItem => ["Item", "名称"],
+    TableColumnSize => ["Size", "大小"],
+    TableValueFolder => ["folder", "文件夹"],
+    TableValueFile => ["file", "文件"],
+    WebDavListEmpty => ["This remote folder is empty.", "该远端文件夹为空。"],
+    DatabasesNone => [
+        "No database is registered here yet. Run monica-pass init to create one.",
+        "此处尚未登记数据库。请先运行 monica-pass init 创建。"
+    ],
+    DatabasesCurrentMark => [
+        "* is the database already open. To switch, run monica-pass use <ID> with an ID from another row.",
+        "* 为当前打开的数据库。切换请对其他行的 ID 运行 monica-pass use <ID>。"
+    ],
+    LibraryEmpty => [
+        "This database has no categories or entries yet.",
+        "该数据库暂无分类或条目。"
+    ],
+    CliSwitchedDatabase => [
+        "Now using '{id}'. Earlier AI grants stay revoked; create new ones.",
+        "已切换到数据库“{id}”。旧 AI 授权保持撤销，需要重新创建。"
+    ],
+    CliTokenRotated => [
+        "Token for '{name}' replaced. Its earlier AI grants no longer work.",
+        "已替换“{name}”的 Token，其旧 AI 授权同时失效。"
+    ],
+    CliCategoryRenamed => [
+        "Category {id} is now titled '{title}'.",
+        "分类 {id} 的标题已改为“{title}”。"
+    ],
+    CliEntryRenamed => [
+        "Entry '{name}' is now titled '{title}'.",
+        "条目“{name}”的标题已改为“{title}”。"
+    ],
+    CliCategoryCreated => [
+        "Created category '{title}' · {id}.",
+        "已创建分类“{title}” · {id}。"
+    ],
+    CliMoved => [
+        "Moved '{id}' into category {target}.",
+        "已将“{id}”移动到分类 {target}。"
+    ],
+    ErrorProtectedCollection => [
+        "This is the folder Monica for Android saves new entries into. It can hold entries but cannot be deleted or moved.",
+        "这是 Monica Android 端保存新条目的分类。它可以存放条目，但无法被删除或移动。"
+    ],
 }

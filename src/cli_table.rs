@@ -482,11 +482,166 @@ pub fn render_keys(entries: &[KeyEntrySummary], lang: Language) -> String {
     render_table(&headers, &rows)
 }
 
+/// The registered databases, one per line, with the active one starred. The ID column is what
+/// `monica-pass use <ID>` takes, so it is printed in full rather than shortened.
+pub fn render_databases(databases: &Value, lang: Language) -> String {
+    let items: Vec<&Value> = databases
+        .as_array()
+        .map(|array| array.iter().collect())
+        .unwrap_or_default();
+    if items.is_empty() {
+        return tr!(lang, DatabasesNone).to_string();
+    }
+    let headers = [
+        tr!(lang, TableColumnDatabase),
+        tr!(lang, TableColumnId),
+        tr!(lang, TableColumnPath),
+    ];
+    let rows: Vec<Vec<String>> = items
+        .iter()
+        .map(|item| {
+            vec![
+                format!(
+                    "{}{}",
+                    if item["current"].as_bool().unwrap_or(false) {
+                        "* "
+                    } else {
+                        "  "
+                    },
+                    string(item, "name")
+                ),
+                string(item, "id"),
+                string(item, "path"),
+            ]
+        })
+        .collect();
+    let mut out = render_table(&headers, &rows);
+    out.push('\n');
+    out.push_str(tr!(lang, DatabasesCurrentMark));
+    out
+}
+
+/// A remote folder listing, so picking a path to open or publish does not mean reading XML-ish
+/// JSON. Sizes the server never reported stay blank rather than showing a zero.
+pub fn render_webdav_list(entries: &Value, lang: Language) -> String {
+    let items: Vec<&Value> = entries
+        .as_array()
+        .map(|array| array.iter().collect())
+        .unwrap_or_default();
+    if items.is_empty() {
+        return tr!(lang, WebDavListEmpty).to_string();
+    }
+    let headers = [
+        tr!(lang, TableColumnItem),
+        tr!(lang, TableColumnKind),
+        tr!(lang, TableColumnSize),
+    ];
+    let rows: Vec<Vec<String>> = items
+        .iter()
+        .map(|item| {
+            let directory = item["is_directory"].as_bool().unwrap_or(false);
+            let name = item["path"].as_str().unwrap_or_default();
+            let name = name.rsplit('/').next().unwrap_or(name);
+            let kind = if directory {
+                tr!(lang, TableValueFolder)
+            } else {
+                tr!(lang, TableValueFile)
+            };
+            vec![
+                if directory {
+                    format!("{name}/")
+                } else {
+                    name.to_owned()
+                },
+                kind.to_string(),
+                item["size"].as_u64().map(human_bytes).unwrap_or_default(),
+            ]
+        })
+        .collect();
+    render_table(&headers, &rows)
+}
+
+/// The whole tree with the ids a move or a delete needs. Indentation carries the nesting, so
+/// no drawing characters are wasted on it, and the type column stays empty for a category.
+pub fn render_library(data: &Value, lang: Language) -> String {
+    let categories: Vec<&Value> = data["categories"]
+        .as_array()
+        .map(|array| array.iter().collect())
+        .unwrap_or_default();
+    let entries: Vec<&Value> = data["entries"]
+        .as_array()
+        .map(|array| array.iter().collect())
+        .unwrap_or_default();
+    if categories.is_empty() && entries.is_empty() {
+        return tr!(lang, LibraryEmpty).to_string();
+    }
+    let known = |id: &str| categories.iter().any(|c| c["id"].as_str() == Some(id));
+    let mut visited: Vec<String> = Vec::with_capacity(categories.len());
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(categories.len() + entries.len());
+    for category in categories
+        .iter()
+        .filter(|category| !known(&string(category, "parent")))
+    {
+        library_rows(category, &categories, &entries, 0, &mut visited, &mut rows);
+    }
+    // A pair of categories nested inside each other has no top level to start from. Rather than
+    // hide them, print them where they are reached from.
+    for category in &categories {
+        library_rows(category, &categories, &entries, 0, &mut visited, &mut rows);
+    }
+    let headers = [
+        tr!(lang, TableColumnItem),
+        tr!(lang, TableColumnId),
+        tr!(lang, TableColumnKind),
+    ];
+    render_table(&headers, &rows)
+}
+
+/// One category, the entries inside it, and then its children one level deeper. `visited` makes
+/// a malformed parent cycle terminate instead of recursing forever.
+fn library_rows(
+    category: &Value,
+    categories: &[&Value],
+    entries: &[&Value],
+    depth: usize,
+    visited: &mut Vec<String>,
+    rows: &mut Vec<Vec<String>>,
+) {
+    let id = category["id"].as_str().unwrap_or_default().to_owned();
+    if id.is_empty() || visited.contains(&id) {
+        return;
+    }
+    visited.push(id.clone());
+    let indent = "    ".repeat(depth);
+    rows.push(vec![
+        format!("{indent}{}", string(category, "title")),
+        id.clone(),
+        String::new(),
+    ]);
+    for entry in entries
+        .iter()
+        .filter(|entry| entry["category"].as_str().unwrap_or_default() == id)
+    {
+        rows.push(vec![
+            format!("{indent}    {}", string(entry, "title")),
+            string(entry, "id"),
+            string(entry, "kind"),
+        ]);
+    }
+    for child in categories
+        .iter()
+        .filter(|child| child["parent"].as_str().unwrap_or_default() == id)
+    {
+        library_rows(child, categories, entries, depth + 1, visited, rows);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         KeyEntrySummary, MAX_WAITING_ROWS, Value, render_connection_detail, render_connections,
-        render_keys, render_status, render_webdav_status, short_segment_name,
+        render_databases, render_keys, render_library, render_status, render_webdav_list,
+        render_webdav_status, short_segment_name,
     };
     use monica_pass_cli::i18n::Language;
     use monica_pass_cli::keys::payload::{LOGIN_TYPE_GPG, LOGIN_TYPE_SSH};
@@ -715,6 +870,115 @@ mod tests {
                     .collect::<Vec<_>>(),
             },
         })
+    }
+
+    #[test]
+    fn databases_star_the_active_one_and_keep_the_id_a_switch_needs() {
+        let out = render_databases(
+            &json!([
+                {"id": "current", "name": "Monicacli", "path": "D:/Apps/MonicaCLI/data/vault.mdbx", "current": true},
+                {"id": "11111111-1111-1111-1111-111111111111", "name": "Phone", "path": "/tmp/phone.mdbx", "current": false},
+            ]),
+            Language::En,
+        );
+        let lines: Vec<&str> = out.lines().collect();
+        assert!(lines[0].starts_with("Database"), "{out}");
+        assert!(lines[1].starts_with("* Monicacli"), "{out}");
+        assert_eq!(
+            lines[0].find("ID"),
+            lines[1].find("current"),
+            "the ID column has to sit under its header: {out}"
+        );
+        assert!(
+            lines[2].contains("Phone") && lines[2].contains("11111111-1111-1111-1111-111111111111"),
+            "{out}"
+        );
+        assert!(
+            !lines[2].starts_with('*'),
+            "only the database in use carries the mark: {out}"
+        );
+        assert!(lines[3].contains("monica-pass use"), "{out}");
+        assert!(
+            render_databases(&json!([]), Language::ZhCn).contains("尚未登记"),
+            "an empty registry still has to say what is missing"
+        );
+    }
+
+    #[test]
+    fn library_indents_nesting_and_lands_the_id_beside_every_row() {
+        let out = render_library(
+            &json!({
+                "categories": [
+                    {"id": "root-id", "parent": null, "title": "Monica"},
+                    {"id": "work-id", "parent": null, "title": "Work"},
+                    {"id": "sub-id", "parent": "work-id", "title": "Projects"},
+                ],
+                "entries": [
+                    {"id": "e1", "category": "work-id", "title": "demo", "kind": "api-token"},
+                    {"id": "e2", "category": "sub-id", "title": "kid", "kind": "login"},
+                ],
+            }),
+            Language::En,
+        );
+        let row = |needle: &str| {
+            out.lines()
+                .find(|line| line.contains(needle))
+                .unwrap_or_else(|| panic!("no row for {needle} in {out}"))
+                .trim_end()
+                .to_owned()
+        };
+        assert!(
+            row("Monica").starts_with("Monica") && row("Monica").contains("root-id"),
+            "{out}"
+        );
+        assert!(row("Projects").starts_with("    Projects"), "{out}");
+        assert!(row("demo").starts_with("    demo"), "{out}");
+        assert!(row("kid").starts_with("        kid"), "{out}");
+        assert!(row("demo").ends_with("api-token"), "{out}");
+        assert!(
+            !row("Monica").trim().ends_with("folder"),
+            "a category has no type to repeat: {out}"
+        );
+        let zh = render_library(
+            &json!({"categories": [{"id": "c", "parent": "c", "title": "循环"}], "entries": []}),
+            Language::ZhCn,
+        );
+        assert!(
+            zh.contains("循环"),
+            "a parent cycle still lists itself: {zh}"
+        );
+        assert_eq!(zh.lines().count(), 2, "{zh}");
+        assert!(
+            render_library(&json!({"categories": [], "entries": []}), Language::ZhCn)
+                .contains("暂无"),
+            "an empty vault says so instead of printing a header"
+        );
+    }
+
+    #[test]
+    fn a_remote_folder_reads_as_names_sizes_and_slashes() {
+        let out = render_webdav_list(
+            &json!([
+                {"path": "Backup/vault.mdbx", "is_directory": false, "size": 2048, "etag": "\"x\""},
+                {"path": "Backup/Logs", "is_directory": true, "size": null, "etag": null},
+            ]),
+            Language::En,
+        );
+        assert!(out.contains("vault.mdbx"), "{out}");
+        assert!(out.contains("2.0 KiB"), "{out}");
+        let logs = out
+            .lines()
+            .find(|line| line.contains("Logs"))
+            .unwrap_or_else(|| panic!("no row for Logs in {out}"));
+        assert!(
+            logs.starts_with("Logs/") && logs.contains("folder"),
+            "a directory is marked by a slash and its type: {out}"
+        );
+        assert!(!out.contains("Backup/"), "only the name is a column: {out}");
+        assert!(
+            render_webdav_list(&json!([]), Language::ZhCn).contains("为空"),
+            "an empty folder still answers"
+        );
     }
 
     #[test]

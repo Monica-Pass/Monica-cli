@@ -206,6 +206,7 @@ impl Language {
             GatewayError::InvalidConfig => Message::ErrorInvalidConfig,
             GatewayError::AlreadyExists => Message::ErrorAlreadyExists,
             GatewayError::NotFound => Message::ErrorNotFound,
+            GatewayError::ProtectedCollection => Message::ErrorProtectedCollection,
             GatewayError::PasswordRequirements => Message::ErrorPasswordRequirements,
             GatewayError::ListenUnavailable => Message::ErrorListenUnavailable,
             GatewayError::BrokerAlreadyRunning => Message::ErrorBrokerAlreadyRunning,

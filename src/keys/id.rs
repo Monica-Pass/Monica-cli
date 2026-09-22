@@ -53,5 +53,8 @@ mod tests {
             root,
             name_uuid_from_bytes(format!("monica-root:{vault}").as_bytes())
         );
+        // Pinned against an independent MD5 implementation, because a root folder Android cannot
+        // find is a vault it can read but never write.
+        assert_eq!(root.to_string(), "49a227fc-bf8f-3e70-8223-6d2974eb9c70");
     }
 }
