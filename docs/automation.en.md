@@ -35,6 +35,12 @@ Global options work before or after subcommands. With no subcommand, normal mode
 | Save a connection only | `c work -p github -n "Project purpose"` | `password`, `token` |
 | List / inspect connections | `ls` / `show work` | None |
 | Edit a purpose note | `e work "Updated purpose"` | `password` |
+| Run a generic service API request | `call reader --request request.json` | None; needs an unlocked broker and an explicit API grant |
+| Replace a stored Token (revokes its old grants) | `token work` | `password`, `token` |
+| List / switch databases | `db` / `use ID` | None / `password` |
+| Browse categories and entries | `tree` | `password` |
+| Create / rename a category | `mkdir "Title" --parent ID` / `rename-category ID "Title"` | `password` |
+| Move an entry or category | `mv ID TARGET_CATEGORY_ID` | `password` |
 | Issue a grant | `g reader -c work -r org/repo -t 60 --max-calls 200` | `password` |
 | Re-authorize a grant (new capability) | `rf reader` / `rf reader -t 60 --max-calls 50` | `password` |
 | Revoke a grant | `rv reader` | None |

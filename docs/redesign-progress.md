@@ -18,11 +18,11 @@ That tally is the state at this milestone, not the current suite: the run of 202
 
 The separate lifetimes were also demonstrated with the debug binary against a throwaway vault: a one-minute grant returned `reauthorization_required` while `list` and `status` still showed the connection, `refresh` succeeded with the master password only and rejected a payload that also carried a token, and revoking the grant left the stored credential in place.
 
-The release build and the `D:/Apps/MonicaCLI` install predate the grant window and the restructured public catalog; the installed executable reports `refresh` as an unknown command, so it still needs a rebuild and reinstall.
+The `D:/Apps/MonicaCLI` portable install was refreshed on 2026-09-22 from this release build; its `monica-pass.exe` is SHA-256 identical to `target/release/monica-pass.exe`, and `monica --help` there now lists `refresh`. Because `Cargo.toml` is still `0.2.0`, `monica --version` cannot tell one build from another, so the hash is the check. Read-only commands were exercised against a throwaway config under `%TEMP%`, never against the real vault.
 
 Scope and limitations:
 
 - [Token format](token-format.md) documents the native encrypted API-token payload and Android integration contract. Portable MDBX roundtrip is tested; Android's current login-only interface still needs a dedicated Token editor. This change does not claim Android UI support.
 - Browsing caches public summaries, not an open management session. Saving requires a fresh database password. Cancelling password confirmation preserves the draft; an operation failure after submission currently closes the form.
-- Settings support search/filtering; the home uses category navigation.
+- The home tree and the connection, grant and WebDAV pages all filter with the same fuzzy subsequence matcher (`/` on the home, a per-page filter elsewhere). It scores only the summaries already on screen, never stored secrets.
 - Install only after the application exits; never force-stop a user's session.
