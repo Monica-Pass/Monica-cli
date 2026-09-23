@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Monica CLI 命令练习本</title>
+    <meta
+      name="description"
+      content="Monica CLI（monica-pass）的命令练习本：查全部命令、看真实输出、在浏览器里练手敲。只校验语法，不执行任何命令。"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Doto:wght@400..900&family=Space+Grotesk:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="site.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <a class="brand" href="#table">
+        <img src="../images/logo.png" alt="" width="28" height="28" />
+        <span class="brand-word">MONICA</span>
+        <span class="brand-sep">/</span>
+        <span class="brand-sub">命令练习本</span>
+      </a>
+      <nav class="viewnav" id="viewnav" aria-label="视图切换">
+        <button class="viewnav-item is-active" data-view="table">总表</button>
+        <button class="viewnav-item" data-view="detail">详情</button>
+        <button class="viewnav-item" data-view="practice">练习</button>
+      </nav>
+      <div class="masthead-right">
+        <span class="chip chip-static" id="version-chip">—</span>
+        <button class="pill pill-ghost" id="theme-toggle" type="button">[ 暗 ]</button>
+      </div>
+    </header>
+
+    <main>
+      <!-- ============================ 总表 ============================ -->
+      <section class="view is-active" id="view-table" aria-labelledby="table-title">
+        <div class="view-head">
+          <h1 class="display" id="table-title">全部命令</h1>
+          <p class="lede" id="table-lede"></p>
+        </div>
+
+        <div class="toolbar">
+          <label class="field">
+            <span class="field-label">搜索命令、别名或说明</span>
+            <input id="search" type="search" placeholder="grant / 授权 / --approval" autocomplete="off" />
+          </label>
+          <div class="filterbar">
+            <span class="filterbar-label">分组</span>
+            <div class="segments" id="group-segments" role="group" aria-label="按分组筛选"></div>
+          </div>
+          <div class="filterbar">
+            <span class="filterbar-label">标记</span>
+            <div class="segments" id="flag-segments" role="group" aria-label="按标记筛选"></div>
+          </div>
+        </div>
+
+        <p class="count" id="table-count"></p>
+        <div class="table-wrap">
+          <table class="cmd-table" id="cmd-table">
+            <thead>
+              <tr>
+                <th scope="col">命令</th>
+                <th scope="col">别名</th>
+                <th scope="col">做什么</th>
+                <th scope="col">标记</th>
+              </tr>
+            </thead>
+            <tbody id="cmd-rows"></tbody>
+          </table>
+        </div>
+        <p class="empty" id="table-empty" hidden>没有匹配的命令。<br />换个关键词，或把标记筛选清掉。</p>
+      </section>
+
+      <!-- ============================ 详情 ============================ -->
+      <section class="view" id="view-detail" aria-labelledby="detail-title">
+        <div id="detail-body"></div>
+      </section>
+
+      <!-- ============================ 练习 ============================ -->
+      <section class="view" id="view-practice" aria-labelledby="practice-title">
+        <div class="view-head">
+          <h1 class="display" id="practice-title">练习</h1>
+          <p class="lede" id="practice-boundary"></p>
+          <p class="pane-hint" id="practice-limits"></p>
+        </div>
+
+        <div class="mode-switch" role="group" aria-label="练习模式">
+          <button class="mode-item is-active" data-mode="drill" type="button">关卡</button>
+          <button class="mode-item" data-mode="free" type="button">自由输入</button>
+        </div>
+
+        <div id="mode-drill" class="mode-pane is-active">
+          <div class="progress-block">
+            <div class="progress-meta">
+              <span class="mono-label">关卡进度</span>
+              <span class="progress-readout" id="drill-readout">00/00</span>
+            </div>
+            <div class="segmented-bar" id="drill-bar" aria-hidden="true"></div>
+          </div>
+          <div class="drill-card" id="drill-card"></div>
+          <div class="drill-nav">
+            <button class="pill" id="drill-prev" type="button">← 上一关</button>
+            <select class="drill-pick" id="drill-pick" aria-label="跳到某关"></select>
+            <button class="pill pill-accent" id="drill-next" type="button">下一关 →</button>
+          </div>
+          <button class="linklike" id="drill-reset" type="button">清空练习记录</button>
+        </div>
+
+        <div id="mode-free" class="mode-pane">
+          <p class="pane-hint">
+            随便敲一条 <code>monica …</code>。逐字对照 <code>monica commands --json</code> 的真实语法：命令名与别名、缩写与堆叠的短选项、取值、必填项、位置参数个数、是否支持
+            <code>--json</code>、<code>-h</code> / <code>help</code> 的帮助短路。不会执行，也不会碰到任何凭据。
+          </p>
+          <label class="field">
+            <span class="field-label">命令</span>
+            <input id="free-input" type="text" spellcheck="false" autocomplete="off" placeholder="monica grant work2 -c work -r your-org/repo --ttl-minutes 60" />
+          </label>
+          <div class="free-suggest" id="free-suggest"></div>
+          <div class="drill-actions free-check">
+            <button class="pill pill-accent" id="free-check" type="button">检查</button>
+            <span class="drill-hintline">也可以直接按回车</span>
+          </div>
+          <div class="verdict" id="free-verdict"></div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="pagefoot">
+      <div class="foot-col">
+        <span class="mono-label">这份站点</span>
+        <p id="foot-note"></p>
+      </div>
+      <div class="foot-col">
+        <span class="mono-label">读下去</span>
+        <p>
+          <a href="https://github.com/Monica-Pass/Monica-cli/blob/main/docs/human-guide.md">人向手册</a> ·
+          <a href="https://github.com/Monica-Pass/Monica-cli/blob/main/docs/ai-guide.md">给 AI 的说明</a> ·
+          <a href="https://github.com/Monica-Pass/Monica-cli">仓库</a>
+        </p>
+      </div>
+      <div class="foot-col">
+        <span class="mono-label">数据</span>
+        <p id="foot-meta"></p>
+      </div>
+    </footer>
+
+    <script src="data.js"></script>
+    <script src="grammar.js"></script>
+    <script src="site.js"></script>
+  </body>
+</html>

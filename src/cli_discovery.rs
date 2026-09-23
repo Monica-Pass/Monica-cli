@@ -39,11 +39,19 @@ pub fn run(topic: &[String], language: Language, output: Output) -> Result<()> {
     }
 }
 
-fn describe(command: &Command, path: &[String]) -> Value {
+pub(crate) fn describe(command: &Command, path: &[String]) -> Value {
     let name = path.join(" ");
     let arguments: Vec<_> = command.get_arguments().filter(|arg| !arg.is_hide_set()).map(|arg| {
-        let values: Vec<_> = arg.get_possible_values().into_iter()
-            .filter(|value| !value.is_hide_set()).map(|value| value.get_name().to_owned()).collect();
+        let possibles: Vec<_> = arg.get_possible_values().into_iter()
+            .filter(|value| !value.is_hide_set()).collect();
+        let values: Vec<_> = possibles.iter().map(|value| value.get_name().to_owned()).collect();
+        // Clap matches a choice against the name *and* its aliases, and only
+        // ignores case when `ignore_case` is set. That is why `language zh-cn`
+        // is accepted while `--provider GITHUB` is not; neither fact is
+        // visible from the list of canonical names alone.
+        let aliases: Vec<_> = possibles.iter()
+            .flat_map(|value| value.get_name_and_aliases().skip(1).map(str::to_owned))
+            .collect();
         let defaults: Vec<_> = arg.get_default_values().iter()
             .map(|value| value.to_string_lossy().into_owned()).collect();
         json!({
@@ -58,14 +66,27 @@ fn describe(command: &Command, path: &[String]) -> Value {
             "repeatable": matches!(arg.get_action(), clap::ArgAction::Append | clap::ArgAction::Count),
             "value_names": arg.get_value_names().unwrap_or_default().iter().map(|name| name.as_str()).collect::<Vec<_>>(),
             "choices": values,
+            "choice_aliases": aliases,
+            "ignore_case": arg.is_ignore_case_set(),
             "defaults": defaults,
             "help": arg.get_help().map(ToString::to_string),
             "conflicts_with": command.get_arg_conflicts_with(arg).iter().map(|other| other.get_id().as_str()).collect::<Vec<_>>(),
         })
     }).collect();
-    let groups: Vec<_> = command.get_groups().filter(|group| group.is_required_set()).map(|group| {
-        json!({"required_one_of": group.get_args().map(|id| id.as_str()).collect::<Vec<_>>()})
-    }).collect();
+    let groups: Vec<_> = command
+        .get_groups()
+        .filter(|group| group.is_required_set())
+        .map(|group| {
+            // `multiple` decides whether a command may take several of the group at
+            // once (`keys edit --title --note`) or exactly one (`check name | --client`),
+            // which is not visible from the arguments themselves.
+            let mut group = group.clone();
+            json!({
+                "required_one_of": group.get_args().map(|id| id.as_str()).collect::<Vec<_>>(),
+                "multiple": group.is_multiple(),
+            })
+        })
+        .collect();
     let children: Vec<_> = command
         .get_subcommands()
         .filter(|child| child.get_name() != "help" && discoverable(child, path))
@@ -90,6 +111,7 @@ fn describe(command: &Command, path: &[String]) -> Value {
         "secret_input": {"transport": "stdin_json", "flag": "--secrets-stdin", "required": secret_fields, "max_bytes": MAX_SECRET_BYTES},
         "json_supported": !matches!(name.as_str(), "mcp" | "tui"),
         "long_running": name == "serve" || name == "mcp" || name == "tui",
+        "subcommand_required": command.is_subcommand_required_set(),
         "commands": children,
     })
 }

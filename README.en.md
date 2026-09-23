@@ -408,6 +408,7 @@ WebDAV sync transfers the encrypted vault. Local AI grant files and operation lo
 ## Further reading
 
 - [Human usage guide](docs/human-guide.md) (Chinese): the full flow from creating a vault to connecting an AI client, plus the troubleshooting tables.
+- [Command practice book](docs/reference/index.html) (Chinese): every command with real captured output, plus a browser practice mode that grades what you type against the same grammar without running anything. Open `index.html` locally.
 - [AI usage guide](docs/ai-guide.md) (Chinese): paste-ready rules for an agent's project instructions, with the action for every error code.
 - [CLI automation](docs/automation.md) (Chinese): the `--secrets-stdin` protocol and stable JSON results.
 - [General service API proxy](docs/service-api.md) (Chinese): request format and limits for `api_read` / `api_write`.

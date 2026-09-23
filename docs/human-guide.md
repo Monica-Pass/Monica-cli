@@ -841,6 +841,7 @@ monica keys export 工作机 -o id_ed25519.pub          # 只出公钥
 ## 14. 延伸阅读
 
 - [给 AI 的使用说明](ai-guide.md) —— 直接粘进 AI 项目规则的段落 + 全部错误码的工具侧动作
+- [命令练习本](reference/index.html) —— 全部命令、实测输出，以及在浏览器里练手敲的练习模式（只校验语法，不执行）
 - [CLI 自动化](automation.md) —— `--secrets-stdin` 协议与 JSON 结果约定
 - [通用服务 API 代理](service-api.md) —— `api_read` / `api_write` 的请求与限制
 - [安全边界、授权与恢复](../SECURITY.md) —— 边界的设计理由与残余风险

@@ -408,6 +408,7 @@ WebDAV 同步加密保险库，本地的 AI 授权文件和操作日志不会随
 ## 更多资料
 
 - [人工使用手册](docs/human-guide.md)：建库、授权、接入 AI 的完整流程与故障对照表。
+- [命令练习本](docs/reference/index.html)：全部命令、真实输出，外加在浏览器里练手敲的练习模式；只按同一份语法校验，不执行任何命令。本地双击即可打开。
 - [给 AI 的使用说明](docs/ai-guide.md)：可整段粘贴进项目规则的 AI 侧规范，含全部错误码对应的动作。
 - [CLI 自动化](docs/automation.md)：`--secrets-stdin` 协议与稳定 JSON 结果约定。
 - [通用服务 API 代理](docs/service-api.md)：`api_read` / `api_write` 的请求格式与限制。
