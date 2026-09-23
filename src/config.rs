@@ -12,8 +12,8 @@ use zeroize::Zeroizing;
 
 use crate::error::{GatewayError, Result};
 use crate::model::{
-    ApprovalPolicy, Operation, Provider, validate_api_base, validate_name, validate_note,
-    validate_repository,
+    ApprovalPolicy, Operation, Provider, validate_api_base, validate_database_name, validate_name,
+    validate_note, validate_repository,
 };
 
 const MAX_CONFIG_BYTES: u64 = 256 * 1024;
@@ -119,12 +119,8 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self
-            .database_name
-            .as_ref()
-            .is_some_and(|name| name.len() > 1024 || name.chars().any(char::is_control))
-        {
-            return Err(GatewayError::InvalidConfig);
+        if let Some(name) = &self.database_name {
+            validate_database_name(name)?;
         }
         if let Some(remote) = &self.webdav {
             remote.validate()?;

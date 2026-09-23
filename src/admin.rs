@@ -18,8 +18,8 @@ use crate::config::{
 use crate::error::{GatewayError, Result};
 use crate::gateway::Gateway;
 use crate::model::{
-    ApprovalPolicy, Operation, Provider, validate_api_base, validate_name, validate_note,
-    validate_repository, validate_title,
+    ApprovalPolicy, Operation, Provider, validate_api_base, validate_database_name, validate_name,
+    validate_note, validate_repository, validate_title,
 };
 use crate::protocol::serve_broker;
 use crate::upstream::reject_secret_value;
@@ -175,6 +175,47 @@ pub fn validate_new_password(password: &str, confirmation: &str) -> Result<()> {
     Ok(())
 }
 
+/// The MDBX security profile a vault starts on. Spelled in the lowercase the
+/// vault stores, so what you type is what the file holds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum TigaLevel {
+    /// Lighter and faster, for low-risk environments.
+    Sky,
+    /// The balanced default.
+    #[default]
+    Multi,
+    /// Strongest anti-brute-force settings.
+    Power,
+}
+
+impl TigaLevel {
+    pub const fn mode(self) -> TigaMode {
+        match self {
+            Self::Sky => TigaMode::Sky,
+            Self::Multi => TigaMode::Multi,
+            Self::Power => TigaMode::Power,
+        }
+    }
+
+    /// The spelling the vault stores and the CLI accepts, without an allocation.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sky => "sky",
+            Self::Multi => "multi",
+            Self::Power => "power",
+        }
+    }
+}
+
+/// What a fresh vault should be. Every field defaults to what `monica init` did
+/// before it grew the choice, so callers that never heard of them are unchanged.
+#[derive(Default)]
+pub struct NewVault<'a> {
+    /// Label for `monica databases`, independent of the file name.
+    pub name: Option<&'a str>,
+    pub tiga: TigaLevel,
+}
+
 pub fn initialize(
     store: &ConfigStore,
     path: &Path,
@@ -182,24 +223,62 @@ pub fn initialize(
     password: &str,
     confirmation: &str,
 ) -> Result<()> {
+    initialize_with(
+        store,
+        path,
+        port,
+        password,
+        confirmation,
+        &NewVault::default(),
+    )?;
+    Ok(())
+}
+
+/// Create a vault the way `monica init` does, and report the label it was saved
+/// under — the name that was asked for, or the file stem when none was given.
+///
+/// The TIGA level is baked into the vault at creation: it is the default profile
+/// every entry inherits until someone changes it, so choosing it here is the one
+/// path that needs no unlocked session.
+pub fn initialize_with(
+    store: &ConfigStore,
+    path: &Path,
+    port: u16,
+    password: &str,
+    confirmation: &str,
+    options: &NewVault<'_>,
+) -> Result<String> {
     validate_new_password(password, confirmation)?;
+    let name = options.name.map(str::trim);
+    if let Some(name) = name {
+        validate_database_name(name)?;
+    }
     let path = absolute(path)?;
     if path == store.path || path.exists() {
         return Err(GatewayError::AlreadyExists);
     }
     let mut config = Config::new(path.clone());
     config.listen.set_port(port);
+    config.database_name = name.map(str::to_owned);
     config.validate()?;
     let _guard = store.acquire_broker_lock()?;
+    let mode = options.tiga.mode();
+    let label = config.database_name.clone().unwrap_or_else(|| {
+        path.file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
+    });
     store.update(|previous| {
         if let Some(previous) = &previous {
             crate::sync::remember_previous(store, previous)?;
         }
         ensure_parent(&path)?;
-        let vault = Vault::create(&path, password, TigaMode::Multi)?;
+        let vault = Vault::create(&path, password, mode)?;
         vault.lock()?;
         Ok((config, ()))
-    })
+    })?;
+    Ok(label)
 }
 
 pub struct NewConnection<'a> {
@@ -1047,6 +1126,99 @@ mod tests {
             allow_write: false,
             ttl_minutes: 60,
         }
+    }
+
+    #[test]
+    fn init_records_the_name_and_profile_and_every_profile_still_unlocks() {
+        use crate::test_support::PASSWORD;
+        for level in [TigaLevel::Sky, TigaLevel::Multi, TigaLevel::Power] {
+            let directory = tempfile::tempdir().unwrap();
+            let store = ConfigStore::new(directory.path().join("gateway.json"));
+            let path = directory.path().join("vault.mdbx");
+            let label = initialize_with(
+                &store,
+                &path,
+                47831,
+                PASSWORD,
+                PASSWORD,
+                &NewVault {
+                    name: Some("  工作库  "),
+                    tiga: level,
+                },
+            )
+            .unwrap();
+            assert_eq!(label, "工作库", "the label is kept without its padding");
+            assert_eq!(
+                store.load().unwrap().database_name.as_deref(),
+                Some("工作库")
+            );
+            // Reading it back out of the vault is the point. A `power` vault in particular
+            // has to take this CLI's password-only unlock, or the choice would be a trap.
+            let vault = Vault::open(&path, PASSWORD).unwrap();
+            assert_eq!(vault.tiga_default().unwrap(), level.mode(), "{level:?}");
+        }
+    }
+
+    #[test]
+    fn init_keeps_the_old_defaults_and_refuses_labels_nobody_can_read() {
+        use crate::test_support::PASSWORD;
+        let directory = tempfile::tempdir().unwrap();
+        let store = ConfigStore::new(directory.path().join("gateway.json"));
+        let path = directory.path().join("vault.mdbx");
+        assert_eq!(
+            initialize_with(
+                &store,
+                &path,
+                47831,
+                PASSWORD,
+                PASSWORD,
+                &NewVault::default(),
+            )
+            .unwrap(),
+            "vault"
+        );
+        let config = store.load().unwrap();
+        assert_eq!(config.database_name, None);
+        assert_eq!(
+            Vault::open(&path, PASSWORD)
+                .unwrap()
+                .tiga_default()
+                .unwrap(),
+            TigaMode::Multi
+        );
+        for blank in ["", "   ", "\u{7}"] {
+            assert_eq!(
+                initialize_with(
+                    &store,
+                    &directory.path().join(format!("blank-{}.mdbx", blank.len())),
+                    47831,
+                    PASSWORD,
+                    PASSWORD,
+                    &NewVault {
+                        name: Some(blank),
+                        ..Default::default()
+                    },
+                )
+                .err(),
+                Some(GatewayError::InvalidDatabaseName),
+                "a blank label has to be refused, not stored"
+            );
+        }
+        assert_eq!(
+            initialize_with(
+                &store,
+                &directory.path().join("too-long.mdbx"),
+                47831,
+                PASSWORD,
+                PASSWORD,
+                &NewVault {
+                    name: Some(&"名".repeat(400)),
+                    ..Default::default()
+                },
+            )
+            .err(),
+            Some(GatewayError::InvalidDatabaseName)
+        );
     }
 
     #[test]

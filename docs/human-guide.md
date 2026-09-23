@@ -367,7 +367,7 @@ $ echo $?
 | 查看 AI 调用审计 | `audit [--grant <授权名>] [--limit <条数>]` | — | 否 | 无 |
 | 解锁并运行代理 | `serve` | `u` / `s` / `unlock` | — | 主密码 |
 | 锁定代理 | `lock` | `lk` / `L` | — | 无 |
-| 建保险库 | `init` | `n` | 是 | 新主密码 ×2 |
+| 建保险库 | `init [--name <标签>] [--tiga sky\|multi\|power]` | `n` | 是 | 新主密码 ×2 |
 | 仅保存连接 | `connect` | `c` | 是 | 主密码 + Token |
 | 快速添加（连接+授权） | `add` | `a` | 是 | 主密码 + Token |
 | 编辑公开备注 | `note` | `e` | 是 | 主密码 |
@@ -384,6 +384,10 @@ $ echo $?
 | 撤销授权 | `revoke` | `rv` / `x` | 否 | 无 |
 | 打开另一个 MDBX | `open` | `o` | 是 | 主密码 |
 | 切换已记录数据库 | `use` | — | 是 | 该库主密码 |
+| 查看这份库的安全等级 | `tiga show` | — | 是 | 主密码 |
+| 调整这份库的安全等级 | `tiga set <sky\|multi\|power> [--reason <理由>]` | — | 是 | 主密码 |
+| 看数据库文件本身的格式与占用 | `mdbx check [<文件>]` | — | 否 | 无 |
+| 列出数据库文件及其旁边的文件 | `mdbx files [<文件>]` | — | 否 | 无 |
 | 浏览分类树 | `library` | `tree` | 是 | 主密码 |
 | 生成 MCP 配置（可顺带写进客户端自己的文件） | `settings [--install claude\|cursor\|codex\|vscode]` | `m` / `mcp-config` | 否 | 无 |
 | 验证工具发现 | `check` | `ck` / `p` | 否（需代理在跑） | 无 |
@@ -397,8 +401,8 @@ $ echo $?
 
 要点：
 
-- **会先停代理的操作**：任何需要读写保险库的动作（`init` / `connect` / `add` / `grant` / `refresh` / `note` / `token` / `open` / `use` / `library` / `category` / `move` / `rename-category` / `rename-entry` / `keys` / WebDAV 同步）。它们会等待在途请求结束，完成后**保持锁定**，要继续用 MCP 就得重新 `u`。
-- **不停代理的操作**：`ls` / `show` / `st` / `m` / `ck` / `call` / `cmds` / `rv`。
+- **会先停代理的操作**：任何需要读写保险库的动作（`init` / `connect` / `add` / `grant` / `refresh` / `note` / `token` / `open` / `use` / `library` / `category` / `move` / `rename-category` / `rename-entry` / `keys` / `tiga` / WebDAV 同步）。它们会等待在途请求结束，完成后**保持锁定**，要继续用 MCP 就得重新 `u`。
+- **不停代理的操作**：`ls` / `show` / `st` / `m` / `ck` / `call` / `cmds` / `rv` / `mdbx check` / `mdbx files`。后两条是实测过的：网关跑着时照跑，跑完 `status` 仍是 `running`（见 [5.6](#56-这个数据库文件到底是什么monica-mdbx)）。
 - 授权的 `operations` 里出现 `api_read` / `api_write` 意味着这份授权拥有该 Token 的完整 API 能力，范围必须是 `*`。给出这种授权前请把它当成"把 Token 交出去"来评估。
 - `rv` 不需要停代理，也**不会删除 `clients/` 下的 capability 文件**——它只把授权从配置里移除，文件留在原地。想让那份文件彻底消失要自己删。
 - 撤销后两侧的报文不同：已经启动的 MCP 桥带旧 capability 来调，得到 `unauthorized`（实测走 401）；本地 `monica call <授权名>` 先按名字找不到授权，得到 `not_found`。
@@ -482,6 +486,130 @@ Time            Grant        Operation    Scope               Stage       Result
 - **审计里没有任何秘密**：请求参数、响应正文、Token、主密码都不写入，人侧和 `--json` 都一样；`request_id` 只在 `--json` 里保留，表格不占那一列。测试 `audit_reader_returns_the_trail_the_gateway_wrote` 是直接对真实网关写出的文件断言这一点的。
 - 写不进审计时代理会**拒绝这次调用**（宁可不做，也不做无痕的事），所以「该有的行没有」本身就是信号。文件上限 8 MiB，到顶后新的调用同样会被拒——归档或删掉该文件即可，历史记录不影响任何功能。
 - 表格一次最多回 500 条，`--limit` 超出范围会在参数解析阶段就被拒（退出码 2），不会静默截断。
+
+### 5.5 这份库跑在哪个安全等级上：`monica tiga`
+
+保险库自带一份 TIGA 策略，三档：`sky`（最松）、`multi`（默认）、`power`（最严）。它管的是这台电脑上**允许做什么**：解锁要几个要素、会话多久锁、剪贴板能停留几秒、能不能导出、能不能打印、要不要可信硬件、审计记多细。`init --tiga` 只在建库这一次选档，之后看和改都在 `tiga` 这两条命令里。
+
+```sh
+monica tiga show
+monica tiga set multi
+monica tiga set sky --reason "shared laptop at the office, offline recovery only"
+```
+
+下面三段是 2026-09-23 用 release 二进制、系统临时目录里的一次性库跑出来的原文（例外 ID 是真的那一次留下的）。
+
+正常状态只有一行「Profile」：
+
+```text
+Profile     multi
+Compliance  meets the stored profile
+
+Setting         Value
+Unlock          1 factor(s), security key no
+Session         idle 10m · max 2h
+Clipboard       30s · secure no
+Export / print  yes / yes
+Device          standard
+Audit           sensitive operations
+```
+
+被调低过之后，登记名和实际跑的分成两行，被削弱的字段逐条列出：
+
+```text
+Stored profile     multi
+Effective profile  sky
+Compliance         reduced under a recorded exception
+
+Setting         Value
+Unlock          1 factor(s), security key no
+Session         idle 30m · max 12h
+Clipboard       1m · secure no
+Export / print  yes / yes
+Device          not specified
+Audit           security changes
+Policy warnings:
+policy exception 795a4073-a253-49d5-aa17-cd418d058168 weakens: idle_timeout_secs, max_lifetime_secs, lock_on_background, fresh_auth_window_secs, reveal_requires_fresh_auth, clipboard_ttl_secs, copy_requires_fresh_auth, attachment_temp_files_allowed, minimum_device_assurance, audit_level
+This vault keeps its multi name and runs sky until someone raises it back. `monica tiga show` repeats that for as long as the exception stands.
+```
+
+`--tiga power` 新建的库——等级没被调低，但标记是「需要整改」：
+
+```text
+Profile     power
+Compliance  below policy, remediation required
+
+Setting         Value
+Unlock          2 factor(s), security key yes
+Session         idle 2m · max 15m
+Clipboard       10s · secure yes
+Export / print  no / no
+Device          trusted hardware
+Audit           all decisions
+This vault does run its power policy; what falls short is how it is unlocked. power asks for more than a password alone, so the flag stays until an unlock method that strong is added.
+```
+
+实测出来的规则，不是设计意图：
+
+- **调高是一次普通变更**：登记名和生效名一起上去，`Compliance` 回到 `meets the stored profile`。
+- **调低会在库里留下一个例外**：登记名保留高的那档，`tiga show` 从此分成两行。**没有时限**，直到有人把等级调回去为止。
+- 调低**必须**给 `--reason`，只给空白（`--reason "   "`）也算没给；反过来，调高时给 `--reason` 会被拒——那条理由无处可存，留着只会让人以为它进了库。
+- `--reason` 里如果包含主密码本身（或它的 base64 / hex / URL 编码形式），命令直接拒绝，不会把主密码写进库。
+- **power 是单行道**：CLI 能把库升到 power、能读它，但**调不回来**。被拒时得到的是引擎自己的话：`The vault's own security policy refused this profile change. The profile you are leaving requires more assurance than a password-unlocked terminal can give, so raise or lower it in Monica for Android.`
+- 以 power 建好的库一建好就带「需要整改」标记：power 要的解锁方式是**密码 + 安全密钥的组合**且不留纯密码路径，而命令行建库只有密码这一项。CLI 没有管理解锁方式的命令，所以这个标记在命令行这边消不掉。
+- **代价**：Argon2id 的参数是按档位存在库里的，每次解锁都要重算一遍。power 是 256 MiB / 10 轮 / 4 并发，multi 是 64 MiB / 3 轮 / 2 并发，sky 是 8 MiB / 1 轮 / 1 并发。实测同一份 power 库：release 解锁一次约 1.4 秒，debug 构建 31 秒。
+- `tiga` 只在本地命令面：MCP 的工具列表里没有它（`monica cmds` 能看到它的语法，但两条命令都要主密码）。改等级只能由人在终端里做。
+
+还没实测到的两件事，别当成已知：改等级对**已经发出去的授权**有什么影响（采集用的一次性库里没有授权可试）；以及在真实 Android 端把一份 power 库调回来的完整路径。
+
+### 5.6 这个数据库文件到底是什么：`monica mdbx`
+
+`tiga` 管的是这份库**允许做什么**，`mdbx` 管的是它在磁盘上**是什么**：格式版本、结构版本、哪个下限的客户端还读得动、要不要升级、旁边挂着哪些文件、各占多少字节。两条命令全程只读，**不要主密码，也不停代理**。
+
+```sh
+monica mdbx check                 # 当前数据库
+monica mdbx files                 # 当前数据库所在目录
+monica mdbx check D:\vaults\monica.mdbx   # 换一个文件读，不会把它切成当前库
+```
+
+下面两段是 2026-09-23 用 release 二进制、系统临时目录里的一次性库跑出来的原文（路径按手册惯例写成 `%LOCALAPPDATA%\MonicaPass`）。
+
+```text
+File         %LOCALAPPDATA%\MonicaPass\gateway.mdbx
+Size         516.0 KiB
+Modified     2026-09-23 17:50
+Format       MDBX-2
+Schema       17 · this build 17
+Readable by  readers ≥ MDBX-1, writers ≥ MDBX-2
+Upgrade      not needed
+```
+
+```text
+Directory  %LOCALAPPDATA%\MonicaPass
+
+Type                   Item                Size       Modified
+vault file             gateway.mdbx        516.0 KiB  2026-09-23 17:50
+write-ahead log        gateway.mdbx-wal    0 B        2026-09-23 17:50
+write-ahead log index  gateway.mdbx-shm    32.0 KiB   2026-09-23 17:50
+attachments            gateway.mdbx.blobs  4 B        2026-09-23 17:51
+4 items, 548.0 KiB on disk
+The write-ahead log beside the vault is empty. Any connection to a WAL database creates it and its index file, this read-only listing included, so their presence proves the vault was opened here, not that something holds it now.
+```
+
+实测出来的规则，不是设计意图：
+
+- **`check` 会在旁边留下两个文件**。要读到文件头就得真打开一次数据库，于是 WAL 的 `-wal`（0 B）和 `-shm`（32.0 KiB）被建了出来；保险库文件本身逐字节不变。想只看目录不被添东西，用 `files`——它是纯 stat，实测删掉那对之后再跑，它们不会回来。
+- **空日志不等于没人占用**，这句提示是刻意写进去的。反过来，`-wal` 里真有字节才说明有客户端正在写、或者上次写被打断，那时候先让它收尾再同步。
+- `files` 只列保险库文件和引擎挂在它上面的那几个（`-wal` / `-shm` / `-journal` / `.blobs`）。同目录里的配置、锁文件、审计日志都不在表里，实测过。
+- 带附件的库会多出一行 `attachments`（`<库名>.mdbx.blobs`，是个目录），它的大小是把附件树累加出来的。**单文件同步带不走这个目录**，备份和 WebDAV 发布之前先看一眼这一行在不在。
+- 位置参数可以是当前库之外的另一个文件。它**只是读那个文件**，不会切换当前库，也不需要它的密码。
+- 两种拒绝分得很清：路径上没有文件 → `vault_file_missing`（「These commands only read, so they never create one.」），文件在但读不出 MDBX 头 → `vault_file_unreadable`（「…or its header failed the read-only integrity check. The file itself was not modified.」）。
+- 一个只被创建、从未初始化过的文件（里面还没有保险库文件头）不算读不出来，也不算空库：`initialized` 为假，`format_version` 与两个兼容下限都是 `null`，`--json` 里看得最直接。**这条来自针对真实引擎建出的这种文件跑的单元测试，不是命令行采集的**——命令行这边没有只建库不写东西的入口，所以整张表长什么样没实测过。
+- **它什么都不修**。名字里的 check 指的是文件头，不是 `mdbx_check`；不校验一致性、不回收页、不动 schema。`Upgrade yes` 只是预告下一个以写入方式打开它的客户端会做什么。
+
+`check` 与网关并存是实测过的：在 `127.0.0.1:47899` 上一个跑着的网关上跑这两条，都正常返回，跑完 `monica st` 仍是 `running`。
+
+目前拿不到的信息，是因为引擎没给只读的口子：`vault_id`、条目与分类的条数、附件树的真实字节。要这些得 `monica status` / `monica library`（那些要主密码、会停代理）。工作区根目录的 `mdbx-readonly-diagnostics-handoff.md` 把这几项连同上面那条「`check` 会建出 WAL 对」一起写成了给 mdbx 引擎侧的交接需求。
 
 ## 6. 设计一份合适的授权
 

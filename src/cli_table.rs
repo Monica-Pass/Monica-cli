@@ -8,6 +8,7 @@ use monica_pass_cli::model::Provider;
 use monica_pass_cli::tr;
 use monica_pass_cli::vault::KeyEntrySummary;
 use serde_json::Value;
+use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
 fn width(text: &str) -> usize {
@@ -704,18 +705,455 @@ fn library_rows(
     }
 }
 
+/// The security profile a vault runs under, and what it costs day to day.
+///
+/// The name the vault stores and the profile in force are one line while they agree and two
+/// once they do not, because lowering a profile deliberately leaves the higher name in the
+/// vault header. Printing only one of them would hide that the vault runs reduced.
+pub fn render_tiga(data: &Value, lang: Language) -> String {
+    let stored = string(data, "default_profile");
+    let policy = &data["policy"];
+    let effective = string(policy, "profile");
+    let mut fields: Vec<(&str, String)> = Vec::with_capacity(3);
+    if stored == effective {
+        fields.push((tr!(lang, TigaProfileLabel), effective.clone()));
+    } else {
+        fields.push((tr!(lang, TigaStoredProfile), stored));
+        fields.push((tr!(lang, TigaEffectiveProfile), effective.clone()));
+    }
+    fields.push((
+        tr!(lang, TigaCompliance),
+        tiga_compliance(&string(data, "compliance"), lang),
+    ));
+
+    let unlock = &policy["unlock"];
+    let session = &policy["session"];
+    let disclosure = &policy["disclosure"];
+    let egress = &policy["egress"];
+    let rows = vec![
+        vec![
+            tr!(lang, TigaSettingUnlock).to_string(),
+            tr!(
+                lang,
+                TigaUnlockLine,
+                factors = unlock["minimum_auth_factors"].as_u64().unwrap_or(0),
+                key = yes_no(
+                    unlock["security_key_required"].as_bool().unwrap_or(false),
+                    lang
+                )
+            ),
+        ],
+        vec![
+            tr!(lang, TigaSettingSession).to_string(),
+            tr!(
+                lang,
+                TigaSessionLine,
+                idle = tiga_duration(session["idle_timeout_secs"].as_u64().unwrap_or(0)),
+                max = tiga_duration(session["max_lifetime_secs"].as_u64().unwrap_or(0))
+            ),
+        ],
+        vec![
+            tr!(lang, TigaSettingClipboard).to_string(),
+            if disclosure["clipboard_allowed"].as_bool().unwrap_or(false) {
+                tr!(
+                    lang,
+                    TigaClipboardLine,
+                    ttl = tiga_duration(disclosure["clipboard_ttl_secs"].as_u64().unwrap_or(0)),
+                    secure = yes_no(
+                        disclosure["secure_clipboard_required"]
+                            .as_bool()
+                            .unwrap_or(false),
+                        lang
+                    )
+                )
+            } else {
+                tr!(lang, TigaClipboardBlocked).to_string()
+            },
+        ],
+        vec![
+            tr!(lang, TigaSettingEgress).to_string(),
+            format!(
+                "{} / {}",
+                yes_no(egress["export_allowed"].as_bool().unwrap_or(false), lang),
+                yes_no(egress["print_allowed"].as_bool().unwrap_or(false), lang)
+            ),
+        ],
+        vec![
+            tr!(lang, TigaSettingDevice).to_string(),
+            tiga_device(&string(policy, "minimum_device_assurance"), lang),
+        ],
+        vec![
+            tr!(lang, TigaSettingAudit).to_string(),
+            tiga_audit(&string(policy, "audit_level"), lang),
+        ],
+    ];
+    let headers = [tr!(lang, TigaColumnSetting), tr!(lang, TigaColumnValue)];
+
+    let label_width = fields
+        .iter()
+        .map(|(label, _)| width(label))
+        .max()
+        .unwrap_or(0);
+    let mut out = String::new();
+    for (label, value) in &fields {
+        out.push_str(&pad(label, label_width));
+        out.push_str("  ");
+        out.push_str(value);
+        out.push('\n');
+    }
+    out.push('\n');
+    out.push_str(&render_table(&headers, &rows));
+    // Engine wording is not translated, so it goes under a translated heading rather than
+    // inline, and `--json` keeps the full list.
+    let warnings: Vec<&str> = data["warnings"]
+        .as_array()
+        .map(|array| array.iter().filter_map(|value| value.as_str()).collect())
+        .unwrap_or_default();
+    if !warnings.is_empty() {
+        out.push('\n');
+        out.push_str(tr!(lang, TigaWarningsLabel));
+        out.push(':');
+        for warning in warnings.iter().take(MAX_WARNING_ROWS) {
+            out.push('\n');
+            out.push_str(warning);
+        }
+        let remaining = warnings.len() - MAX_WARNING_ROWS.min(warnings.len());
+        if remaining > 0 {
+            out.push('\n');
+            out.push_str(&tr!(lang, StatusSegmentMore, count = remaining));
+        }
+    }
+    out.trim_end().to_string()
+}
+
+/// A lowered profile reports one warning naming every field it weakens, so a handful is enough
+/// to read and the rest belongs to `--json`.
+const MAX_WARNING_ROWS: usize = 3;
+
+/// Engine seconds are policy values, not prose, so the smallest unit that reads cleanly wins.
+fn tiga_duration(secs: u64) -> String {
+    if secs == 0 {
+        return "0s".to_string();
+    }
+    if secs.is_multiple_of(3600) {
+        return format!("{}h", secs / 3600);
+    }
+    if secs.is_multiple_of(60) {
+        return format!("{}m", secs / 60);
+    }
+    format!("{}s", secs)
+}
+
+fn yes_no(value: bool, lang: Language) -> &'static str {
+    if value {
+        tr!(lang, KeyValueYes)
+    } else {
+        tr!(lang, KeyValueNo)
+    }
+}
+
+fn tiga_compliance(token: &str, lang: Language) -> String {
+    match token {
+        "exception" => tr!(lang, TigaComplianceException).to_string(),
+        "remediation-required" => tr!(lang, TigaComplianceRemediation).to_string(),
+        _ => tr!(lang, TigaComplianceCompliant).to_string(),
+    }
+}
+
+fn tiga_device(token: &str, lang: Language) -> String {
+    match token {
+        "trusted-hardware" => tr!(lang, TigaDeviceTrusted).to_string(),
+        "standard" => tr!(lang, TigaDeviceStandard).to_string(),
+        _ => tr!(lang, TigaDeviceUnknown).to_string(),
+    }
+}
+
+fn tiga_audit(token: &str, lang: Language) -> String {
+    match token {
+        "all-decisions" => tr!(lang, TigaAuditAll).to_string(),
+        "sensitive-operations" => tr!(lang, TigaAuditSensitive).to_string(),
+        _ => tr!(lang, TigaAuditSecurityChanges).to_string(),
+    }
+}
+
+/// The header a vault file carries for itself, plus how much disk it takes.
+///
+/// `Schema` carries the target of this build beside the stored value because the two are the
+/// whole reason a client will rewrite the file the next time something opens it for writing.
+pub fn render_mdbx_check(data: &Value, lang: Language) -> String {
+    let format_version = string(data, "format_version");
+    let reader = string(data, "min_reader_version");
+    let writer = string(data, "min_writer_version");
+    let schema = data["schema_version"].as_u64();
+    let target_schema = data["target_schema_version"].as_u64().unwrap_or(0);
+    let fields: Vec<(&str, String)> = vec![
+        (tr!(lang, MdbxSettingFile), string(data, "path")),
+        (
+            tr!(lang, MdbxSettingSize),
+            human_bytes(data["size_bytes"].as_u64().unwrap_or(0)),
+        ),
+        (
+            tr!(lang, MdbxSettingModified),
+            stored_time(data["modified_unix"].as_i64().unwrap_or(0)),
+        ),
+        (
+            tr!(lang, MdbxSettingFormat),
+            value_or_none(&format_version, lang),
+        ),
+        (
+            tr!(lang, MdbxSettingSchema),
+            match schema {
+                Some(schema) => tr!(
+                    lang,
+                    MdbxSchemaLine,
+                    schema = schema,
+                    target = target_schema
+                ),
+                None => tr!(lang, MdbxValueNone).to_string(),
+            },
+        ),
+        (
+            tr!(lang, MdbxSettingCompat),
+            if reader.is_empty() && writer.is_empty() {
+                tr!(lang, MdbxValueNone).to_string()
+            } else {
+                tr!(
+                    lang,
+                    MdbxCompatLine,
+                    reader = value_or_none(&reader, lang),
+                    writer = value_or_none(&writer, lang)
+                )
+            },
+        ),
+        (
+            tr!(lang, MdbxSettingUpgrade),
+            if data["requires_upgrade"].as_bool().unwrap_or(false) {
+                tr!(
+                    lang,
+                    MdbxUpgradePending,
+                    from = schema.unwrap_or(target_schema),
+                    to = target_schema
+                )
+            } else {
+                tr!(lang, MdbxUpgradeNone).to_string()
+            },
+        ),
+    ];
+    let label_width = fields
+        .iter()
+        .map(|(label, _)| width(label))
+        .max()
+        .unwrap_or(0);
+    let mut out = String::new();
+    for (label, value) in &fields {
+        out.push_str(&pad(label, label_width));
+        out.push_str("  ");
+        out.push_str(value);
+        out.push('\n');
+    }
+    out.trim_end().to_string()
+}
+
+/// Every file the vault is made of, named by what it is for.
+///
+/// The attachment store is what single-file sync refuses to carry, so the listing is also the
+/// answer to "why did sync say no". The write-ahead-log pair is here too, and a reader has to
+/// know that an empty log means nothing more than "this file has been opened" — any WAL
+/// connection creates the pair, including the one that printed this table.
+pub fn render_mdbx_files(data: &Value, lang: Language) -> String {
+    let entries: Vec<&Value> = data
+        .as_array()
+        .map(|array| array.iter().collect())
+        .unwrap_or_default();
+    let headers = [
+        tr!(lang, TableColumnKind),
+        tr!(lang, TableColumnItem),
+        tr!(lang, TableColumnSize),
+        tr!(lang, MdbxSettingModified),
+    ];
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(entries.len());
+    let mut total = 0u64;
+    for entry in &entries {
+        total += entry["size_bytes"].as_u64().unwrap_or(0);
+        rows.push(vec![
+            mdbx_role(string(entry, "role"), lang),
+            Path::new(&string(entry, "path"))
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            entry["size_bytes"]
+                .as_u64()
+                .map(human_bytes)
+                .unwrap_or_else(|| tr!(lang, MdbxSizeUncounted).to_string()),
+            stored_time(entry["modified_unix"].as_i64().unwrap_or(0)),
+        ]);
+    }
+    let directory = entries
+        .first()
+        .map(|entry| {
+            let path = string(entry, "path");
+            Path::new(&path)
+                .parent()
+                .map(|parent| parent.display().to_string())
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+    let mut out = format!("{}  {}\n\n", tr!(lang, MdbxDirectoryLabel), directory);
+    out.push_str(&render_table(&headers, &rows));
+    out.push('\n');
+    out.push_str(&tr!(
+        lang,
+        MdbxTotalLine,
+        count = entries.len(),
+        bytes = human_bytes(total)
+    ));
+    out.trim_end().to_string()
+}
+
+/// A stored value a fresh or unreadable header leaves blank.
+fn value_or_none(value: &str, lang: Language) -> String {
+    if value.is_empty() {
+        tr!(lang, MdbxValueNone).to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn mdbx_role(token: String, lang: Language) -> String {
+    match token.as_str() {
+        "vault" => tr!(lang, MdbxRoleVault).to_string(),
+        "wal" => tr!(lang, MdbxRoleWal).to_string(),
+        "shm" => tr!(lang, MdbxRoleShm).to_string(),
+        "journal" => tr!(lang, MdbxRoleJournal).to_string(),
+        "blobs" => tr!(lang, MdbxRoleBlobs).to_string(),
+        _ => token,
+    }
+}
+
+/// Last write, in local time and with the year, because a vault untouched since last year is
+/// the point of asking.
+fn stored_time(timestamp: i64) -> String {
+    Local
+        .timestamp_opt(timestamp, 0)
+        .single()
+        .map(|moment| moment.format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| timestamp.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         KeyEntrySummary, MAX_WAITING_ROWS, Value, render_audit, render_connection_detail,
-        render_connections, render_databases, render_keys, render_library, render_status,
-        render_webdav_list, render_webdav_status, short_segment_name,
+        render_connections, render_databases, render_keys, render_library, render_mdbx_check,
+        render_mdbx_files, render_status, render_tiga, render_webdav_list, render_webdav_status,
+        short_segment_name,
     };
     use monica_pass_cli::i18n::Language;
     use monica_pass_cli::keys::payload::{LOGIN_TYPE_GPG, LOGIN_TYPE_SSH};
     use monica_pass_cli::tr;
     use serde_json::json;
 
+    /// Values as the engine reported them for a `multi` vault lowered to `sky`.
+    fn tiga_report(compliance: &str, stored: &str, effective: &str) -> Value {
+        let base = match effective {
+            "sky" => json!({
+                "profile": "sky",
+                "unlock": {"minimum_auth_factors": 1, "security_key_required": false},
+                "session": {"idle_timeout_secs": 1800, "max_lifetime_secs": 43200},
+                "disclosure": {
+                    "clipboard_allowed": true,
+                    "clipboard_ttl_secs": 60,
+                    "secure_clipboard_required": false
+                },
+                "egress": {"export_allowed": true, "print_allowed": true},
+                "minimum_device_assurance": "unknown",
+                "audit_level": "security-changes"
+            }),
+            "power" => json!({
+                "profile": "power",
+                "unlock": {"minimum_auth_factors": 2, "security_key_required": true},
+                "session": {"idle_timeout_secs": 120, "max_lifetime_secs": 900},
+                "disclosure": {
+                    "clipboard_allowed": true,
+                    "clipboard_ttl_secs": 10,
+                    "secure_clipboard_required": true
+                },
+                "egress": {"export_allowed": false, "print_allowed": false},
+                "minimum_device_assurance": "trusted-hardware",
+                "audit_level": "all-decisions"
+            }),
+            _ => json!({
+                "profile": "multi",
+                "unlock": {"minimum_auth_factors": 1, "security_key_required": false},
+                "session": {"idle_timeout_secs": 600, "max_lifetime_secs": 7200},
+                "disclosure": {
+                    "clipboard_allowed": true,
+                    "clipboard_ttl_secs": 30,
+                    "secure_clipboard_required": false
+                },
+                "egress": {"export_allowed": true, "print_allowed": true},
+                "minimum_device_assurance": "standard",
+                "audit_level": "sensitive-operations"
+            }),
+        };
+        let warnings = if compliance == "exception" {
+            json!([
+                "policy exception 1616a51d weakens: idle_timeout_secs, max_lifetime_secs, audit_level"
+            ])
+        } else {
+            json!([])
+        };
+        json!({
+            "default_profile": stored,
+            "policy": base,
+            "compliance": compliance,
+            "exception_id": null,
+            "warnings": warnings
+        })
+    }
+
+    #[test]
+    fn tiga_reports_one_profile_until_the_vault_runs_reduced() {
+        let plain = render_tiga(&tiga_report("compliant", "multi", "multi"), Language::En);
+        assert_eq!(
+            plain
+                .lines()
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .collect::<Vec<_>>(),
+            ["Profile", "multi"],
+            "a vault that answers to its own name gets one line, not two"
+        );
+        assert!(
+            !plain.contains("Stored"),
+            "a second row with no gap to explain is noise: {plain}"
+        );
+        assert!(plain.contains("idle 10m · max 2h"), "{plain}");
+        assert!(plain.contains("30s · secure no"), "{plain}");
+        assert!(plain.contains("Export / print  yes / yes"), "{plain}");
+        assert!(!plain.contains("Policy warnings"), "{plain}");
+
+        let reduced = render_tiga(&tiga_report("exception", "multi", "sky"), Language::ZhCn);
+        assert!(reduced.contains("登记等级  multi"), "{reduced}");
+        assert!(reduced.contains("生效等级  sky"), "{reduced}");
+        assert!(
+            reduced.contains("因已记录的例外而降低"),
+            "the gap between the two names is the point: {reduced}"
+        );
+        assert!(
+            reduced.contains("idle_timeout_secs"),
+            "which fields the exception weakened is worth reading: {reduced}"
+        );
+
+        let power = render_tiga(&tiga_report("compliant", "power", "power"), Language::En);
+        assert!(
+            power.contains("Export / print  no / no")
+                && power.contains("trusted hardware")
+                && power.contains("2 factor(s), security key yes"),
+            "{power}"
+        );
+    }
     #[test]
     fn connections_align_cjk_and_hide_the_default_api_base() {
         let connections = json!([
@@ -1221,5 +1659,180 @@ mod tests {
                 .unwrap(),
             "WebDAV    未启用"
         );
+    }
+
+    /// A header sheet as `mdbx::check` serializes it: this build reads schema `target`, the file
+    /// carries `stored`. Measured against the engine: a file that was created but never
+    /// initialized reports no format, no schema and no compatibility floor at all.
+    fn mdbx_check_fixture(stored: Option<u64>, target: u64) -> Value {
+        json!({
+            "path": "D:\\Apps\\MonicaCLI\\data\\vault.mdbx",
+            "size_bytes": 24_576,
+            "modified_unix": 1_777_000_000,
+            "initialized": stored.is_some(),
+            "format_version": stored.map(|_| "MDBX-2"),
+            "schema_version": stored,
+            "min_reader_version": stored.map(|_| "0.12.0"),
+            "min_writer_version": stored.map(|_| "0.13.0"),
+            "requires_upgrade": stored.unwrap_or(target) != target,
+            "unknown_critical_extensions": false,
+            "target_format_version": "MDBX-2",
+            "target_schema_version": target,
+        })
+    }
+
+    /// A label sheet, so every row is read as `label → value`.
+    fn sheet(rendered: &str) -> Vec<(String, String)> {
+        rendered
+            .lines()
+            .map(|line| {
+                let (label, value) = line.split_once("  ").unwrap_or((line, ""));
+                (label.trim_end().to_string(), value.trim_start().to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_vault_header_sheet_keeps_the_stored_schema_apart_from_this_build() {
+        let rendered = render_mdbx_check(&mdbx_check_fixture(Some(12), 12), Language::En);
+        let mut rows = sheet(&rendered);
+        // The last write is local time and the runner's zone is not ours, so it is pulled out
+        // of the sheet and checked on its own below.
+        let modified = std::mem::replace(&mut rows[2], ("Modified".into(), String::new()));
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "File".into(),
+                    r"D:\Apps\MonicaCLI\data\vault.mdbx".to_string()
+                ),
+                ("Size".into(), "24.0 KiB".to_string()),
+                ("Modified".into(), String::new()),
+                ("Format".into(), "MDBX-2".to_string()),
+                ("Schema".into(), "12 · this build 12".to_string()),
+                (
+                    "Readable by".into(),
+                    "readers ≥ 0.12.0, writers ≥ 0.13.0".to_string()
+                ),
+                ("Upgrade".into(), "not needed".to_string()),
+            ],
+            "{rendered}"
+        );
+        assert!(modified.1.starts_with("2026-04-2"), "{rendered}");
+        assert!(
+            !modified.1.starts_with("1777"),
+            "an epoch count is not an answer: {rendered}"
+        );
+
+        // The gap between the two schema numbers is the whole warning, so it stays visible.
+        let lowered = render_mdbx_check(&mdbx_check_fixture(Some(11), 12), Language::En);
+        assert_eq!(
+            sheet(&lowered)[6],
+            ("Upgrade".to_string(), "yes, 11 → 12".to_string()),
+            "{lowered}"
+        );
+        let zh = render_mdbx_check(&mdbx_check_fixture(Some(11), 12), Language::ZhCn);
+        assert!(zh.contains("需要，11 → 12"), "{zh}");
+        assert!(zh.contains("11 · 当前引擎 12"), "{zh}");
+    }
+
+    /// A database file that was created but never initialized has no header at all. Blank rows
+    /// would read as a renderer bug, so every absent value says `none`.
+    #[test]
+    fn a_vault_without_a_header_renders_blanks_as_none() {
+        let rendered = render_mdbx_check(&mdbx_check_fixture(None, 12), Language::En);
+        let rows = sheet(&rendered);
+        assert_eq!(
+            rows.iter()
+                .map(|(label, value)| (label.as_str(), value.as_str()))
+                .skip(3)
+                .collect::<Vec<_>>(),
+            vec![
+                ("Format", "none"),
+                ("Schema", "none"),
+                ("Readable by", "none"),
+                ("Upgrade", "not needed"),
+            ],
+            "{rendered}"
+        );
+        assert_eq!(
+            sheet(&render_mdbx_check(
+                &mdbx_check_fixture(None, 12),
+                Language::ZhCn
+            ))[3]
+                .1,
+            "无"
+        );
+    }
+
+    fn mdbx_files_fixture() -> Value {
+        json!([
+            {
+                "role": "vault",
+                "path": "/home/m/.monica/vault.mdbx",
+                "directory": false,
+                "size_bytes": 24_576,
+                "modified_unix": 1_777_000_000
+            },
+            {
+                "role": "wal",
+                "path": "/home/m/.monica/vault.mdbx-wal",
+                "directory": false,
+                "size_bytes": 0,
+                "modified_unix": 1_777_000_000
+            },
+            {
+                "role": "shm",
+                "path": "/home/m/.monica/vault.mdbx-shm",
+                "directory": false,
+                "size_bytes": 32_768,
+                "modified_unix": 1_777_000_000
+            },
+            {
+                "role": "blobs",
+                "path": "/home/m/.monica/vault.mdbx.blobs",
+                "directory": true,
+                "size_bytes": null,
+                "modified_unix": 1_777_000_000
+            },
+        ])
+    }
+
+    #[test]
+    fn the_file_listing_names_every_part_and_sums_only_what_it_measured() {
+        let rendered = render_mdbx_files(&mdbx_files_fixture(), Language::En);
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert_eq!(lines[0], "Directory  /home/m/.monica");
+        assert_eq!(lines[1], "");
+        assert_eq!(
+            lines[2].split_whitespace().collect::<Vec<_>>(),
+            ["Type", "Item", "Size", "Modified"],
+            "{rendered}"
+        );
+        let body = &lines[3..7];
+        for row in body {
+            assert_eq!(
+                super::width(row),
+                super::width(body[0]),
+                "a ragged row: {row}"
+            );
+        }
+        assert!(body[0].starts_with("vault file"), "{rendered}");
+        // The column is padded, so the basename is followed by blanks rather than by the next
+        // path component: only the name is repeated, the directory is stated once above.
+        assert!(body[0].contains("vault.mdbx "), "basename only: {rendered}");
+        assert!(!body[0].contains("/home/"), "{rendered}");
+        assert!(
+            body[1].contains("0 B"),
+            "an empty log is a fact: {rendered}"
+        );
+        assert!(body[3].starts_with("attachments"), "{rendered}");
+        assert!(body[3].contains("not counted"), "{rendered}");
+        assert_eq!(lines[7], "4 items, 56.0 KiB on disk");
+        assert_eq!(rendered.lines().count(), 8, "{rendered}");
+
+        let zh = render_mdbx_files(&mdbx_files_fixture(), Language::ZhCn);
+        assert!(zh.starts_with("所在目录  /home/m/.monica"), "{zh}");
+        assert!(zh.contains("共 4 项，占用 56.0 KiB"), "{zh}");
     }
 }

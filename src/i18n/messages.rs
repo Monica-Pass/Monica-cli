@@ -441,6 +441,13 @@ catalog! {
     CliServeHelp => ["Unlock and run until Ctrl+C, lock, or five-minute session expiry", "解锁并运行代理，直到 Ctrl+C、锁定或 5 分钟会话到期"],
     CliLockHelp => ["Lock the running gateway and clear its vault session", "锁定正在运行的代理并清除保险库会话"],
     CliStatusHelp => ["Show connection and grant metadata", "显示连接和授权元数据"],
+    CliAuditHelp => ["Read the local gateway audit trail: which grant ran which operation, and how it ended", "读取本地代理的审计记录：哪个授权执行了哪个操作，以及结果如何"],
+    CliTigaHelp => ["Read or change the security profile this vault runs on", "查看或调整该保险库当前运行的安全等级"],
+    CliTigaShowHelp => ["Show the stored profile, the one actually in force, and what each costs you", "显示登记等级、实际生效的等级，以及每个等级的代价"],
+    CliTigaSetHelp => ["Move the vault to another profile. Lowering it records a reason in the vault", "将保险库切换到其他安全等级；降低等级会把原因记录进保险库"],
+    CliMdbxHelp => ["Inspect the database file itself: its format, its parts, its size. Never unlocks or writes", "查看数据库文件本身：格式、组成部分和大小。全程不解密、不写入"],
+    CliMdbxCheckHelp => ["Read the format header of a vault file and how much disk it takes", "读取保险库文件的格式头，以及它占用的磁盘空间"],
+    CliMdbxFilesHelp => ["List the vault file and every file beside it, with the size of each", "列出保险库文件及其旁边的每个文件，并显示各自大小"],
     CliMcpHelp => ["Start the AI-facing MCP stdio bridge; never prompts for service credentials", "启动供 AI 调用的 MCP stdio 接口；不会询问服务凭据"],
     CliLoginHelp => ["Verify login and save the URL and username; a typed password is kept on this computer only", "验证登录并保存地址和用户名；输入的密码仅保存在本机"],
     CliDavListHelp => ["List one folder relative to the saved WebDAV URL", "列出已保存 WebDAV 地址下的一个文件夹"],
@@ -469,11 +476,13 @@ catalog! {
     CliOptionsHeading => ["Options", "选项"],
     CliArgumentsHeading => ["Arguments", "参数"],
     CliNameHelp => ["Connection or grant name", "连接或授权的名称"],
+    CliInitNameHelp => ["Label shown by `monica databases`; the file keeps the name you gave it", "`monica databases` 显示的标签；文件名保持你给出的名称"],
     CliKeyTitleHelp => ["Name for this key entry; Chinese is allowed", "密钥条目的名称；可使用中文"],
     CliCategoryHelp => ["Native category ID; omit to store the entry in its default category", "原生分类 ID；省略则存入对应的默认分类"],
     CliNoteValueHelp => ["Public purpose note; do not include passwords or tokens", "公开用途备注；不要填写密码或 Token"],
     CliServeAfterHelp => ["Keep this terminal serving the gateway after setup", "完成设置后继续在本终端运行代理"],
     CliVaultHelp => ["Local MDBX file path", "本地 MDBX 文件路径"],
+    CliMdbxVaultHelp => ["Vault file to read; defaults to the current database", "要读取的保险库文件；省略则使用当前数据库"],
     CliClientHelp => ["Generated client capability file", "程序生成的客户端授权文件"],
     CliPortHelp => ["Local gateway port, 1024–65535; default 47831", "本地代理端口，1024–65535；默认 47831"],
     CliProviderHelp => ["Provider: github or gitlab; quick add defaults to github", "服务类型：github 或 gitlab；快速添加默认 github"],
@@ -530,7 +539,7 @@ catalog! {
     CliNoteUpdated => ["Updated the AI-visible note for '{name}'. Credential and grant permissions are unchanged.", "已更新“{name}”的 AI 可见备注。凭据与授权权限保持不变。"],
     CliOpeningLocal => ["Opening a managed copy. Previous local files are preserved; old AI grants will be cleared.", "将打开独立副本。原本地文件会保留，旧 AI 授权会清除。"],
     CliOpenedLocal => ["Opened MDBX vault; recovered {count} gateway connections. Create fresh grants, then unlock the gateway.", "已打开 MDBX，恢复 {count} 个网关连接。请创建新授权，再解锁代理。"],
-    CliVaultCreated => ["Created MDBX3 vault: {vault}\nConfiguration: {config}", "已创建 MDBX3 保险库：{vault}\n配置文件：{config}"],
+    CliVaultCreated => ["Created MDBX3 vault: {vault}\nConfiguration: {config}\nDatabase name: {name} · Tiga: {tiga}", "已创建 MDBX3 保险库：{vault}\n配置文件：{config}\n数据库名称：{name} · Tiga：{tiga}"],
     CliConnectionStored => ["Stored connection '{name}' in the encrypted vault.", "连接“{name}”已保存到加密保险库。"],
     CliClientSaved => ["Client capability saved to {path}. Add the JSON above to your MCP client.", "客户端授权已保存到 {path}。将以上 JSON 加入 AI 客户端的 MCP 配置。"],
     CliGrantRevoked => ["Revoked grant '{name}'. Its client capability no longer authorizes calls.", "已撤销授权“{name}”。其客户端凭据不再允许调用。"],
@@ -562,6 +571,7 @@ catalog! {
     SyncDownloaded => ["Remote changes downloaded to the local vault.", "远端更改已下载到本地保险库。"],
     ErrorInvalidRequest => ["The request is invalid or contains unsupported fields.", "请求无效，或包含不支持的字段。"],
     ErrorInvalidNote => ["The public note must be plain text of at most 1024 UTF-8 bytes, without control characters.", "公开备注最多 1024 UTF-8 字节，必须为不含控制字符的纯文本。"],
+    ErrorInvalidDatabaseName => ["The database name must be plain text of at most 1024 UTF-8 bytes, without control characters.", "数据库名称最多 1024 UTF-8 字节，必须为不含控制字符的纯文本。"],
     ErrorSensitiveMetadata => ["AI-visible fields contain a credential or vault password. Remove the secret from the name, note or other public fields.", "AI 可见字段包含凭据或保险库密码。请从名称、备注及其他公开字段中移除秘密。"],
     ErrorRepositoryRequired => ["This grant allows multiple repositories. Specify an exact repository from the connection catalog.", "此授权包含多个仓库。请从连接目录中指定一个精确仓库。"],
     ErrorInvalidConfig => ["The configuration is invalid. Check the local configuration file.", "配置无效，请检查本地配置文件。"],
@@ -604,9 +614,14 @@ catalog! {
     ErrorSyncSegmentCorrupt => ["A remote segment does not match the digest in its name, or its stored bytes changed after upload. Nothing was applied.", "远端分段与其文件名中的摘要不一致，或上传后存储的字节已改变。未应用任何数据。"],
     ErrorSyncOutcomeUnknown => ["The upload outcome is unknown. Compare both copies before retrying: sync an existing connection, or open the remote file after an initial publish.", "上传结果未知，请先比较两份数据。已有同步连接可执行同步；首次发布后请打开远端文件核对。"],
     ErrorInvalidVault => ["The downloaded file is not a supported MDBX vault or its integrity check failed.", "下载的文件不是受支持的 MDBX 保险库，或完整性检查失败。"],
+    ErrorVaultFileUnreadable => ["This file could not be read as an MDBX vault, or its header failed the read-only integrity check. The file itself was not modified.", "该文件无法作为 MDBX 保险库读取，或其文件头未通过只读完整性检查。文件本身未被修改。"],
+    ErrorVaultFileMissing => ["There is no database file at that path. These commands only read, so they never create one.", "该路径下没有数据库文件。这些命令只做读取，不会替你创建。"],
     ErrorVaultSchemaUnsupported => ["This vault uses an incompatible unlock schema, such as legacy Android MDBX-1. Keep the original file and use a native MDBX3 vault.", "此保险库的解锁结构与当前引擎不兼容，例如旧 Android MDBX-1。请保留原文件，改用原生 MDBX3 保险库。"],
     ErrorExternalBlobsUnsupported => ["This vault needs external attachment files. Single-file WebDAV sync cannot transfer those files.", "此保险库依赖外部附件，单文件 WebDAV 同步无法传输这些附件。"],
     ErrorVaultConnectionsInvalid => ["This vault has too many or ambiguous gateway connections. Resolve them in Monica before importing.", "此保险库中的网关连接过多或存在歧义，请先在 Monica 中处理后再导入。"],
+    ErrorTigaReasonRequired => ["Lowering the security profile is recorded in the vault as an exception, so it needs a reason. Repeat the command with --reason and say why.", "降低安全等级会作为例外写入保险库，因此必须说明原因。请带 --reason 重新执行并写明理由。"],
+    ErrorTigaReasonNotApplicable => ["This change raises the security profile, so there is nothing to justify. Repeat the command without --reason.", "这次变更是提高安全等级，没有需要说明的理由。请去掉 --reason 重新执行。"],
+    ErrorTigaChangeDenied => ["The vault's own security policy refused this profile change. The profile you are leaving requires more assurance than a password-unlocked terminal can give, so raise or lower it in Monica for Android.", "保险库自身的安全策略拒绝了这次等级变更。当前等级要求的设备与会话保证高于仅口令解锁的终端，请在 Monica for Android 中调整。"],
     ErrorRemoteNotConfigured => ["No WebDAV vault is connected. Open a remote MDBX file or publish the local vault first.", "尚未连接 WebDAV 保险库。请先打开远端 MDBX，或发布本地保险库。"],
     ErrorKeyPayloadTooLarge => ["The key entry payload exceeds the supported size limit. Re-export a smaller key certificate.", "密钥条目的内容超出支持上限。请重新导出更小的密钥证书。"],
     ErrorKeyEntryTypeMismatch => ["The entry is not a key entry of the requested kind, or it was not created as one.", "该条目不是所请求类型的密钥条目，或它并非以此方式创建。"],
@@ -751,5 +766,100 @@ catalog! {
     ErrorProtectedCollection => [
         "This is the folder Monica for Android saves new entries into. It can hold entries but cannot be deleted or moved.",
         "这是 Monica Android 端保存新条目的分类。它可以存放条目，但无法被删除或移动。"
+    ],
+    CliTigaReduced => [
+        "This vault keeps its {stored} name and runs {profile} until someone raises it back. `monica tiga show` repeats that for as long as the exception stands.",
+        "该保险库保留 {stored} 名称、实际按 {profile} 运行，直到有人把等级调回。在例外撤销前，`monica tiga show` 会持续报告这一状态。"
+    ],
+    CliTigaRemediation => [
+        "This vault does run its {profile} policy; what falls short is how it is unlocked. {profile} asks for more than a password alone, so the flag stays until an unlock method that strong is added.",
+        "该保险库确实按 {profile} 策略运行，不足之处是解锁方式：{profile} 要求的不只是密码。补上足够强的解锁方式后，这个标记才会消除。"
+    ],
+    TigaProfileLabel => ["Profile", "运行等级"],
+    TigaStoredProfile => ["Stored profile", "登记等级"],
+    TigaEffectiveProfile => ["Effective profile", "生效等级"],
+    TigaCompliance => ["Compliance", "合规状态"],
+    TigaComplianceCompliant => [
+        "meets the stored profile",
+        "与登记等级一致"
+    ],
+    TigaComplianceException => [
+        "reduced under a recorded exception",
+        "因已记录的例外而降低"
+    ],
+    TigaComplianceRemediation => [
+        "below policy, remediation required",
+        "低于策略，需要整改"
+    ],
+    TigaColumnSetting => ["Setting", "项目"],
+    TigaColumnValue => ["Value", "取值"],
+    TigaSettingUnlock => ["Unlock", "解锁"],
+    TigaSettingSession => ["Session", "会话"],
+    TigaSettingClipboard => ["Clipboard", "剪贴板"],
+    TigaSettingEgress => ["Export / print", "导出 / 打印"],
+    TigaSettingDevice => ["Device", "设备保证"],
+    TigaSettingAudit => ["Audit", "审计"],
+    TigaUnlockLine => [
+        "{factors} factor(s), security key {key}",
+        "需 {factors} 个要素，安全密钥 {key}"
+    ],
+    TigaSessionLine => ["idle {idle} · max {max}", "空闲 {idle} · 最长 {max}"],
+    TigaClipboardLine => [
+        "{ttl} · secure {secure}",
+        "{ttl} · 安全剪贴板 {secure}"
+    ],
+    TigaClipboardBlocked => ["copying disabled", "禁止复制"],
+    TigaDeviceTrusted => ["trusted hardware", "可信硬件"],
+    TigaDeviceStandard => ["standard", "标准"],
+    TigaDeviceUnknown => ["not specified", "未要求"],
+    TigaAuditAll => ["all decisions", "全部决策"],
+    TigaAuditSensitive => ["sensitive operations", "敏感操作"],
+    TigaAuditSecurityChanges => ["security changes", "仅安全变更"],
+    TigaWarningsLabel => ["Policy warnings", "策略提示"],
+    MdbxSettingFile => ["File", "文件"],
+    MdbxDirectoryLabel => ["Directory", "所在目录"],
+    MdbxSettingSize => ["Size", "大小"],
+    MdbxSettingModified => ["Modified", "最后修改"],
+    MdbxSettingFormat => ["Format", "格式版本"],
+    MdbxSettingSchema => ["Schema", "结构版本"],
+    MdbxSettingCompat => ["Readable by", "兼容下限"],
+    MdbxSettingUpgrade => ["Upgrade", "升级"],
+    MdbxValueNone => ["none", "无"],
+    MdbxSchemaLine => ["{schema} · this build {target}", "{schema} · 当前引擎 {target}"],
+    MdbxCompatLine => [
+        "readers ≥ {reader}, writers ≥ {writer}",
+        "读取端 ≥ {reader}，写入端 ≥ {writer}"
+    ],
+    MdbxUpgradeNone => ["not needed", "不需要"],
+    MdbxUpgradePending => ["yes, {from} → {to}", "需要，{from} → {to}"],
+    MdbxRoleVault => ["vault file", "保险库文件"],
+    MdbxRoleWal => ["write-ahead log", "预写日志"],
+    MdbxRoleShm => ["write-ahead log index", "预写日志索引"],
+    MdbxRoleJournal => ["rollback journal", "回滚日志"],
+    MdbxRoleBlobs => ["attachments", "附件存储"],
+    MdbxSizeUncounted => ["not counted", "未统计"],
+    MdbxTotalLine => [
+        "{count} items, {bytes} on disk",
+        "共 {count} 项，占用 {bytes}"
+    ],
+    MdbxUninitialized => [
+        "This file is a database but holds no vault header: it was created and never initialized. Nothing here was written to it.",
+        "该文件是一个数据库，但没有保险库文件头：只被创建、从未初始化。本次没有向它写入任何内容。"
+    ],
+    MdbxUpgradeNeeded => [
+        "The next client that opens this vault for writing will move its schema from {from} to {to}. This command only read the file, so copy it first if another device still syncs from it.",
+        "下一个以写入方式打开该保险库的客户端会把结构版本从 {from} 升到 {to}。本命令只读取文件；如果还有其他设备在同步它，请先复制一份。"
+    ],
+    MdbxUnknownExtensions => [
+        "This vault marks critical extensions this engine does not understand, so no client should open it for writing. Nothing here was written to it.",
+        "该保险库标记了当前引擎无法识别的关键扩展，因此任何客户端都不应以写入方式打开它。本次没有向它写入任何内容。"
+    ],
+    MdbxWalActive => [
+        "The write-ahead log holds {bytes}, so a client is writing to this vault right now or was interrupted mid-write. Let it finish and close before syncing.",
+        "预写日志中仍有 {bytes}，说明此刻有客户端正在写入这个保险库，或上次写入时被中断。请先让它完成并关闭，再执行同步。"
+    ],
+    MdbxWalIdle => [
+        "The write-ahead log beside the vault is empty. Any connection to a WAL database creates it and its index file, this read-only listing included, so their presence proves the vault was opened here, not that something holds it now.",
+        "保险库旁边的预写日志是空的。任何连接打开 WAL 数据库时都会创建它和它的索引文件，包括本次只读列出；因此它们只说明该库在此被打开过，不能说明此刻仍被占用。"
     ],
 }

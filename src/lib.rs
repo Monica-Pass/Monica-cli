@@ -14,6 +14,7 @@ pub mod protocol;
 pub mod segment;
 pub mod service_api;
 pub mod sync;
+pub mod tiga;
 pub mod tui;
 mod upstream;
 pub mod vault;
@@ -22,6 +23,7 @@ pub mod webdav;
 #[cfg(test)]
 mod gateway_tests;
 pub mod library;
+pub mod mdbx;
 #[cfg(test)]
 mod protocol_tests;
 #[cfg(test)]

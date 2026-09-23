@@ -172,6 +172,9 @@ pub(super) fn localize(mut command: Command, language: Language) -> Command {
         "serve" => Some(CliServeHelp),
         "lock" => Some(CliLockHelp),
         "status" => Some(CliStatusHelp),
+        "audit" => Some(CliAuditHelp),
+        "tiga" => Some(CliTigaHelp),
+        "mdbx" => Some(CliMdbxHelp),
         "mcp" => Some(CliMcpHelp),
         "language" => Some(CliLanguageHelp),
         "keys" => Some(CliKeysHelp),
@@ -198,6 +201,9 @@ pub(super) fn localize(mut command: Command, language: Language) -> Command {
     };
     let webdav = command.get_name() == "webdav";
     let keys = command.get_name() == "keys";
+    let tiga = command.get_name() == "tiga";
+    let init = command.get_name() == "init";
+    let mdbx = command.get_name() == "mdbx";
     if let Some(about) = about {
         command = command.about(language.text(about));
     }
@@ -211,7 +217,13 @@ pub(super) fn localize(mut command: Command, language: Language) -> Command {
     // argument to the end of the list and desync the positional slots that
     // build() already froze, so values land on the wrong fields.
     command = command.mut_args(|arg| {
-        let message = argument_message(arg.get_id().as_str());
+        // `name` is the connection or grant handle everywhere except `init`,
+        // where it labels the database file instead.
+        let message = if init && arg.get_id() == "name" {
+            Some(CliInitNameHelp)
+        } else {
+            argument_message(arg.get_id().as_str())
+        };
         let positional = arg.is_positional();
         let Some(message) = message else {
             return arg;
@@ -232,13 +244,29 @@ pub(super) fn localize(mut command: Command, language: Language) -> Command {
             "open" if webdav => Some(CliDavOpenHelp),
             "status" if webdav => Some(CliDavStatusHelp),
             "delete" if keys => Some(CliKeysDeleteHelp),
+            "show" if tiga => Some(CliTigaShowHelp),
+            "set" if tiga => Some(CliTigaSetHelp),
+            "check" if mdbx => Some(CliMdbxCheckHelp),
+            "files" if mdbx => Some(CliMdbxFilesHelp),
             _ => None,
         };
         let child = localize(child, language);
-        match about {
+        let child = match about {
             Some(message) => child.about(language.text(message)),
             None => child,
+        };
+        if mdbx {
+            // An argument is resolved by bare id with no parent context, so inside `mdbx check`
+            // the `vault` positional would land on the `--vault` path hint one level up.
+            return child.mut_args(|arg| {
+                if arg.get_id() == "vault" {
+                    arg.help(language.text(CliMdbxVaultHelp))
+                } else {
+                    arg
+                }
+            });
         }
+        child
     })
 }
 
@@ -400,6 +428,98 @@ mod tests {
             help("help").is_some(),
             "built-in arguments are out of reach of the translation pass"
         );
+    }
+
+    #[test]
+    fn init_names_the_database_rather_than_a_connection() {
+        let command = localized_command(Language::En);
+        let init = command.find_subcommand("init").expect("init subcommand");
+        let help = init
+            .get_arguments()
+            .find(|arg| arg.get_id() == "name")
+            .and_then(|arg| arg.get_help())
+            .map(ToString::to_string)
+            .expect("init --name help");
+        assert_eq!(help, Language::En.text(Message::CliInitNameHelp));
+        assert_ne!(help, Language::En.text(Message::CliNameHelp));
+    }
+
+    /// `mdbx check` reuses the leaf name of the top-level `check`, and both of the group's
+    /// positionals carry the `vault` argument id that `--vault` answers to. Help is resolved by
+    /// bare name with no command context, so each of those needs the parent override.
+    #[test]
+    fn mdbx_help_survives_two_name_collisions() {
+        for language in [Language::En, Language::ZhCn] {
+            let command = localized_command(language);
+            let mdbx = command
+                .get_subcommands()
+                .find(|child| child.get_name() == "mdbx")
+                .expect("mdbx is not on the command surface");
+            assert_eq!(
+                mdbx.get_about().map(|about| about.to_string()),
+                Some(language.text(Message::CliMdbxHelp).to_string()),
+                "the group itself lost its summary"
+            );
+            for (leaf, summary) in [
+                ("check", Message::CliMdbxCheckHelp),
+                ("files", Message::CliMdbxFilesHelp),
+            ] {
+                let child = mdbx
+                    .get_subcommands()
+                    .find(|child| child.get_name() == leaf)
+                    .unwrap_or_else(|| panic!("mdbx {leaf} is missing"));
+                assert_eq!(
+                    child.get_about().map(|about| about.to_string()),
+                    Some(language.text(summary).to_string()),
+                    "`mdbx {leaf}` prints someone else's summary"
+                );
+                let help = child
+                    .get_arguments()
+                    .find(|arg| arg.get_id() == "vault")
+                    .and_then(|arg| arg.get_help())
+                    .map(|help| help.to_string())
+                    .unwrap_or_else(|| panic!("`mdbx {leaf}` positional has no help"));
+                assert_eq!(
+                    help,
+                    language.text(Message::CliMdbxVaultHelp).to_string(),
+                    "`mdbx {leaf} FILE` explains the wrong thing"
+                );
+                // Without the parent override this id resolves to the `--vault` path hint,
+                // which is the same words for a different question.
+                assert_ne!(
+                    help,
+                    language.text(Message::CliVaultHelp).to_string(),
+                    "`mdbx {leaf} FILE` repeats the --vault help"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nested_subcommands_keep_their_own_summary() {
+        for language in [Language::En, Language::ZhCn] {
+            let mut commands = Vec::new();
+            walk(&localized_command(language), "", &mut commands);
+            for (name, about) in &commands {
+                let Some((parent, leaf)) = name.rsplit_once(' ') else {
+                    continue;
+                };
+                // Clap mirrors every command under a `help <command>` path and
+                // copies the target summary there on purpose, and hangs its own
+                // `help` subcommand off every level.
+                if parent.contains(' ') || parent == "help" || leaf == "help" {
+                    continue;
+                }
+                let Some((_, top)) = commands.iter().find(|(other, _)| *other == leaf) else {
+                    continue;
+                };
+                assert_ne!(
+                    about.as_deref(),
+                    top.as_deref(),
+                    "`{parent} {leaf}` prints the top-level `{leaf}` summary"
+                );
+            }
+        }
     }
 
     fn walk(command: &Command, path: &str, out: &mut Vec<(String, Option<String>)>) {

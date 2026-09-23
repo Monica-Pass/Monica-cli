@@ -224,8 +224,14 @@ monica-pass ck work-github
 | MCP settings / check discovery | `settings` / `check` | `m` / `ck` |
 | Status / WebDAV / command discovery | `status` / `webdav` / `commands` | `st` / `dav` / `cmds` |
 | Delete a connection or entry / delete an empty category | `delete` / `delete-category` | `rm`, `del` / `rmdir` |
+| Read / change this vault's security profile | `tiga show` / `tiga set <sky\|multi\|power>` | none |
+| Inspect the database file on disk (read-only) | `mdbx check` / `mdbx files` | none |
 
 `audit` reads the local gateway trail (`--grant <name>` to filter, `--limit <n>` for the most recent rows, newest first). It needs no master password and never contains credential material.
+
+`init --name` only labels the vault locally, while `--tiga sky|multi|power` picks the security profile it starts on (default `multi`). Afterwards `monica tiga show` reads it and `monica tiga set` moves it: lowering requires `--reason`, which is stored in the vault beside the exception and repeated by every later `show`, and a `power` vault cannot be lowered from the command line. `tiga` exists only on the local command surface — the AI cannot reach it over MCP.
+
+`mdbx check` and `mdbx files` look at the file on disk itself: the format and schema versions, which client floors still read it, whether an upgrade is pending, which files sit beside it and how large each one is. Both are read-only end to end, need no master password and never interrupt a running gateway; nothing is repaired, and "check" here means the header, not a consistency audit.
 
 Use `-r` for a repository, `-p` for the provider, `-n` for a purpose note, `-t` for grant lifetime, and `-s` to serve after adding. The approval gate is `--approval off|write|all` and has no short form. Global `-C` selects the configuration file and `-l` selects the language. TUI keys remain as shown in its footer.
 

@@ -16,9 +16,8 @@ pub fn required_fields(command: &str) -> &'static [SecretField] {
         "add" | "connect" | "token" => &[Password, Token],
         "init" | "note" | "open" | "grant" | "refresh" | "serve" | "library" | "category"
         | "move" | "delete" | "delete-category" | "rename-category" | "rename-entry" | "use"
-        | "keys" | "keys ssh" | "keys gpg" | "keys edit" | "keys delete" | "keys export" => {
-            &[Password]
-        }
+        | "keys" | "keys ssh" | "keys gpg" | "keys edit" | "keys delete" | "keys export"
+        | "tiga show" | "tiga set" => &[Password],
         "webdav login" | "webdav list" => &[WebDavPassword],
         "webdav open" | "webdav publish" | "webdav sync" => &[Password, WebDavPassword],
         _ => &[],

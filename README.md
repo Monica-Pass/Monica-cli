@@ -224,8 +224,14 @@ monica-pass ck work-github
 | MCP 配置 / 检查工具 | `settings` / `check` | `m` / `ck` |
 | 状态 / WebDAV / 命令查询 | `status` / `webdav` / `commands` | `st` / `dav` / `cmds` |
 | 删除连接或条目 / 删除空分类 | `delete` / `delete-category` | `rm`、`del` / `rmdir` |
+| 查看 / 调整本库安全等级 | `tiga show` / `tiga set <sky\|multi\|power>` | 无 |
+| 查看磁盘上的数据库文件（只读） | `mdbx check` / `mdbx files` | 无 |
 
 `audit` 读取本地 AI 调用审计（`--grant <授权名>` 过滤、`--limit <条数>` 取最近若干条，新的在前），不需要主密码，也不含任何凭据内容。
+
+`init --name` 只是给库起一个本地标签，`--tiga sky|multi|power` 决定它从哪一档安全等级起步（默认 `multi`）。建好之后用 `monica tiga show` 读、`monica tiga set` 改：调低必须写 `--reason`，理由会连同例外一起存进库，之后每次 `show` 都会重述这份库在降档运行；`power` 库调不回低等级。`tiga` 只在本地命令面，AI 通过 MCP 看不到它。
+
+`mdbx check` 与 `mdbx files` 看的是磁盘上那个文件本身：格式与结构版本、哪个下限的客户端还读得动、要不要升级、旁边挂着哪几个文件、各占多少字节。两条全程只读，不要主密码，也不会打断正在跑的代理；它们什么都不修，名字里的 check 指的是文件头。
 
 `-r` 是仓库，`-p` 是服务类型，`-n` 是用途备注，`-t` 是授权分钟数，`-s` 表示添加后运行代理。人工门槛是 `--approval off|write|all`，只有长写法、没有缩写。全局 `-C` 指定配置文件，`-l` 指定界面语言。TUI 的按键仍按页面底部提示使用。
 

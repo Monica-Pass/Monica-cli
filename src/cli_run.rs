@@ -17,7 +17,7 @@ use monica_pass_cli::webdav::{WebDavClient, WebDavProfile};
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
 
-use crate::cli::{Cli, Command, KeysCommand, WebDavCommand};
+use crate::cli::{Cli, Command, KeysCommand, MdbxCommand, TigaCommand, WebDavCommand};
 use crate::cli_input::{SecretField, SecretInput, required_fields};
 use crate::cli_output::Output;
 use crate::cli_table;
@@ -322,7 +322,12 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             name: Some(name),
             client: None,
         } => return check(admin::grant_client(&store, &name)?, output).await,
-        Command::Init { vault, port } => {
+        Command::Init {
+            vault,
+            port,
+            name,
+            tiga,
+        } => {
             let path = match vault {
                 Some(path) => absolute(&path)?,
                 None => store.path.with_file_name("gateway.mdbx"),
@@ -332,15 +337,97 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             }
             let password = input.take(SecretField::Password, tr!(lang, PromptNewPassword))?;
             let confirmation = input.confirm(&password, tr!(lang, PromptConfirmPassword))?;
-            admin::initialize(&store, &path, port, &password, &confirmation)?;
-            output.result("init", json!({"vault":path, "config":store.path}), None)?;
+            let label = admin::initialize_with(
+                &store,
+                &path,
+                port,
+                &password,
+                &confirmation,
+                &admin::NewVault {
+                    name: name.as_deref(),
+                    tiga,
+                },
+            )?;
+            output.result(
+                "init",
+                json!({"vault":path, "config":store.path, "name":label, "tiga":tiga.as_str()}),
+                None,
+            )?;
             output.note(tr!(
                 lang,
                 CliVaultCreated,
                 vault = path.display(),
-                config = store.path.display()
+                config = store.path.display(),
+                name = label,
+                tiga = tiga.as_str()
             ));
         }
+        Command::Tiga { command } => {
+            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            admin::lock_broker(&store).await?;
+            let (label, report) = match command {
+                TigaCommand::Show => ("tiga show", monica_pass_cli::tiga::show(&store, &password)?),
+                TigaCommand::Set { level, reason } => (
+                    "tiga set",
+                    monica_pass_cli::tiga::set(&store, &password, level, reason.as_deref())?,
+                ),
+            };
+            let data = json!(report);
+            let human = (!output.json).then(|| cli_table::render_tiga(&data, lang));
+            output.result_text(label, data, human)?;
+            if report.reduced() {
+                output.note(tr!(
+                    lang,
+                    CliTigaReduced,
+                    stored = report.default_profile,
+                    profile = report.effective_profile()
+                ));
+            } else if report.needs_remediation() {
+                output.note(tr!(
+                    lang,
+                    CliTigaRemediation,
+                    profile = report.effective_profile()
+                ));
+            }
+        }
+        Command::Mdbx { command } => match command {
+            MdbxCommand::Check { vault } => {
+                let report = monica_pass_cli::mdbx::check(&store, vault)?;
+                let data = json!(report);
+                let human = (!output.json).then(|| cli_table::render_mdbx_check(&data, lang));
+                output.result_text("mdbx check", data, human)?;
+                if report.unknown_critical_extensions {
+                    output.note(tr!(lang, MdbxUnknownExtensions));
+                } else if report.requires_upgrade {
+                    output.note(tr!(
+                        lang,
+                        MdbxUpgradeNeeded,
+                        from = report
+                            .schema_version
+                            .unwrap_or(report.target_schema_version),
+                        to = report.target_schema_version
+                    ));
+                } else if !report.initialized {
+                    output.note(tr!(lang, MdbxUninitialized));
+                }
+            }
+            MdbxCommand::Files { vault } => {
+                let listed = monica_pass_cli::mdbx::files(&store, vault)?;
+                let data = json!(listed);
+                let human = (!output.json).then(|| cli_table::render_mdbx_files(&data, lang));
+                output.result_text("mdbx files", data, human)?;
+                // An empty log pair is what any WAL connection leaves behind, including a
+                // read-only one, so only a log with content in it means a writer is inside.
+                if let Some(log) = listed.iter().find(|entry| entry.role == "wal") {
+                    match log.size_bytes {
+                        Some(bytes) if bytes > 0 => {
+                            output.note(tr!(lang, MdbxWalActive, bytes = i18n::human_bytes(bytes)));
+                        }
+                        _ => output.note(tr!(lang, MdbxWalIdle)),
+                    }
+                }
+            }
+        },
         Command::Connect {
             category,
             name,

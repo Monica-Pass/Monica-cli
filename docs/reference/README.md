@@ -78,6 +78,13 @@ node docs/reference/build.mjs --check       # 只比对，不写文件
 | 生成的缩写写法（堆叠／连写／别名／前置全局／`--`） | 73 | 4（见下） |
 | ArgGroup 与候选值 | 30 | 0 |
 | 帮助短路（`-h`／`--help`／`help`／`--version`／与坏值的先后） | 59 | 3（见下） |
+| `mdbx` 三条命令：示例行／`--json` 前置与后置／`--lang=zh-CN`／漏子命令／错拼／多余位置参数／未知选项／坏候选值／黏在一起的命令名 | 13 | 0 |
+
+最后一行是 2026-09-23 加 `mdbx` 之后单独补的扫描，13 行逐条与真解析器同意（7 行接受、6 行拒绝，
+拒绝的三种提示词分别是「Could not parse arguments」「Unknown argument or command」
+「Invalid argument value」，都是退出码 2）。**上面那几行不是这一轮跑的**：那 131 行对应的是加入
+`mdbx` 之前的示例集，同一份脚本没有重跑全量，所以那些数字描述的是旧数据，只有最后一行反映当前的
+`examples.json`。
 
 `examples.json` 里故意写错的示范行标 `"teachesError": true`，`build.mjs` 会要求语法**拒绝**它，
 而不是像其他示例那样要求接受。

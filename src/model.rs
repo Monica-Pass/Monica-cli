@@ -263,6 +263,23 @@ pub fn validate_note(value: &str) -> Result<()> {
     Ok(())
 }
 
+pub const MAX_DATABASE_NAME_BYTES: usize = 1024;
+
+/// The name a person gives their own database. Anything is allowed — it sits next
+/// to the vault file, which lives wherever they chose, so the stem may be Chinese
+/// while the label is not. Same bounds as a note, and it may not be blank.
+pub fn validate_database_name(value: &str) -> Result<()> {
+    if value.trim().is_empty()
+        || value.len() > MAX_DATABASE_NAME_BYTES
+        || value.chars().any(|ch| {
+            ch.is_control() || matches!(ch, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        })
+    {
+        return Err(GatewayError::InvalidDatabaseName);
+    }
+    Ok(())
+}
+
 pub const MAX_TITLE_BYTES: usize = 256;
 
 /// Display titles allow any script (e.g. Chinese) but stay non-empty, bounded and free of

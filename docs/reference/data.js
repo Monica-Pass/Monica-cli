@@ -6,12 +6,22 @@ window.MONICA_TEACH = {
   "version": "monica 0.5.0",
   "grammarVersion": 1,
   "generatedFrom": "monica commands --json",
-  "commandCount": 44,
+  "commandCount": 50,
   "groups": [
    {
     "id": "start",
     "label": "起步与数据库",
     "hint": "装好之后第一次要做的事"
+   },
+   {
+    "id": "mdbx",
+    "label": "数据库文件",
+    "hint": "这个库在磁盘上到底是什么"
+   },
+   {
+    "id": "vault",
+    "label": "保险库与安全",
+    "hint": "这份库自己运行在哪个等级上"
    },
    {
     "id": "connections",
@@ -196,6 +206,48 @@ window.MONICA_TEACH = {
      "help": "Local gateway port, 1024–65535; default 47831"
     },
     {
+     "id": "name",
+     "long": "name",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "LABEL"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Label shown by `monica databases`; the file keeps the name you gave it"
+    },
+    {
+     "id": "tiga",
+     "long": "tiga",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "TIGA"
+     ],
+     "choices": [
+      "sky",
+      "multi",
+      "power"
+     ],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [
+      "multi"
+     ],
+     "help": "Security profile the vault starts on; `power` is slowest to unlock but hardest to brute force"
+    },
+    {
      "id": "help",
      "long": "help",
      "short": "h",
@@ -224,22 +276,38 @@ window.MONICA_TEACH = {
    "whenToUse": "这台机器上还没有保险库时；或者你想另起一个完全独立的库。",
    "handAuthored": false,
    "pitfalls": [
-    "没有 --directory 这类参数：库文件路径用 --vault，配置文件位置用全局的 -C/--config。"
+    "没有 --directory 这类参数：库文件路径用 --vault，配置文件位置用全局的 -C/--config。",
+    "--tiga 只在建库这一次用得上。库建好之后要换等级是 monica tiga set，见「保险库与安全」。",
+    "以 --tiga power 建好的库，CLI 调不回低等级：引擎认为只有密码的解锁达不到 power 的要求，提示去 Monica Android 端处理。它一建好就带着「需要整改」标记，因为解锁方式只有密码这一项。"
    ],
    "examples": [
     {
      "cmd": "monica init",
-     "note": "只提示一次主密码，之后所有写操作都用它。",
+     "note": "只提示一次主密码，之后所有写操作都用它。名字默认取库文件的名称。",
      "secrets": "{\"password\":\"<新主密码>\"}",
      "tested": true,
-     "out": "Created MDBX3 vault: %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\nConfiguration: %LOCALAPPDATA%\\MonicaPass\\gateway.json"
+     "out": "Created MDBX3 vault: %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\nConfiguration: %LOCALAPPDATA%\\MonicaPass\\gateway.json\nDatabase name: gateway · Tiga: multi"
     },
     {
      "cmd": "monica init --vault D:\\vaults\\second.mdbx",
      "note": "换路径新建，旧库仍然登记在案，之后用 monica use 来回切。",
      "secrets": "{\"password\":\"<新主密码>\"}",
      "tested": true,
-     "out": "Created MDBX3 vault: D:\\vaults\\second.mdbx\nConfiguration: %LOCALAPPDATA%\\MonicaPass\\gateway.json"
+     "out": "Created MDBX3 vault: D:\\vaults\\second.mdbx\nConfiguration: %LOCALAPPDATA%\\MonicaPass\\gateway.json\nDatabase name: second · Tiga: multi"
+    },
+    {
+     "cmd": "monica init --name work-vault --tiga sky",
+     "note": "--name 只是本地标签（这一行和 monica databases 显示它），文件名不跟着改；--tiga 决定新库从哪一档起步，不写就是 multi。",
+     "secrets": "{\"password\":\"<新主密码>\"}",
+     "tested": true,
+     "out": "Created MDBX3 vault: %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\nConfiguration: %LOCALAPPDATA%\\MonicaPass\\gateway.json\nDatabase name: work-vault · Tiga: sky"
+    },
+    {
+     "cmd": "monica init --tiga power",
+     "note": "最严的一档：解锁要两个要素、导出和打印全关。建库本身 release 实测 1.9 秒，但这份库此后每次解锁都要按 power 的 Argon2id 参数算一遍——release 实测 1.4 秒，debug 构建实测 31 秒。",
+     "secrets": "{\"password\":\"<新主密码>\"}",
+     "tested": true,
+     "out": "Created MDBX3 vault: %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\nConfiguration: %LOCALAPPDATA%\\MonicaPass\\gateway.json\nDatabase name: gateway · Tiga: power"
     },
     {
      "cmd": "monica init --port 47832",
@@ -379,6 +447,476 @@ window.MONICA_TEACH = {
      "secrets": "{\"password\":\"<该库主密码>\"}",
      "tested": true,
      "out": "monica-pass: The request is invalid or contains unsupported fields."
+    }
+   ]
+  },
+  {
+   "key": "mdbx",
+   "path": [
+    "mdbx"
+   ],
+   "name": "mdbx",
+   "parent": "",
+   "summary": "Inspect the database file itself: its format, its parts, its size. Never unlocks or writes",
+   "aliases": [],
+   "args": [
+    {
+     "id": "help",
+     "long": "help",
+     "short": "h",
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Print help"
+    }
+   ],
+   "jsonSupported": true,
+   "longRunning": false,
+   "subcommandRequired": true,
+   "argGroups": [],
+   "secretRequired": [],
+   "group": "mdbx",
+   "summaryZh": "只读检查磁盘上这个数据库文件本身的入口；必须带子命令。",
+   "whenToUse": "想知道手上这个 .mdbx 到底是什么格式、占了多少磁盘、需不需要升级。",
+   "handAuthored": false,
+   "pitfalls": [
+    "这一类全程只读：不解锁、不写库、不升版本，因此也不要主密码。",
+    "它看的是文件，不是库里的条目；要看内容用 monica list / show，要看安全等级用 monica tiga show。子命令：check / files。"
+   ],
+   "examples": [
+    {
+     "cmd": "monica mdbx",
+     "note": "不带子命令只会得到一次参数错误。",
+     "teachesError": true,
+     "tested": true,
+     "out": "monica-pass: Could not parse arguments. Use --help for usage."
+    }
+   ]
+  },
+  {
+   "key": "mdbx check",
+   "path": [
+    "mdbx",
+    "check"
+   ],
+   "name": "check",
+   "parent": "mdbx",
+   "summary": "Read the format header of a vault file and how much disk it takes",
+   "aliases": [],
+   "args": [
+    {
+     "id": "vault",
+     "long": null,
+     "short": null,
+     "aliases": [],
+     "positional": true,
+     "required": false,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "FILE"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Vault file to read; defaults to the current database"
+    },
+    {
+     "id": "help",
+     "long": "help",
+     "short": "h",
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Print help"
+    }
+   ],
+   "jsonSupported": true,
+   "longRunning": false,
+   "subcommandRequired": false,
+   "argGroups": [],
+   "secretRequired": [],
+   "group": "mdbx",
+   "summaryZh": "读文件头：格式与结构版本、兼容下限、要不要升级，外加大小和修改时间。",
+   "whenToUse": "拿到一个来历不明的 .mdbx，或者同步前想确认两端引擎对不对得上。",
+   "handAuthored": false,
+   "pitfalls": [
+    "要打开数据库才读得到文件头，所以这条会在旁边留下 -wal 和 -shm 两个文件；它们内容是空的，保险库文件本身逐字节不变。",
+    "没有 --json 之外的机器格式；--json 里 initialized / requires_upgrade / unknown_critical_extensions 都是布尔，版本号是字符串。",
+    "它不检查一致性、也不修复任何东西，名字里的 check 指的是文件头。"
+   ],
+   "examples": [
+    {
+     "cmd": "monica mdbx check",
+     "note": "查当前数据库。Schema 一行的「this build」是这份 CLI 自带的引擎版本，两者不等时 Upgrade 才会亮。",
+     "tested": true,
+     "out": "File         %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\nSize         516.0 KiB\nModified     2026-09-23 17:50\nFormat       MDBX-2\nSchema       17 · this build 17\nReadable by  readers ≥ MDBX-1, writers ≥ MDBX-2\nUpgrade      not needed"
+    },
+    {
+     "cmd": "monica mdbx check --lang zh-CN",
+     "tested": true,
+     "out": "文件      %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\n大小      516.0 KiB\n最后修改  2026-09-23 17:50\n格式版本  MDBX-2\n结构版本  17 · 当前引擎 17\n兼容下限  读取端 ≥ MDBX-1，写入端 ≥ MDBX-2\n升级      不需要"
+    },
+    {
+     "cmd": "monica mdbx check %LOCALAPPDATA%\\MonicaPass\\second.mdbx",
+     "note": "位置参数就是一个文件路径，可以是当前库之外的另一个文件；这条仍然只是读，也不会把它切成当前库。",
+     "tested": true,
+     "out": "File         %LOCALAPPDATA%\\MonicaPass\\second.mdbx\nSize         516.0 KiB\nModified     2026-09-23 17:50\nFormat       MDBX-2\nSchema       17 · this build 17\nReadable by  readers ≥ MDBX-1, writers ≥ MDBX-2\nUpgrade      not needed"
+    },
+    {
+     "cmd": "monica mdbx check %LOCALAPPDATA%\\MonicaPass\\notes.txt",
+     "note": "文件在、但不是数据库（或文件头没通过只读完整性检查）。",
+     "tested": true,
+     "out": "monica-pass: This file could not be read as an MDBX vault, or its header failed the read-only integrity check. The file itself was not modified."
+    },
+    {
+     "cmd": "monica mdbx check nope.mdbx",
+     "note": "路径不存在时的样子：这些命令只做读，不会顺手替你把文件建出来。",
+     "tested": true,
+     "out": "monica-pass: There is no database file at that path. These commands only read, so they never create one."
+    }
+   ]
+  },
+  {
+   "key": "mdbx files",
+   "path": [
+    "mdbx",
+    "files"
+   ],
+   "name": "files",
+   "parent": "mdbx",
+   "summary": "List the vault file and every file beside it, with the size of each",
+   "aliases": [],
+   "args": [
+    {
+     "id": "vault",
+     "long": null,
+     "short": null,
+     "aliases": [],
+     "positional": true,
+     "required": false,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "FILE"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Vault file to read; defaults to the current database"
+    },
+    {
+     "id": "help",
+     "long": "help",
+     "short": "h",
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Print help"
+    }
+   ],
+   "jsonSupported": true,
+   "longRunning": false,
+   "subcommandRequired": false,
+   "argGroups": [],
+   "secretRequired": [],
+   "group": "mdbx",
+   "summaryZh": "列出保险库文件和它旁边实际存在的每个文件，各自大小，最后给一个总占用。",
+   "whenToUse": "同步或备份前确认要带上哪几个文件；或者怀疑有程序还在写这个库。",
+   "handAuthored": false,
+   "pitfalls": [
+    "这条纯靠 stat：单独跑它连 -wal / -shm 都不会凭空建出来，建那一对的是 check。",
+    "配置文件、锁文件、审计日志这些同名前缀的东西都不在列表里，这里只有保险库文件和引擎挂在它上面的那几个。",
+    "带附件的库会多出一行 附件存储（<库名>.mdbx.blobs）；单文件同步是带不走这个目录的，同步前先看清。",
+    "预写日志非空才说明有客户端正在写或上次写被打断；空日志不代表此刻没人打开着库。"
+   ],
+   "examples": [
+    {
+     "cmd": "monica mdbx files",
+     "note": "刚 check 过一次的库：多出空的一对日志。",
+     "tested": true,
+     "out": "Directory  %LOCALAPPDATA%\\MonicaPass\n\nType                   Item              Size       Modified\nvault file             gateway.mdbx      516.0 KiB  2026-09-23 17:50\nwrite-ahead log        gateway.mdbx-wal  0 B        2026-09-23 17:50\nwrite-ahead log index  gateway.mdbx-shm  32.0 KiB   2026-09-23 17:50\n3 items, 548.0 KiB on disk\nThe write-ahead log beside the vault is empty. Any connection to a WAL database creates it and its index file, this read-only listing included, so their presence proves the vault was opened here, not that something holds it now."
+    },
+    {
+     "cmd": "monica mdbx files",
+     "note": "同一个库，带上了附件目录：多出一行，目录那行的字节是把附件树累加出来的。",
+     "tested": true,
+     "out": "Directory  %LOCALAPPDATA%\\MonicaPass\n\nType                   Item                Size       Modified\nvault file             gateway.mdbx        516.0 KiB  2026-09-23 17:50\nwrite-ahead log        gateway.mdbx-wal    0 B        2026-09-23 17:50\nwrite-ahead log index  gateway.mdbx-shm    32.0 KiB   2026-09-23 17:50\nattachments            gateway.mdbx.blobs  4 B        2026-09-23 17:51\n4 items, 548.0 KiB on disk\nThe write-ahead log beside the vault is empty. Any connection to a WAL database creates it and its index file, this read-only listing included, so their presence proves the vault was opened here, not that something holds it now."
+    },
+    {
+     "cmd": "monica mdbx files --lang zh-CN",
+     "tested": true,
+     "out": "所在目录  %LOCALAPPDATA%\\MonicaPass\n\n类型          名称              大小       最后修改\n保险库文件    gateway.mdbx      516.0 KiB  2026-09-23 17:50\n预写日志      gateway.mdbx-wal  0 B        2026-09-23 17:50\n预写日志索引  gateway.mdbx-shm  32.0 KiB   2026-09-23 17:50\n共 3 项，占用 548.0 KiB\n保险库旁边的预写日志是空的。任何连接打开 WAL 数据库时都会创建它和它的索引文件，包括本次只读列出；因此它们只说明该库在此被打开过，不能说明此刻仍被占用。"
+    }
+   ]
+  },
+  {
+   "key": "tiga",
+   "path": [
+    "tiga"
+   ],
+   "name": "tiga",
+   "parent": "",
+   "summary": "Read or change the security profile this vault runs on",
+   "aliases": [],
+   "args": [
+    {
+     "id": "help",
+     "long": "help",
+     "short": "h",
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Print help"
+    }
+   ],
+   "jsonSupported": true,
+   "longRunning": false,
+   "subcommandRequired": true,
+   "argGroups": [],
+   "secretRequired": [],
+   "group": "vault",
+   "summaryZh": "读取或调整这份保险库运行的安全等级；必须带子命令。",
+   "whenToUse": "想知道当前等级实际放开了哪些操作，或者要换等级。",
+   "handAuthored": false,
+   "pitfalls": [
+    "子命令只有 show 和 set，也没有别名。",
+    "等级值是小写：sky / multi / power。写成 MULTI 会被取值校验挡掉（实测 exit 2）。",
+    "这几条命令只在本地命令面出现：AI 通过 MCP 看不到 tiga，改等级只能由人在终端里做。"
+   ],
+   "examples": [
+    {
+     "cmd": "monica tiga",
+     "note": "不带子命令只会得到一次参数错误。",
+     "teachesError": true,
+     "tested": true,
+     "out": "monica-pass: Could not parse arguments. Use --help for usage."
+    }
+   ]
+  },
+  {
+   "key": "tiga show",
+   "path": [
+    "tiga",
+    "show"
+   ],
+   "name": "show",
+   "parent": "tiga",
+   "summary": "Show the stored profile, the one actually in force, and what each costs you",
+   "aliases": [],
+   "args": [
+    {
+     "id": "help",
+     "long": "help",
+     "short": "h",
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Print help"
+    }
+   ],
+   "jsonSupported": true,
+   "longRunning": false,
+   "subcommandRequired": false,
+   "argGroups": [],
+   "secretRequired": [
+    "password"
+   ],
+   "group": "vault",
+   "summaryZh": "读回登记的等级、真正生效的等级，以及这个等级具体约束了什么。",
+   "whenToUse": "怀疑库被人调低过；或者动手前先确认现在能不能导出、打印、复制到剪贴板。",
+   "handAuthored": false,
+   "pitfalls": [
+    "「登记等级」和「生效等级」分成两行时，库里就存着一次已记录的例外：名字是高的那档，跑的是低的那档。",
+    "「低于策略，需要整改」不等于被调低：等级没变，不够的是解锁方式（power 要密码 + 安全密钥）。",
+    "--json 会给出完整策略对象（policy 下每个字段都在），表格只是给人看的摘要。"
+   ],
+   "examples": [
+    {
+     "cmd": "monica tiga show",
+     "note": "一切正常时只有一行「Profile」：登记的和你正在跑的是同一个。",
+     "secrets": "{\"password\":\"<主密码>\"}",
+     "tested": true,
+     "out": "Profile     multi\nCompliance  meets the stored profile\n\nSetting         Value\nUnlock          1 factor(s), security key no\nSession         idle 10m · max 2h\nClipboard       30s · secure no\nExport / print  yes / yes\nDevice          standard\nAudit           sensitive operations"
+    },
+    {
+     "cmd": "monica tiga show",
+     "note": "库被调低过之后：登记等级仍是 multi，实际跑 sky，例外和被削弱的字段一起列出来。",
+     "secrets": "{\"password\":\"<主密码>\"}",
+     "tested": true,
+     "out": "Stored profile     multi\nEffective profile  sky\nCompliance         reduced under a recorded exception\n\nSetting         Value\nUnlock          1 factor(s), security key no\nSession         idle 30m · max 12h\nClipboard       1m · secure no\nExport / print  yes / yes\nDevice          not specified\nAudit           security changes\nPolicy warnings:\npolicy exception 795a4073-a253-49d5-aa17-cd418d058168 weakens: idle_timeout_secs, max_lifetime_secs, lock_on_background, fresh_auth_window_secs, reveal_requires_fresh_auth, clipboard_ttl_secs, copy_requires_fresh_auth, attachment_temp_files_allowed, minimum_device_assurance, audit_level\nThis vault keeps its multi name and runs sky until someone raises it back. `monica tiga show` repeats that for as long as the exception stands."
+    },
+    {
+     "cmd": "monica tiga show",
+     "note": "以 --tiga power 建好的库：等级没被调低，但解锁方式只有密码，所以标成「需要整改」。",
+     "secrets": "{\"password\":\"<主密码>\"}",
+     "tested": true,
+     "out": "Profile     power\nCompliance  below policy, remediation required\n\nSetting         Value\nUnlock          2 factor(s), security key yes\nSession         idle 2m · max 15m\nClipboard       10s · secure yes\nExport / print  no / no\nDevice          trusted hardware\nAudit           all decisions\nThis vault does run its power policy; what falls short is how it is unlocked. power asks for more than a password alone, so the flag stays until an unlock method that strong is added."
+    },
+    {
+     "cmd": "monica tiga show --lang zh",
+     "tested": true,
+     "out": "运行等级  power\n合规状态  低于策略，需要整改\n\n项目         取值\n解锁         需 2 个要素，安全密钥 有\n会话         空闲 2m · 最长 15m\n剪贴板       10s · 安全剪贴板 有\n导出 / 打印  无 / 无\n设备保证     可信硬件\n审计         全部决策\n该保险库确实按 power 策略运行，不足之处是解锁方式：power 要求的不只是密码。补上足够强的解锁方式后，这个标记才会消除。"
+    }
+   ]
+  },
+  {
+   "key": "tiga set",
+   "path": [
+    "tiga",
+    "set"
+   ],
+   "name": "set",
+   "parent": "tiga",
+   "summary": "Move the vault to another profile. Lowering it records a reason in the vault",
+   "aliases": [],
+   "args": [
+    {
+     "id": "level",
+     "long": null,
+     "short": null,
+     "aliases": [],
+     "positional": true,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "PROFILE"
+     ],
+     "choices": [
+      "sky",
+      "multi",
+      "power"
+     ],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": ""
+    },
+    {
+     "id": "reason",
+     "long": "reason",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "TEXT"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Why the vault may run reduced; recorded in the vault beside the exception"
+    },
+    {
+     "id": "help",
+     "long": "help",
+     "short": "h",
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Print help"
+    }
+   ],
+   "jsonSupported": true,
+   "longRunning": false,
+   "subcommandRequired": false,
+   "argGroups": [],
+   "secretRequired": [
+    "password"
+   ],
+   "group": "vault",
+   "summaryZh": "把保险库移到另一个等级。调低必须写明理由，理由连同例外一起存进库；调高不接受 --reason。",
+   "whenToUse": "换设备、换用法，要收紧或放宽这份库的约束。",
+   "handAuthored": false,
+   "pitfalls": [
+    "power 是单行道：CLI 能把库升到 power，也能读它，但调不回来——被拒时的提示是去 Monica Android 端处理。",
+    "调低没有时限：例外会一直在，直到有人把等级调回去，`monica tiga show` 每次都会重述一遍。",
+    "只给空白也算没给理由——--reason \"   \" 得到的还是「需要理由」那条拒绝。",
+    "--reason 里如果包含主密码（或它的 base64 / hex / URL 编码形式），命令直接拒绝，不会把主密码写进库。"
+   ],
+   "examples": [
+    {
+     "cmd": "monica tiga set multi",
+     "note": "往上调是一次普通变更：一次密码提示，立刻生效。",
+     "secrets": "{\"password\":\"<主密码>\"}",
+     "tested": true,
+     "out": "Profile     multi\nCompliance  meets the stored profile\n\nSetting         Value\nUnlock          1 factor(s), security key no\nSession         idle 10m · max 2h\nClipboard       30s · secure no\nExport / print  yes / yes\nDevice          standard\nAudit           sensitive operations"
+    },
+    {
+     "cmd": "monica tiga set sky --reason \"shared laptop at the office, offline recovery only\"",
+     "note": "调低要理由。例外当场写进库，输出也当场分成两行。",
+     "secrets": "{\"password\":\"<主密码>\"}",
+     "tested": true,
+     "out": "Stored profile     multi\nEffective profile  sky\nCompliance         reduced under a recorded exception\n\nSetting         Value\nUnlock          1 factor(s), security key no\nSession         idle 30m · max 12h\nClipboard       1m · secure no\nExport / print  yes / yes\nDevice          not specified\nAudit           security changes\nPolicy warnings:\npolicy exception 795a4073-a253-49d5-aa17-cd418d058168 weakens: idle_timeout_secs, max_lifetime_secs, lock_on_background, fresh_auth_window_secs, reveal_requires_fresh_auth, clipboard_ttl_secs, copy_requires_fresh_auth, attachment_temp_files_allowed, minimum_device_assurance, audit_level\nThis vault keeps its multi name and runs sky until someone raises it back. `monica tiga show` repeats that for as long as the exception stands."
+    },
+    {
+     "cmd": "monica tiga set sky",
+     "note": "少了理由的调低被拒：语法没问题，是保险库自己不让。",
+     "secrets": "{\"password\":\"<主密码>\"}",
+     "tested": true,
+     "out": "monica-pass: Lowering the security profile is recorded in the vault as an exception, so it needs a reason. Repeat the command with --reason and say why."
+    },
+    {
+     "cmd": "monica tiga set multi --reason \"back to normal\"",
+     "note": "调高时给理由也被拒：那条理由无处可存，留着只会让人以为它记进了库。",
+     "secrets": "{\"password\":\"<主密码>\"}",
+     "tested": true,
+     "out": "monica-pass: This change raises the security profile, so there is nothing to justify. Repeat the command without --reason."
+    },
+    {
+     "cmd": "monica tiga set multi --reason \"password-only laptop\"",
+     "note": "在 power 库上想调回 multi：引擎自己的授权门就拦下了。",
+     "secrets": "{\"password\":\"<主密码>\"}",
+     "tested": true,
+     "out": "monica-pass: The vault's own security policy refused this profile change. The profile you are leaving requires more assurance than a password-unlocked terminal can give, so raise or lower it in Monica for Android."
     }
    ]
   },
@@ -4557,6 +5095,24 @@ window.MONICA_TEACH = {
    },
    "answer": "monica audit --grant work2 --limit 3",
    "why": "审计是本地文件，读它不需要网关在跑；authorized/pending 那行代表落了账但没落地。"
+  },
+  {
+   "id": "lower-profile",
+   "key": "tiga set",
+   "title": "把库调低要说清理由",
+   "prompt": "这份库登记在 multi。把它调到 sky，理由写「shared laptop at the office」。别顺手加 --json。",
+   "expect": {
+    "key": "tiga set",
+    "flags": [
+     "--reason"
+    ],
+    "positionals": 1,
+    "forbid": [
+     "--json"
+    ]
+   },
+   "answer": "monica tiga set sky --reason \"shared laptop at the office\"",
+   "why": "调低只有带理由这一条路：理由连同例外写进库，之后 monica tiga show 会一直报它是降档运行。反过来，调高时给 --reason 会被拒。"
   },
   {
    "id": "find-id",

@@ -259,7 +259,9 @@ Monica CLI 是本机的凭据代理。服务 Token 与数据库主密码由人�
 
 **管理侧才会出现的码（你无权触发，收到即说明你在做不该做的事）**
 
-`invalid_config`、`already_exists`、`not_found`、`password_requirements`、`listen_unavailable`、`broker_already_running`、`human_terminal_required`、`secret_input_required`、`invalid_secret_input`、`confirmation_required`、`credential_unavailable`、`state_unavailable`，以及全部 WebDAV / 保险库码：`invalid_web_dav`、`web_dav_unauthorized`、`web_dav_unavailable`、`invalid_web_dav_response`、`remote_not_found`、`sync_conflict`、`remote_version_required`、`remote_protocol_unsupported`、`sync_state_missing`、`sync_segment_corrupt`、`sync_outcome_unknown`、`invalid_vault`、`vault_schema_unsupported`、`external_blobs_unsupported`、`vault_connections_invalid`、`remote_not_configured`。
+`invalid_config`、`client_config_unusable`、`already_exists`、`not_found`、`password_requirements`、`listen_unavailable`、`broker_already_running`、`human_terminal_required`、`secret_input_required`、`invalid_secret_input`、`confirmation_required`、`credential_unavailable`、`state_unavailable`；WebDAV 与同步：`invalid_web_dav`、`web_dav_unauthorized`、`web_dav_unavailable`、`invalid_web_dav_response`、`remote_not_found`、`remote_not_configured`、`sync_conflict`、`remote_version_required`、`remote_protocol_unsupported`、`sync_state_missing`、`sync_segment_corrupt`、`sync_outcome_unknown`；保险库与数据库文件：`invalid_vault`、`vault_schema_unsupported`、`external_blobs_unsupported`、`vault_connections_invalid`、`protected_collection`、`invalid_database_name`、`vault_file_unreadable`、`vault_file_missing`；TIGA：`tiga_change_denied`、`tiga_reason_required`、`tiga_reason_not_applicable`；密钥条目：`invalid_key_material`、`key_entry_type_mismatch`、`key_payload_too_large`、`key_secret_missing`。
+
+最后两个（`vault_file_unreadable` / `vault_file_missing`）出自人在终端里的只读诊断命令 `monica mdbx check` 与 `monica mdbx files`（见 B.9），MCP 工具里没有对应项。
 
 看到这些码时：立即停止该方向，把错误码原文报给人，不要试图改用其他命令或路径达成同一目的。
 
@@ -294,11 +296,17 @@ monica m <授权名>     # MCP 配置片段
 monica ck <授权名>    # 工具发现结果
 monica audit --json  # 网关审计：哪些调用被放行、结果如何（可按授权过滤）
 monica cmds <命令> --json   # 查询命令、别名、参数与所需凭据字段
+monica mdbx check    # 数据库文件本身：格式与结构版本、要不要升级、占多少磁盘（只读，不要密码，不停代理）
+monica mdbx files    # 同一个目录里实际有哪几个文件、各多大（纯 stat）
 ```
+
+`mdbx` 这两条看到的是**文件**，不是库里的内容：没有条目、没有连接、也没有任何解密后的字段。它们不会打断你正在用的会话，实测与网关并存正常。想知道库里有几条条目得 `monica library`，那要主密码、会停代理——那是人的动作，不是你的。
 
 `audit` 是你自己行为的全部可见面：只有时间、授权名、操作、范围、阶段（`authorized` 是副作用前的放行，`finished` 是结局）和固定错误码。请求正文、响应正文、Token 与 capability 都不在里面，所以它不能用来找回你上一次调用拿到的内容——那些只存在于对话里。
 
-以下**不属于你的权限**，即使你知道怎么做：任何需要主密码或 Token 的命令（`add` / `connect` / `grant` / `refresh` / `token` / `note` / `init` / `open` / `use` / `lock` / `serve` / `delete` / `delete-category` / `keys` 全族 / WebDAV 全部子命令）、`settings --install <客户端>`（它会改写 AI 客户端自己的配置文件，是人的动作）、读取或改写保险库与客户端文件、`revoke` 别人的授权。要撤销一份授权，只能由人决定。
+以下**不属于你的权限**，即使你知道怎么做：任何需要主密码或 Token 的命令（`add` / `connect` / `grant` / `refresh` / `token` / `note` / `init` / `open` / `use` / `lock` / `serve` / `delete` / `delete-category` / `keys` 全族 / `tiga show` 与 `tiga set` / WebDAV 全部子命令）、`settings --install <客户端>`（它会改写 AI 客户端自己的配置文件，是人的动作）、读取或改写保险库与客户端文件、`revoke` 别人的授权。要撤销一份授权，只能由人决定。
+
+`tiga` 这一族尤其不要试图去碰：它改的是这份保险库自己的安全等级（解锁要几个要素、能不能导出打印、会话多久锁、审计记多细），调低时引擎还要求人在命令里写下理由。MCP 工具里没有它，`monica cmds` 能看到它的语法，但两条都要主密码——你拿到主密码这件事本身就已经越界了。觉得等级碍事，就把情况说给人听，由他自己决定。
 
 `delete` 与 `delete-category` 尤其不要碰：它们写入的墓碑会随同步消失在你主人的其他设备上，而且没有撤销删除的命令。即使人在 shell 里给了你凭据，删除也应当由他自己在能键回目标名称的终端里执行。
 

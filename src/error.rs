@@ -13,6 +13,10 @@ pub enum GatewayError {
     )]
     InvalidNote,
     #[error(
+        "The database name must be plain text of at most 1024 UTF-8 bytes, without control characters."
+    )]
+    InvalidDatabaseName,
+    #[error(
         "AI-visible fields contain a credential or vault password. Remove the secret from the name, note or other public fields."
     )]
     SensitiveMetadata,
@@ -137,6 +141,14 @@ pub enum GatewayError {
     #[error("The downloaded file is not a supported MDBX vault or its integrity check failed.")]
     InvalidVault,
     #[error(
+        "This file could not be read as an MDBX vault, or its header failed the read-only integrity check. The file itself was not modified."
+    )]
+    VaultFileUnreadable,
+    #[error(
+        "There is no database file at that path. These commands only read, so they never create one."
+    )]
+    VaultFileMissing,
+    #[error(
         "This vault uses an incompatible unlock schema, such as legacy Android MDBX-1. Keep the original file and use a native MDBX3 vault."
     )]
     VaultSchemaUnsupported,
@@ -148,6 +160,18 @@ pub enum GatewayError {
         "This vault has too many or ambiguous gateway connections. Resolve them in Monica before importing."
     )]
     VaultConnectionsInvalid,
+    #[error(
+        "Lowering the security profile is recorded in the vault as an exception, so it needs a reason. Repeat the command with --reason and say why."
+    )]
+    TigaReasonRequired,
+    #[error(
+        "This change raises the security profile, so there is nothing to justify. Repeat the command without --reason."
+    )]
+    TigaReasonNotApplicable,
+    #[error(
+        "The vault's own security policy refused this profile change. The profile you are leaving requires more assurance than a password-unlocked terminal can give, so raise or lower it in Monica for Android."
+    )]
+    TigaChangeDenied,
     #[error(
         "No WebDAV vault is connected. Open a remote MDBX file or publish the local vault first."
     )]

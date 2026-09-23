@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use monica_pass_cli::admin::{AddOptions, GrantOptions, RefreshOptions};
+use monica_pass_cli::admin::{AddOptions, GrantOptions, RefreshOptions, TigaLevel};
 use monica_pass_cli::config::DEFAULT_PORT;
 use monica_pass_cli::i18n::LanguageChoice;
 use monica_pass_cli::model::Provider;
@@ -150,6 +150,12 @@ pub enum Command {
         vault: Option<PathBuf>,
         #[arg(short = 'p', long, default_value_t = DEFAULT_PORT, value_parser = clap::value_parser!(u16).range(1024..))]
         port: u16,
+        /// Label shown by `monica databases`; the file keeps the name you gave it.
+        #[arg(long, value_name = "LABEL")]
+        name: Option<String>,
+        /// Security profile the vault starts on; `power` is slowest to unlock but hardest to brute force.
+        #[arg(long, value_enum, default_value = "multi")]
+        tiga: TigaLevel,
     },
     /// Save a service connection. Requires a password and token through secure input.
     #[command(visible_alias = "c")]
@@ -203,6 +209,16 @@ pub enum Command {
         /// How many most recent events to return, newest first.
         #[arg(long, default_value_t = 50, value_parser = clap::value_parser!(u16).range(1..=500))]
         limit: u16,
+    },
+    /// Read or change the security profile this vault runs on.
+    Tiga {
+        #[command(subcommand)]
+        command: TigaCommand,
+    },
+    /// Inspect the database file itself: format, parts, size. Never unlocks or writes.
+    Mdbx {
+        #[command(subcommand)]
+        command: MdbxCommand,
     },
     /// Start the MCP stdio bridge. Never prompts for upstream credentials.
     Mcp {
@@ -270,6 +286,36 @@ pub enum KeysCommand {
         private: bool,
         #[arg(long)]
         force: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum TigaCommand {
+    /// Show the stored profile, the one actually in force, and what each costs you.
+    Show,
+    /// Move the vault to another profile. Lowering it records a reason in the vault.
+    Set {
+        #[arg(value_enum, value_name = "PROFILE")]
+        level: TigaLevel,
+        /// Why the vault may run reduced; recorded in the vault beside the exception.
+        #[arg(long, value_name = "TEXT")]
+        reason: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum MdbxCommand {
+    /// Report the format header a vault file carries and the disk it takes. No password needed.
+    Check {
+        /// Vault file to read; defaults to the current database.
+        #[arg(value_name = "FILE")]
+        vault: Option<PathBuf>,
+    },
+    /// List the vault file and any sidecar files beside it, with their sizes.
+    Files {
+        /// Vault file to read; defaults to the current database.
+        #[arg(value_name = "FILE")]
+        vault: Option<PathBuf>,
     },
 }
 
@@ -356,6 +402,14 @@ impl Command {
             Self::Lock => "lock",
             Self::Status => "status",
             Self::Audit { .. } => "audit",
+            Self::Tiga { command } => match command {
+                TigaCommand::Show => "tiga show",
+                TigaCommand::Set { .. } => "tiga set",
+            },
+            Self::Mdbx { command } => match command {
+                MdbxCommand::Check { .. } => "mdbx check",
+                MdbxCommand::Files { .. } => "mdbx files",
+            },
             Self::Mcp { .. } => "mcp",
         }
     }

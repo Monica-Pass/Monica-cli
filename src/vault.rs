@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use mdbx_core::model::ObjectTypeId;
-use mdbx_core::tiga::{DeviceAssurance, DeviceContext, TigaMode};
+use mdbx_core::tiga::{
+    DeviceAssurance, DeviceContext, PolicyException, ResolvedTigaPolicy, TigaMode,
+    TigaPolicyOverride, TigaScope,
+};
 use mdbx_storage::connection::{PendingVaultCreation, VaultConnection};
 use mdbx_storage::error::StorageError;
 use mdbx_storage::init::{VaultInitParams, initialize_vault};
@@ -12,6 +15,8 @@ use mdbx_storage::repo::{
     WriteCommand, WriteOperationRequest,
 };
 use mdbx_storage::runtime::VaultRuntime;
+use mdbx_storage::tiga::TigaService;
+use mdbx_storage::tiga_policy::TigaAuthorizationContext;
 use mdbx_storage::unlock::UnlockService;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -184,6 +189,80 @@ impl Vault {
         };
         vault.ensure_android_root();
         Ok(vault)
+    }
+
+    /// The security profile this vault starts every new entry on.
+    pub fn tiga_default(&self) -> Result<TigaMode> {
+        self.runtime
+            .with_read(TigaService::get_global_default)
+            .map_err(|_| GatewayError::StateUnavailable)
+    }
+
+    /// The profile as it actually applies, with any override the vault already
+    /// carries — from this CLI or from Monica for Android — folded in.
+    pub fn tiga_policy(&self) -> Result<ResolvedTigaPolicy> {
+        let connection = self
+            .runtime
+            .read()
+            .map_err(|_| GatewayError::StateUnavailable)?;
+        TigaService::resolve_vault_policy(&connection).map_err(map_tiga_error)
+    }
+
+    /// Move the vault's default profile.
+    ///
+    /// Raising it is a plain change. Lowering it is a recorded exception: the
+    /// vault keeps the reason a person typed beside the audit event, with no
+    /// deadline, so `tiga show` keeps reporting the vault as running under an
+    /// exception until someone raises it back. This mirrors the path the Android
+    /// app takes through the same engine, so both clients read the same state.
+    pub fn set_tiga_policy(&self, target: TigaMode, reason: Option<&str>) -> Result<()> {
+        let connection = self
+            .runtime
+            .write()
+            .map_err(|_| GatewayError::StateUnavailable)?;
+        if connection.keyring().is_none() || connection.active_session().is_none() {
+            return Err(GatewayError::UnlockRequired);
+        }
+        let current = TigaService::get_global_default(&connection).map_err(map_tiga_error)?;
+        let reason = reason.map(str::trim).filter(|reason| !reason.is_empty());
+        let exception = match (target < current, reason) {
+            (true, None) => return Err(GatewayError::TigaReasonRequired),
+            (false, Some(_)) => {
+                // A reason that goes nowhere would read later like it was recorded.
+                return Err(GatewayError::TigaReasonNotApplicable);
+            }
+            (true, Some(reason)) => Some(PolicyException {
+                exception_id: uuid::Uuid::new_v4().to_string(),
+                target: TigaScope::Vault,
+                approved_override: TigaPolicyOverride::for_vault_profile(target),
+                reason: reason.to_owned(),
+                expires_at_unix_secs: None,
+            }),
+            (false, None) => None,
+        };
+        let session = connection.active_session().cloned();
+        let device = DeviceContext {
+            device_id: Some("monica-pass-admin".to_owned()),
+            // What this CLI honestly has: a normal unlocked process, no hardware
+            // attestation and no screen-capture guarantee to claim.
+            assurance: DeviceAssurance::Standard,
+            secure_clipboard_available: false,
+            screen_capture_protection_available: false,
+            secure_temp_files_available: true,
+        };
+        TigaService::set_vault_profile_authorized(
+            &connection,
+            &CommitContext::new("monica-pass-admin".to_owned()),
+            target,
+            exception.as_ref(),
+            TigaAuthorizationContext {
+                session: session.as_ref(),
+                device: &device,
+                now_unix_secs: chrono::Utc::now().timestamp(),
+            },
+        )
+        .map_err(map_tiga_error)?;
+        Ok(())
     }
 
     /// Make the vault writable by Monica for Android, and repair the vaults that were not.
@@ -991,6 +1070,28 @@ impl Vault {
             }
         }
         Ok(result)
+    }
+}
+
+/// Turn an engine refusal into the one error that tells a person what to do next.
+///
+/// The TIGA code reports a denied change and a missing unlock through the same handful of
+/// variants, and the difference matters: one asks for Monica, the other for a password.
+fn map_tiga_error(error: StorageError) -> GatewayError {
+    match error {
+        StorageError::Authorization(_) => GatewayError::TigaChangeDenied,
+        StorageError::Validation(message) | StorageError::ConstraintViolation(message) => {
+            let message = message.to_lowercase();
+            if message.contains("version") {
+                GatewayError::VaultSchemaUnsupported
+            } else if message.contains("session") || message.contains("unlock") {
+                GatewayError::UnlockRequired
+            } else {
+                GatewayError::TigaChangeDenied
+            }
+        }
+        StorageError::NotFound(_) => GatewayError::NotFound,
+        _ => GatewayError::StateUnavailable,
     }
 }
 
