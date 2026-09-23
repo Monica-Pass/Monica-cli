@@ -14,10 +14,11 @@
 本地直接双击 `index.html` 就能用（`file://` 下功能完整，只是标题字体走 Google Fonts CDN，
 离线时退回系统等宽字体）。
 
-部署到 GitHub Pages：仓库 `Settings → Pages → Build and deployment → Deploy from a branch`，
-分支 `main`，目录 `/docs/reference`，站点地址即
-`https://<org>.github.io/<repo>/docs/reference/`。这个地址本身尚未实测——目前所有验证都在本地
-`file://` + 无头浏览器里完成，Pages 上线后的渲染需要部署后再看一次。
+上线走 GitHub Actions：仓库 `Settings → Pages → Source = GitHub Actions`，工作流是
+`.github/workflows/pages.yml`，推 `main` 即发布。它把整个 `docs/` 目录当作站点根（因为页头引用了
+`../images/logo.png`），所以地址是 `https://monica-pass.github.io/Monica-cli/reference/`，
+根路径由 `docs/index.html` 一跳转过来。工作流用 `actions/upload-pages-artifact@v3` +
+`actions/deploy-pages@v4`，没有构建步骤——仓库里是什么就发什么。
 
 ## 文件
 
