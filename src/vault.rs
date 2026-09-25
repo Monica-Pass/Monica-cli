@@ -1880,4 +1880,280 @@ mod tests {
         ));
         vault.lock().unwrap();
     }
+
+    /// HarmonyOS Monica writes every non-password item as a `com.monica.harmony.{itemType}`
+    /// object in the Android root folder, wrapping its whole record in the payload. This CLI
+    /// never parses those payloads: the listing passes the object type through as the kind, the
+    /// keys path only ever scans `login` rows, and every reveal of a foreign type must be a
+    /// clean error. Pinned here so a synced phone database can never poison the vault.
+    #[test]
+    fn harmony_object_rows_are_absorbed_and_never_reach_the_credential_paths() {
+        use serde_json::json;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("vault.mdbx");
+        let vault = Vault::create(&path, PASSWORD, TigaMode::Multi).unwrap();
+        let vault_id = vault.vault_id().unwrap();
+        let root = root_collection_id(&vault_id).to_string();
+        // The item types Monica-for-harmony's MdbxEntryCodec actually writes.
+        let mut harmony: Vec<(String, String, String)> = Vec::new();
+        for (item_type, title) in [
+            ("note", "会议记录"),
+            ("bank_card", "工资卡"),
+            ("send", "临时分享"),
+            ("authenticator", "GitHub OTP"),
+        ] {
+            let logical = format!("{item_type}:{}", uuid::Uuid::new_v4());
+            let record = json!({
+                "recordVersion": 1,
+                "id": logical,
+                "itemType": item_type,
+                "title": title,
+                "subtitle": "",
+                "notes": "",
+                "favorite": false,
+                "source": {"type": "local", "provider": "harmony", "externalId": logical},
+                "payloadJson": "{\"secret\":\"inside the record\"}",
+            });
+            // The codec nests the record as a JSON object; an earlier reading of the contract
+            // embedded it as a JSON string. Both must absorb the same way, because nothing
+            // here ever opens the wrapper.
+            let wrapper = if item_type == "send" {
+                json!({
+                    "kind": "harmony",
+                    "monica_entry_id": logical,
+                    "monica_harmony_record": serde_json::to_string(&record).unwrap(),
+                })
+            } else {
+                json!({
+                    "kind": "harmony",
+                    "monica_entry_id": logical,
+                    "monica_harmony_record": record,
+                })
+            };
+            // Harmony derives its native id the same Java way Android does, from vault and
+            // logical id, so the CLI must absorb that id unchanged.
+            let entry_id = physical_entry_id(&vault_id, &logical).to_string();
+            vault
+                .key_write(
+                    "harmony-import-simulation",
+                    vec![WriteCommand::CreateEntry {
+                        entry_id: entry_id.clone(),
+                        project_id: root.clone(),
+                        entry_type: format!("com.monica.harmony.{item_type}"),
+                        title: title.to_owned(),
+                        payload_json: serde_json::to_string(&wrapper).unwrap(),
+                    }],
+                )
+                .unwrap();
+            harmony.push((
+                entry_id,
+                format!("com.monica.harmony.{item_type}"),
+                title.to_owned(),
+            ));
+        }
+
+        let library = vault.library().unwrap();
+        for (entry_id, kind, title) in &harmony {
+            let entry = library
+                .entries
+                .iter()
+                .find(|entry| entry.id == *entry_id)
+                .unwrap_or_else(|| panic!("{title} vanished from the listing"));
+            // object_type_id passes through as the kind, verbatim.
+            assert_eq!(&entry.kind, kind);
+            assert_eq!(&entry.title, title);
+            assert_eq!(&entry.category, &root);
+        }
+        // None of these are `login` rows, so the keys path never even scans them.
+        assert!(vault.key_entries().unwrap().is_empty());
+        assert!(vault.gateway_inventory().unwrap().connections.is_empty());
+
+        // Reveals refuse by type — never a panic, whatever purpose asks.
+        let now = chrono::Utc::now().timestamp();
+        let note_id = &harmony[0].0;
+        assert!(matches!(
+            vault.reveal(note_id, RevealPurpose::KeyAdmin, now),
+            Err(GatewayError::KeyEntryTypeMismatch)
+        ));
+        assert!(matches!(
+            vault.reveal(note_id, RevealPurpose::GatewayToken, now),
+            Err(GatewayError::CredentialUnavailable)
+        ));
+        assert!(matches!(
+            vault.reveal_key(note_id, None),
+            Err(GatewayError::KeyEntryTypeMismatch)
+        ));
+        // And an entry that is not there at all says NotFound.
+        assert!(matches!(
+            vault.reveal(
+                &uuid::Uuid::new_v4().to_string(),
+                RevealPurpose::KeyAdmin,
+                now
+            ),
+            Err(GatewayError::NotFound)
+        ));
+
+        // Counterexample pinned against the engine rule: an object type id with capitals fails
+        // validation — which is exactly why the all-lowercase harmony ids absorb. The CLI
+        // collapses every coordinator refusal into StateUnavailable; no entry lands.
+        assert!(matches!(
+            vault.key_write(
+                "harmony-uppercase-simulation",
+                vec![WriteCommand::CreateEntry {
+                    entry_id: uuid::Uuid::new_v4().to_string(),
+                    project_id: root.clone(),
+                    entry_type: "com.monica.Harmony.Note".to_owned(),
+                    title: "大写类型".to_owned(),
+                    payload_json: "{}".to_owned(),
+                }],
+            ),
+            Err(GatewayError::StateUnavailable)
+        ));
+        assert_eq!(vault.library().unwrap().entries.len(), harmony.len());
+
+        vault.lock().unwrap();
+        drop(vault);
+        // Reopen: the rows survive with their kinds verbatim, and the Android root folder this
+        // CLI seeds is still exactly one row, still protected — harmony writes changed nothing.
+        let reopened = Vault::open(&path, PASSWORD).unwrap();
+        let library = reopened.library().unwrap();
+        for (entry_id, kind, title) in &harmony {
+            let entry = library
+                .entries
+                .iter()
+                .find(|entry| entry.id == *entry_id)
+                .unwrap_or_else(|| panic!("{title} lost across reopen"));
+            assert_eq!(&entry.kind, kind);
+        }
+        assert_eq!(
+            library
+                .categories
+                .iter()
+                .filter(|category| category.id == root)
+                .count(),
+            1,
+            "reopening must not seed a second root row beside harmony's writes"
+        );
+        assert!(matches!(
+            reopened.delete_category(&root),
+            Err(crate::library::DeleteBlocked::Protected(_))
+        ));
+        reopened.lock().unwrap();
+    }
+
+    /// Harmony password items land as Android-wire `login` rows, and every field may be
+    /// missing — the side writes with `optString` semantics. The keys path scans exactly those
+    /// two rows, decrypts both without error, and never surfaces a plain password as a key.
+    #[test]
+    fn harmony_login_rows_absorb_and_stay_out_of_the_key_listing() {
+        use serde_json::json;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("vault.mdbx");
+        let vault = Vault::create(&path, PASSWORD, TigaMode::Multi).unwrap();
+        let vault_id = vault.vault_id().unwrap();
+        let root = root_collection_id(&vault_id).to_string();
+
+        // The sparse case from the contract: only website and password_plain present.
+        let partial_logical = new_logical_entry_id();
+        let partial_id = physical_entry_id(&vault_id, &partial_logical).to_string();
+        let partial_payload = json!({
+            "website": "https://harmony.example",
+            "password_plain": "a sparse harmony secret",
+        });
+        // A complete Android login shares the same row shape.
+        let full_logical = new_logical_entry_id();
+        let full_id = physical_entry_id(&vault_id, &full_logical).to_string();
+        let mut full = payload::new_login_payload(&full_logical, "PASSWORD");
+        full["website"] = json!("https://complete.example");
+        full["username"] = json!("someone");
+        payload::set_password_plain(&mut full, "a complete harmony secret");
+        vault
+            .key_write(
+                "harmony-login-simulation",
+                vec![
+                    WriteCommand::CreateEntry {
+                        entry_id: partial_id.clone(),
+                        project_id: root.clone(),
+                        entry_type: LOGIN_ENTRY_TYPE.to_owned(),
+                        title: "鸿蒙缺字段".to_owned(),
+                        payload_json: serde_json::to_string(&partial_payload).unwrap(),
+                    },
+                    WriteCommand::CreateEntry {
+                        entry_id: full_id.clone(),
+                        project_id: root.clone(),
+                        entry_type: LOGIN_ENTRY_TYPE.to_owned(),
+                        title: "鸿蒙完整条目".to_owned(),
+                        payload_json: payload::serialize(&full).unwrap(),
+                    },
+                ],
+            )
+            .unwrap();
+
+        // The keys scan is offered exactly the two login rows…
+        let library = vault.library().unwrap();
+        assert_eq!(
+            library
+                .entries
+                .iter()
+                .filter(|entry| entry.kind == LOGIN_ENTRY_TYPE)
+                .count(),
+            2
+        );
+        // …and decrypting them yields no keys: a PASSWORD login is skipped, not an error.
+        assert!(vault.key_entries().unwrap().is_empty());
+        assert!(matches!(
+            vault.key_entry(&partial_id),
+            Err(GatewayError::KeyEntryTypeMismatch)
+        ));
+
+        // Absorption semantics: absent fields read as empty strings and an absent login_type
+        // reads as PASSWORD, exactly like Android's optString path.
+        let now = chrono::Utc::now().timestamp();
+        let disclosed = vault
+            .reveal(&partial_id, RevealPurpose::KeyAdmin, now)
+            .unwrap();
+        assert_eq!(disclosed.project_id, root);
+        let value: Value = serde_json::from_slice(&disclosed.payload).unwrap();
+        assert_eq!(
+            payload::read_string(&value, "website"),
+            "https://harmony.example"
+        );
+        assert_eq!(
+            payload::read_string(&value, "password_plain"),
+            "a sparse harmony secret"
+        );
+        assert_eq!(payload::read_string(&value, "username"), "");
+        assert_eq!(payload::read_string(&value, "notes"), "");
+        assert_eq!(payload::read_string(&value, "monica_entry_id"), "");
+        assert_eq!(payload::read_login_type(&value), "PASSWORD");
+        assert!(matches!(
+            vault.reveal_key(&partial_id, None),
+            Err(GatewayError::KeyEntryTypeMismatch)
+        ));
+        let disclosed = vault
+            .reveal(&full_id, RevealPurpose::KeyAdmin, now)
+            .unwrap();
+        let value: Value = serde_json::from_slice(&disclosed.payload).unwrap();
+        assert_eq!(value["kind"], "password");
+        assert_eq!(value["monica_entry_id"], full_logical.as_str());
+        assert_eq!(payload::read_login_type(&value), "PASSWORD");
+        // Neither purpose that discloses secrets reaches a plain password login either.
+        assert!(matches!(
+            vault.reveal_key(&full_id, None),
+            Err(GatewayError::KeyEntryTypeMismatch)
+        ));
+        assert!(matches!(
+            vault.reveal(&full_id, RevealPurpose::GatewayToken, now),
+            Err(GatewayError::CredentialUnavailable)
+        ));
+
+        vault.lock().unwrap();
+        // The synced plaintext never exists unencrypted beside the vault.
+        let secret = "a sparse harmony secret";
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(!bytes.windows(secret.len()).any(|w| w == secret.as_bytes()));
+        drop(directory);
+    }
 }
