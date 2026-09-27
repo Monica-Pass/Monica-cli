@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 
 use crate::approval::{ApprovalQueue, Decision, Request, Ticket};
 use crate::config::{
@@ -17,10 +17,15 @@ use crate::config::{
 use crate::error::{GatewayError, Result};
 use crate::model::{Arguments, CONNECTION_CATALOG_TOOL, Operation, ToolCall};
 use crate::upstream;
-use crate::vault::Vault;
+use crate::vault::{Credential, Vault};
 
 const MAX_JOURNAL_ENTRIES: usize = 4096;
 const MAX_STATE_BYTES: u64 = 8 * 1024 * 1024;
+/// How long an approved call queues for the broker behind whatever call is in
+/// flight. A person has just said yes, so it waits its turn instead of bouncing
+/// straight back, but only briefly: the bridge stops listening at
+/// `protocol::CALL_TIMEOUT`.
+const RESUME_WAIT: Duration = Duration::from_secs(5);
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -43,6 +48,27 @@ struct ExecutionState {
     /// session ends and restarts far sooner than a grant window, so this cannot
     /// live only in memory.
     usage: BTreeMap<String, u32>,
+}
+
+/// A call that passed every check a person is not needed for. Holding one is not
+/// permission to dispatch: [`Gateway::dispatch`] still re-checks access right
+/// before the request leaves.
+struct Dispatch {
+    grant: Grant,
+    binding: Connection,
+    operation: Operation,
+    arguments: Arguments,
+    argument_hash: String,
+    credential: Credential,
+    journal_key: Option<String>,
+    /// The question for a person, when the grant's gate covers this call.
+    approval: Option<(String, Request)>,
+}
+
+enum Prepared {
+    /// Settled without the service: the connection catalog or a journaled write.
+    Answered(Value),
+    Dispatch(Box<Dispatch>),
 }
 
 #[derive(Serialize)]
@@ -262,9 +288,14 @@ impl Gateway {
             stage: "finished",
             error: None,
         };
-        let result = self
-            .call_authorized(capability, call, &mut state, &mut event)
-            .await;
+        let result = match self.prepare(capability, call, &mut state, &mut event) {
+            Ok(Prepared::Answered(value)) => Ok(value),
+            Ok(Prepared::Dispatch(dispatch)) => {
+                self.dispatch(capability, state, *dispatch, &mut event)
+                    .await
+            }
+            Err(error) => Err(error),
+        };
         event.stage = "finished";
         event.timestamp = chrono::Utc::now().timestamp();
         event.error = result.as_ref().err().copied();
@@ -278,13 +309,16 @@ impl Gateway {
         result
     }
 
-    async fn call_authorized(
+    /// Every check that needs no person: grant, arguments, scope, lock, rate,
+    /// credential and the write journal. It ends either with an answer that never
+    /// reaches the service, or with the call ready to dispatch.
+    fn prepare(
         &self,
         capability: &str,
         call: ToolCall,
         state: &mut ExecutionState,
         event: &mut AuditEvent,
-    ) -> Result<Value> {
+    ) -> Result<Prepared> {
         let (grant, binding) = self.access(capability)?;
         event.grant = Some(grant.name.clone());
         if call.tool == CONNECTION_CATALOG_TOOL {
@@ -297,7 +331,7 @@ impl Gateway {
             }
             Self::charge_rate(state, &grant)?;
             self.validate_public_access(capability, &grant, &binding)?;
-            return Ok(catalog(&grant, &binding));
+            return Ok(Prepared::Answered(catalog(&grant, &binding)));
         }
         let operation = Operation::from_tool(&call.tool, binding.provider)?;
         event.operation = Some(operation);
@@ -333,30 +367,17 @@ impl Gateway {
             let id = uuid::Uuid::parse_str(id).expect("Arguments::parse validates UUIDs");
             format!("{}:{id}", grant.capability_hash)
         });
-        if let Some(key) = &journal_key {
-            if let Some(record) = state.journal.get(key) {
-                if record.argument_hash != argument_hash {
-                    return Err(GatewayError::RequestIdConflict);
-                }
-                return match &record.outcome {
-                    Some(Ok(result)) => {
-                        upstream::reject_secret(result, &credential)?;
-                        Ok(result.clone())
-                    }
-                    Some(Err(error)) => Err(*error),
-                    None => Err(GatewayError::WriteOutcomeUnknown),
-                };
-            }
-            if state.journal.len() >= MAX_JOURNAL_ENTRIES {
-                return Err(GatewayError::JournalFull);
-            }
+        if let Some(key) = &journal_key
+            && let Some(result) = journaled(state, key, &argument_hash, &credential)?
+        {
+            return Ok(Prepared::Answered(result));
         }
         // A person can require a yes before a call leaves the machine. The gate
         // sits before the budget is charged, so a refusal costs nothing, and it is
         // before the durable `authorized` record, so a refusal never claims a call
         // was dispatched.
-        if grant.approval.requires(operation.is_write()) {
-            self.await_approval(
+        let approval = grant.approval.requires(operation.is_write()).then(|| {
+            (
                 format!("approval:{}:{argument_hash}", grant.capability_hash),
                 Request {
                     id: 0,
@@ -368,11 +389,66 @@ impl Gateway {
                     asked_at: Instant::now(),
                 },
             )
-            .await?;
+        });
+        Ok(Prepared::Dispatch(Box::new(Dispatch {
+            grant,
+            binding,
+            operation,
+            arguments,
+            argument_hash,
+            credential,
+            journal_key,
+            approval,
+        })))
+    }
+
+    async fn dispatch(
+        &self,
+        capability: &str,
+        mut state: MutexGuard<'_, ExecutionState>,
+        mut call: Dispatch,
+        event: &mut AuditEvent,
+    ) -> Result<Value> {
+        if let Some((key, request)) = call.approval.take() {
+            // A person may take the whole window to answer, and that is no reason
+            // to turn away every other grant on this broker in the meantime. The
+            // lock is let go for the wait and taken back before anything is spent.
+            drop(state);
+            self.await_approval(key, request).await?;
+            state = tokio::time::timeout(RESUME_WAIT, self.state.lock())
+                .await
+                .map_err(|_| GatewayError::RateLimited)?;
+            // While the lock was free the grant could have been revoked, the vault
+            // locked, or this same write dispatched by a twin that was waiting on
+            // the same answer. Everything the wait could have changed is read again.
+            self.recheck_access(
+                capability,
+                &call.binding,
+                call.operation,
+                call.arguments.repository(),
+            )?;
+            call.credential = self
+                .vault
+                .credential(&call.binding, chrono::Utc::now().timestamp())?;
+            if let Some(key) = &call.journal_key
+                && let Some(result) = journaled(&state, key, &call.argument_hash, &call.credential)?
+            {
+                return Ok(result);
+            }
         }
+        let Dispatch {
+            grant,
+            binding,
+            operation,
+            arguments,
+            argument_hash,
+            credential,
+            journal_key,
+            ..
+        } = call;
         // A replayed write returns above, so retrying an interrupted call never
         // spends a second unit of the budget.
-        self.charge_calls(state, &grant)?;
+        self.charge_calls(&mut state, &grant)?;
         // Audit the decision durably before an external side effect.
         event.stage = "authorized";
         self.audit(event)?;
@@ -386,7 +462,7 @@ impl Gateway {
                     outcome: None,
                 },
             );
-            if self.save_journal(state).is_err() {
+            if self.save_journal(&state).is_err() {
                 state.journal.remove(key);
                 return Err(GatewayError::StateUnavailable);
             }
@@ -408,7 +484,7 @@ impl Gateway {
             } else {
                 result.clone()
             });
-            if self.save_journal(state).is_err() {
+            if self.save_journal(&state).is_err() {
                 return Err(GatewayError::WriteOutcomeUnknown);
             }
         }
@@ -488,6 +564,33 @@ impl Gateway {
         file.write_all(&bytes)
             .map_err(|_| GatewayError::StateUnavailable)?;
         file.sync_data().map_err(|_| GatewayError::StateUnavailable)
+    }
+}
+
+/// What the journal already holds for this write. `Some` is the settled answer,
+/// so a retried write never reaches the service a second time.
+fn journaled(
+    state: &ExecutionState,
+    key: &str,
+    argument_hash: &str,
+    credential: &Credential,
+) -> Result<Option<Value>> {
+    let Some(record) = state.journal.get(key) else {
+        if state.journal.len() >= MAX_JOURNAL_ENTRIES {
+            return Err(GatewayError::JournalFull);
+        }
+        return Ok(None);
+    };
+    if record.argument_hash != argument_hash {
+        return Err(GatewayError::RequestIdConflict);
+    }
+    match &record.outcome {
+        Some(Ok(result)) => {
+            upstream::reject_secret(result, credential)?;
+            Ok(Some(result.clone()))
+        }
+        Some(Err(error)) => Err(*error),
+        None => Err(GatewayError::WriteOutcomeUnknown),
     }
 }
 

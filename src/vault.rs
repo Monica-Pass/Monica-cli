@@ -1107,6 +1107,15 @@ pub(crate) fn validate_token(token: &str) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// The engine treats a timestamp older than the session's last activity as an
+    /// expired session, and every disclosure moves that activity forward. A test
+    /// that reused one captured timestamp across disclosures therefore failed
+    /// whenever a second boundary fell between them, so each disclosure reads the
+    /// clock itself, as the product code does.
+    fn now() -> i64 {
+        chrono::Utc::now().timestamp()
+    }
+
     const PASSWORD: &str = "A correct and lengthy test passphrase 938!";
     const TOKEN: &str = "test-upstream-secret-32-characters";
 
@@ -1126,20 +1135,19 @@ mod tests {
                 Zeroizing::new(TOKEN.to_owned()),
             )
             .unwrap();
-        let now = chrono::Utc::now().timestamp();
         assert_eq!(
-            vault.credential(&binding, now).unwrap().token.as_str(),
+            vault.credential(&binding, now()).unwrap().token.as_str(),
             TOKEN
         );
         let mut changed = binding.clone();
         changed.api_base = "https://another-host.example/".to_owned();
         assert!(matches!(
-            vault.credential(&changed, now),
+            vault.credential(&changed, now()),
             Err(GatewayError::CredentialUnavailable)
         ));
         vault.lock().unwrap();
         assert!(matches!(
-            vault.credential(&binding, now),
+            vault.credential(&binding, now()),
             Err(GatewayError::UnlockRequired)
         ));
         drop(vault);
@@ -1154,13 +1162,12 @@ mod tests {
             Err(GatewayError::UnlockRequired)
         ));
         let reopened = Vault::open(&path, PASSWORD).unwrap();
-        let now = chrono::Utc::now().timestamp();
         assert_eq!(
-            reopened.credential(&binding, now).unwrap().token.as_str(),
+            reopened.credential(&binding, now()).unwrap().token.as_str(),
             TOKEN
         );
         assert!(matches!(
-            reopened.credential(&binding, now + 301),
+            reopened.credential(&binding, now() + 301),
             Err(GatewayError::UnlockRequired)
         ));
     }
@@ -1267,9 +1274,12 @@ mod tests {
             entry_title(&vault, &binding.credential_id).as_deref(),
             Some("GitHub 工作")
         );
-        let now = chrono::Utc::now().timestamp();
         assert_eq!(
-            vault.credential(&after_token, now).unwrap().token.as_str(),
+            vault
+                .credential(&after_token, now())
+                .unwrap()
+                .token
+                .as_str(),
             "replacement-upstream-secret-32-chars"
         );
     }
@@ -1306,9 +1316,8 @@ mod tests {
             entry_title(&reopened, &binding.credential_id).as_deref(),
             Some("旧条目改名")
         );
-        let now = chrono::Utc::now().timestamp();
         assert_eq!(
-            reopened.credential(&binding, now).unwrap().token.as_str(),
+            reopened.credential(&binding, now()).unwrap().token.as_str(),
             TOKEN
         );
     }
@@ -1405,8 +1414,7 @@ mod tests {
             )
             .unwrap();
         // Simulate a pre-change vault: rewrite the encrypted payload so it carries no handle.
-        let now = chrono::Utc::now().timestamp();
-        let (mut stored, project_id) = vault.reveal_stored(&binding, now).unwrap();
+        let (mut stored, project_id) = vault.reveal_stored(&binding, now()).unwrap();
         stored.name = String::new();
         let payload_json = serde_json::to_string(&stored).unwrap();
         assert!(
@@ -1622,7 +1630,6 @@ mod tests {
             TigaMode::Multi,
         )
         .unwrap();
-        let now = chrono::Utc::now().timestamp();
         let data = ssh_data();
         let key = vault
             .add_key_entry(None, "laptop", "", NewKeyEntry::Ssh { data: &data })
@@ -1632,7 +1639,7 @@ mod tests {
             Err(GatewayError::KeyEntryTypeMismatch)
         ));
         assert!(matches!(
-            vault.reveal(&key.entry_id, RevealPurpose::GatewayToken, now),
+            vault.reveal(&key.entry_id, RevealPurpose::GatewayToken, now()),
             Err(GatewayError::CredentialUnavailable)
         ));
         let binding = Connection {
@@ -1642,7 +1649,7 @@ mod tests {
             note: String::new(),
         };
         assert!(matches!(
-            vault.credential(&binding, now),
+            vault.credential(&binding, now()),
             Err(GatewayError::CredentialUnavailable)
         ));
         // An ordinary password login shares the native type but is refused by login_type, which
@@ -1970,14 +1977,13 @@ mod tests {
         assert!(vault.gateway_inventory().unwrap().connections.is_empty());
 
         // Reveals refuse by type — never a panic, whatever purpose asks.
-        let now = chrono::Utc::now().timestamp();
         let note_id = &harmony[0].0;
         assert!(matches!(
-            vault.reveal(note_id, RevealPurpose::KeyAdmin, now),
+            vault.reveal(note_id, RevealPurpose::KeyAdmin, now()),
             Err(GatewayError::KeyEntryTypeMismatch)
         ));
         assert!(matches!(
-            vault.reveal(note_id, RevealPurpose::GatewayToken, now),
+            vault.reveal(note_id, RevealPurpose::GatewayToken, now()),
             Err(GatewayError::CredentialUnavailable)
         ));
         assert!(matches!(
@@ -1989,7 +1995,7 @@ mod tests {
             vault.reveal(
                 &uuid::Uuid::new_v4().to_string(),
                 RevealPurpose::KeyAdmin,
-                now
+                now()
             ),
             Err(GatewayError::NotFound)
         ));
@@ -2110,9 +2116,8 @@ mod tests {
 
         // Absorption semantics: absent fields read as empty strings and an absent login_type
         // reads as PASSWORD, exactly like Android's optString path.
-        let now = chrono::Utc::now().timestamp();
         let disclosed = vault
-            .reveal(&partial_id, RevealPurpose::KeyAdmin, now)
+            .reveal(&partial_id, RevealPurpose::KeyAdmin, now())
             .unwrap();
         assert_eq!(disclosed.project_id, root);
         let value: Value = serde_json::from_slice(&disclosed.payload).unwrap();
@@ -2133,7 +2138,7 @@ mod tests {
             Err(GatewayError::KeyEntryTypeMismatch)
         ));
         let disclosed = vault
-            .reveal(&full_id, RevealPurpose::KeyAdmin, now)
+            .reveal(&full_id, RevealPurpose::KeyAdmin, now())
             .unwrap();
         let value: Value = serde_json::from_slice(&disclosed.payload).unwrap();
         assert_eq!(value["kind"], "password");
@@ -2145,7 +2150,7 @@ mod tests {
             Err(GatewayError::KeyEntryTypeMismatch)
         ));
         assert!(matches!(
-            vault.reveal(&full_id, RevealPurpose::GatewayToken, now),
+            vault.reveal(&full_id, RevealPurpose::GatewayToken, now()),
             Err(GatewayError::CredentialUnavailable)
         ));
 

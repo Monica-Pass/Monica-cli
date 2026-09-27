@@ -1336,3 +1336,128 @@ async fn locking_the_broker_answers_every_waiting_call() {
     assert_eq!(result.unwrap_err(), GatewayError::UnlockRequired);
     assert!(approvals.waiting().is_empty());
 }
+
+/// A second grant on the same connection with no gate, as a person would issue
+/// for a different AI client.
+fn add_ungated_grant(fixture: &Fixture) -> zeroize::Zeroizing<String> {
+    let capability = crate::config::new_capability();
+    fixture
+        .store
+        .update(|config| {
+            let mut config = config.unwrap();
+            let mut grant = config.grants[0].clone();
+            grant.name = "other-agent".to_owned();
+            grant.capability_hash = crate::config::capability_hash(&capability);
+            grant.approval = ApprovalPolicy::Off;
+            config.grants.push(grant);
+            Ok((config, ()))
+        })
+        .unwrap();
+    capability
+}
+
+async fn parked(fixture: &Fixture) {
+    let approvals = fixture.gateway.approvals();
+    while approvals.waiting().is_empty() {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_call_waiting_for_a_person_does_not_hold_up_other_grants() {
+    let fixture = Fixture::new(
+        Provider::Github,
+        &[Operation::ListIssues],
+        vec![Reply::json(json!([])), Reply::json(json!([]))],
+    )
+    .await;
+    set_approval(&fixture, ApprovalPolicy::All);
+    let other = add_ungated_grant(&fixture);
+    let read = fixture.call(Operation::ListIssues, json!({"repository":REPOSITORY}));
+    let meanwhile = async {
+        parked(&fixture).await;
+        // The gated call is parked on a person. Another client's discovery and
+        // service calls must go straight through instead of reading `rate_limited`.
+        fixture.gateway.discovery_access(&other).await.unwrap();
+        let result = fixture.gateway.call(&other, read.clone()).await;
+        let approvals = fixture.gateway.approvals();
+        approvals.decide(approvals.waiting()[0].id, Decision::Approved);
+        result
+    };
+    let (gated, ungated) = tokio::join!(
+        fixture.gateway.call(&fixture.capability, read.clone()),
+        meanwhile
+    );
+    assert_eq!(ungated.unwrap()["items"], json!([]));
+    assert_eq!(gated.unwrap()["items"], json!([]));
+    assert_eq!(fixture.upstream.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn an_answer_cannot_revive_a_grant_revoked_while_the_person_decided() {
+    let fixture = Fixture::new(
+        Provider::Github,
+        &[Operation::CreateIssue],
+        vec![Reply::json(issue(Provider::Github, 45))],
+    )
+    .await;
+    set_approval(&fixture, ApprovalPolicy::Write);
+    cap_calls(&fixture, 5);
+    let write = fixture.call(
+        Operation::CreateIssue,
+        json!({"repository":REPOSITORY, "title":"Revoked meanwhile", "request_id":uuid::Uuid::new_v4()}),
+    );
+    let revoke_then_approve = async {
+        parked(&fixture).await;
+        admin::revoke(&fixture.store, "test-agent").unwrap();
+        let approvals = fixture.gateway.approvals();
+        approvals.decide(approvals.waiting()[0].id, Decision::Approved);
+    };
+    let (result, ()) = tokio::join!(
+        fixture.gateway.call(&fixture.capability, write),
+        revoke_then_approve
+    );
+    assert_eq!(result.unwrap_err(), GatewayError::Unauthorized);
+    assert!(fixture.upstream.requests().is_empty());
+    assert_eq!(
+        calls_spent(&fixture),
+        0,
+        "nothing was dispatched to pay for"
+    );
+}
+
+#[tokio::test]
+async fn a_write_dispatched_while_its_twin_waited_is_not_sent_again() {
+    let fixture = Fixture::new(
+        Provider::Github,
+        &[Operation::CreateIssue],
+        vec![Reply::json(issue(Provider::Github, 46))],
+    )
+    .await;
+    set_approval(&fixture, ApprovalPolicy::Write);
+    let write = fixture.call(
+        Operation::CreateIssue,
+        json!({"repository":REPOSITORY, "title":"Only once", "request_id":uuid::Uuid::new_v4()}),
+    );
+    let twin = async {
+        parked(&fixture).await;
+        // The person turns the gate off and the same write arrives again, so it
+        // leaves while the first copy is still waiting on its answer.
+        set_approval(&fixture, ApprovalPolicy::Off);
+        let twin = fixture
+            .gateway
+            .call(&fixture.capability, write.clone())
+            .await;
+        let approvals = fixture.gateway.approvals();
+        approvals.decide(approvals.waiting()[0].id, Decision::Approved);
+        twin
+    };
+    let (first, twin) = tokio::join!(
+        fixture.gateway.call(&fixture.capability, write.clone()),
+        twin
+    );
+    assert_eq!(twin.unwrap()["issue"]["number"], 46);
+    // The approved copy finds the journal entry the twin left and replays it.
+    assert_eq!(first.unwrap()["issue"]["number"], 46);
+    assert_eq!(fixture.upstream.requests().len(), 1);
+}

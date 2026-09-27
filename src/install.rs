@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
+use toml_edit::{Array, DocumentMut, Item, Table, value};
 
 use crate::config::{ensure_parent, private_file, read_json, write_json};
 use crate::error::{GatewayError, Result};
@@ -169,20 +170,42 @@ fn merge_json(path: &Path, key: &str, name: &str, body: Value) -> Result<Outcome
     })
 }
 
-/// The whole `[mcp_servers.<name>]` table, replaced in place, or appended when
-/// the client file does not mention this grant yet. Sub-tables that belong to
-/// the entry, such as its `env`, sit outside the replaced span and survive.
+/// This grant's server in Codex's `config.toml`, updated in place or added.
+///
+/// The file is parsed rather than scanned line by line, because TOML spells one
+/// server many ways: `[mcp_servers.work]`, `[mcp_servers.'work']`,
+/// `[ mcp_servers.work ]`, `work = { … }` under `[mcp_servers]`, or dotted keys.
+/// A scan that misses one of them appends a second definition, and Codex then
+/// cannot load the file at all. The parser keeps comments and layout, only
+/// `command` and `args` of this entry change, and sub-tables that belong to the
+/// entry, such as its `env`, stay where they are.
 fn merge_toml(path: &Path, name: &str, body: &Value) -> Result<Outcome> {
-    let block = toml_block(name, body)?;
+    let command = body
+        .get("command")
+        .and_then(Value::as_str)
+        .ok_or(GatewayError::InvalidConfig)?;
+    let args = body
+        .get("args")
+        .and_then(Value::as_array)
+        .ok_or(GatewayError::InvalidConfig)?
+        .iter()
+        .map(|arg| arg.as_str().ok_or(GatewayError::InvalidConfig))
+        .collect::<Result<Vec<_>>>()?;
     let existing = match read_text(path) {
         Ok(text) => Some(text),
         Err(GatewayError::StateUnavailable) if !path.exists() => None,
         Err(_) => return Err(GatewayError::ClientConfigUnusable),
     };
-    let merged = match existing.as_deref() {
-        Some(text) => replace_or_append_toml(text, name, &block)?,
-        None => format!("{block}\n"),
+    let mut document = match existing.as_deref() {
+        // A table or key defined twice does not parse, so a file that already
+        // defines one server twice is refused here, before anything is written.
+        Some(text) => text
+            .parse::<DocumentMut>()
+            .map_err(|_| GatewayError::ClientConfigUnusable)?,
+        None => DocumentMut::new(),
     };
+    set_server(&mut document, name, command, &args)?;
+    let merged = document.to_string();
     if Some(merged.as_str()) == existing.as_deref() {
         return Ok(Outcome {
             path: path.to_path_buf(),
@@ -190,6 +213,10 @@ fn merge_toml(path: &Path, name: &str, body: &Value) -> Result<Outcome> {
             changed: false,
         });
     }
+    // Whatever is written has to be a file Codex can load again.
+    merged
+        .parse::<DocumentMut>()
+        .map_err(|_| GatewayError::ClientConfigUnusable)?;
     let backup = back_up(path)?;
     if existing.is_none() {
         ensure_parent(path)?;
@@ -202,135 +229,56 @@ fn merge_toml(path: &Path, name: &str, body: &Value) -> Result<Outcome> {
     })
 }
 
-fn replace_or_append_toml(text: &str, name: &str, block: &str) -> Result<String> {
-    // An array-of-tables spelling of the same list cannot be merged without
-    // choosing which definition wins, so it is refused.
-    if text
-        .lines()
-        .any(|line| line.trim_start().starts_with("[[mcp_servers"))
-    {
-        return Err(GatewayError::ClientConfigUnusable);
+fn set_server(document: &mut DocumentMut, name: &str, command: &str, args: &[&str]) -> Result<()> {
+    let root = document.as_table_mut();
+    if !root.contains_key("mcp_servers") {
+        let mut servers = Table::new();
+        // No bare `[mcp_servers]` header: the entry's own header names the path.
+        servers.set_implicit(true);
+        root.insert("mcp_servers", Item::Table(servers));
     }
-    let mut start: Option<usize> = None;
-    let mut end = text.len();
-    let mut offset = 0usize;
-    for line in text.split_inclusive('\n') {
-        if line.trim_start().starts_with('[') {
-            if mcp_table_key(line).is_some_and(|key| key == name) {
-                if start.is_some() {
-                    // Two definitions of one server: whose args win is not ours
-                    // to decide, and either choice loses the other silently.
-                    return Err(GatewayError::ClientConfigUnusable);
-                }
-                start = Some(offset);
-            } else if start.is_some() && end == text.len() {
-                end = offset;
-            }
+    // `[[mcp_servers]]` or a scalar is not a server list this can add to, and
+    // picking one element of an array would silently lose the others.
+    let servers = root
+        .get_mut("mcp_servers")
+        .and_then(Item::as_table_like_mut)
+        .ok_or(GatewayError::ClientConfigUnusable)?;
+    match servers.get_mut(name) {
+        Some(Item::Table(entry)) => {
+            // Only `[mcp_servers.work.env]` was there, so the entry itself was
+            // implicit; now it carries values and needs its own header.
+            entry.set_implicit(false);
         }
-        offset += line.len();
-    }
-    match start {
-        Some(start) => {
-            let region = &text[start..end];
-            // Whoever wrote the file separated tables with a blank line or not;
-            // keeping that keeps a second run of this command byte-identical.
-            let separator = if region.ends_with("\n\n") { "\n" } else { "" };
-            let mut merged = String::with_capacity(text.len() + block.len());
-            merged.push_str(&text[..start]);
-            merged.push_str(block);
-            merged.push_str(separator);
-            merged.push_str(&text[end..]);
-            Ok(merged)
-        }
-        None => {
-            let mut merged = String::with_capacity(text.len() + block.len() + 1);
-            merged.push_str(text);
-            if !merged.is_empty() {
-                if !merged.ends_with('\n') {
-                    merged.push('\n');
-                }
-                if !merged.ends_with("\n\n") {
-                    merged.push('\n');
-                }
-            }
-            merged.push_str(block);
-            Ok(merged)
+        Some(item) if item.is_table_like() => {}
+        // `[[mcp_servers.work]]` defines this server more than once.
+        Some(Item::ArrayOfTables(_)) => return Err(GatewayError::ClientConfigUnusable),
+        // A placeholder value under our own name is replaced, as in the JSON clients.
+        Some(_) | None => {
+            servers.insert(name, Item::Table(Table::new()));
         }
     }
-}
-
-/// The table name a line opens, when that line opens an `mcp_servers` table.
-/// `[mcp_servers.work]` and `[mcp_servers."work"]` spell one key.
-fn mcp_table_key(line: &str) -> Option<String> {
-    let inner = line.trim().strip_prefix("[mcp_servers.")?;
-    let (inner, tail) = inner.split_once(']')?;
-    // A trailing comment still opens this table; any other trailing text is a
-    // shape this command will not guess at, so it is left alone.
-    let tail = tail.trim();
-    if !tail.is_empty() && !tail.starts_with('#') {
-        return None;
+    let entry = servers
+        .get_mut(name)
+        .and_then(Item::as_table_like_mut)
+        .ok_or(GatewayError::ClientConfigUnusable)?;
+    // Unchanged fields are left exactly as written, so a second run of this
+    // command leaves the file byte-identical.
+    if entry.get("command").and_then(Item::as_str) != Some(command) {
+        entry.insert("command", value(command));
     }
-    if let Some(rest) = inner.strip_prefix('"') {
-        let (key, tail) = rest.split_once('"')?;
-        return tail.is_empty().then(|| key.to_owned());
-    }
-    (!inner.is_empty() && !inner.contains('.')).then(|| inner.to_owned())
-}
-
-fn toml_block(name: &str, body: &Value) -> Result<String> {
-    let command = body
-        .get("command")
-        .and_then(Value::as_str)
-        .ok_or(GatewayError::InvalidConfig)?;
-    let args: Vec<String> = body
+    let current = entry
         .get("args")
-        .and_then(Value::as_array)
-        .ok_or(GatewayError::InvalidConfig)?
-        .iter()
-        .map(|arg| {
-            arg.as_str()
-                .map(toml_string)
-                .ok_or(GatewayError::InvalidConfig)
-        })
-        .collect::<Result<_>>()?;
-    Ok(format!(
-        "[mcp_servers.{}]\ncommand = {}\nargs = [{}]\n",
-        toml_key(name),
-        toml_string(command),
-        args.join(", ")
-    ))
-}
-
-fn toml_key(name: &str) -> String {
-    let bare = !name.is_empty()
-        && name
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'));
-    if bare {
-        name.to_owned()
-    } else {
-        toml_string(name)
+        .and_then(Item::as_array)
+        .and_then(|array| {
+            array
+                .iter()
+                .map(|arg| arg.as_str())
+                .collect::<Option<Vec<_>>>()
+        });
+    if current.as_deref() != Some(args) {
+        entry.insert("args", value(args.iter().copied().collect::<Array>()));
     }
-}
-
-fn toml_string(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('"');
-    for character in value.chars() {
-        match character {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            control if (control as u32) < 0x20 => {
-                out.push_str(&format!("\\u{{{:04X}}}", control as u32))
-            }
-            other => out.push(other),
-        }
-    }
-    out.push('"');
-    out
+    Ok(())
 }
 
 fn read_text(path: &Path) -> Result<String> {
@@ -652,6 +600,10 @@ mode = \"default\"
             "[[mcp_servers.work]]\ncommand = \"other\"\n",
             "[mcp_servers.work]\ncommand = \"first\"\n\n[mcp_servers.work]\ncommand = \"second\"\n",
             "[mcp_servers.\"work\"]\ncommand = \"first\"\n\n[mcp_servers.work]\ncommand = \"second\"\n",
+            "[mcp_servers.'work']\ncommand = \"first\"\n\n[mcp_servers.work]\ncommand = \"second\"\n",
+            "[mcp_servers]\nwork = { command = \"first\" }\n\n[mcp_servers.work]\ncommand = \"second\"\n",
+            "mcp_servers = \"none\"\n",
+            "model = \"unterminated\n",
         ] {
             let home = tempfile::tempdir().unwrap();
             let path = Client::Codex.config_path(home.path());
@@ -682,20 +634,142 @@ mode = \"default\"
         assert_eq!(after_first.matches("work laptop").count(), 1);
     }
 
+    fn codex_file(text: &str) -> (tempfile::TempDir, PathBuf) {
+        let home = tempfile::tempdir().unwrap();
+        let path = Client::Codex.config_path(home.path());
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, text).unwrap();
+        (home, path)
+    }
+
+    /// What Codex would read back: the one server's command and args.
+    fn codex_server(text: &str, name: &str) -> (String, Vec<String>) {
+        let document = text.parse::<DocumentMut>().unwrap_or_else(|error| {
+            panic!("the merged file is not TOML Codex can load: {error}\n{text}")
+        });
+        let server = document["mcp_servers"][name].as_table_like().unwrap();
+        let command = server.get("command").and_then(Item::as_str).unwrap();
+        let args = server
+            .get("args")
+            .and_then(Item::as_array)
+            .unwrap()
+            .iter()
+            .map(|arg| arg.as_str().unwrap().to_owned())
+            .collect();
+        (command.to_owned(), args)
+    }
+
     #[test]
-    fn a_toml_header_with_a_trailing_comment_is_still_the_same_server() {
+    fn every_toml_spelling_of_the_server_is_updated_instead_of_duplicated() {
+        for (label, text) in [
+            (
+                "a plain header",
+                "[mcp_servers.work]\ncommand = \"old\"\nargs = []\n",
+            ),
+            (
+                "a header with a trailing comment",
+                "[mcp_servers.work] # Monica\ncommand = \"old\"\nargs = []\n",
+            ),
+            (
+                "an indented header",
+                "  [mcp_servers.work]\ncommand = \"old\"\nargs = []\n",
+            ),
+            (
+                "spaces inside the brackets",
+                "[ mcp_servers.work ]\ncommand = \"old\"\nargs = []\n",
+            ),
+            (
+                "a basic-quoted key",
+                "[mcp_servers.\"work\"]\ncommand = \"old\"\nargs = []\n",
+            ),
+            (
+                "a literal-quoted key",
+                "[mcp_servers.'work']\ncommand = \"old\"\nargs = []\n",
+            ),
+            (
+                "an inline table",
+                "[mcp_servers]\nwork = { command = \"old\", args = [] }\n",
+            ),
+            (
+                "dotted keys",
+                "mcp_servers.work.command = \"old\"\nmcp_servers.work.args = []\n",
+            ),
+            ("a placeholder value", "[mcp_servers]\nwork = \"off\"\n"),
+        ] {
+            let original = format!("model = \"gpt-5\"\n\n{text}");
+            let (home, path) = codex_file(&original);
+
+            let outcome = install(Client::Codex, home.path(), &entry("work", "w.json"))
+                .unwrap_or_else(|error| panic!("{label}: {error:?}"));
+
+            assert!(outcome.changed, "{label}");
+            let merged = read(&path);
+            assert_eq!(
+                codex_server(&merged, "work"),
+                (
+                    "/opt/monica/monica-pass".to_owned(),
+                    vec!["mcp".to_owned(), "--client".to_owned(), "w.json".to_owned()]
+                ),
+                "{label}: {merged}"
+            );
+            assert!(!merged.contains("\"old\""), "{label}: {merged}");
+            assert!(
+                merged.starts_with("model = \"gpt-5\"\n"),
+                "{label}: {merged}"
+            );
+            if label == "a header with a trailing comment" {
+                assert!(merged.contains("# Monica"), "{merged}");
+            }
+
+            let again = install(Client::Codex, home.path(), &entry("work", "w.json")).unwrap();
+            assert!(!again.changed, "{label}: a second run rewrote {merged}");
+            assert_eq!(read(&path), merged, "{label}");
+        }
+    }
+
+    #[test]
+    fn an_entry_known_only_through_its_env_table_gets_its_own_header() {
+        let (home, path) = codex_file("[mcp_servers.work.env]\nRUST_LOG = \"info\"\n");
+
+        install(Client::Codex, home.path(), &entry("work", "w.json")).unwrap();
+
+        let merged = read(&path);
+        assert_eq!(codex_server(&merged, "work").0, "/opt/monica/monica-pass");
+        let document = merged.parse::<DocumentMut>().unwrap();
         assert_eq!(
-            mcp_table_key("[mcp_servers.work] # Monica"),
-            Some("work".to_owned())
+            document["mcp_servers"]["work"]["env"]["RUST_LOG"].as_str(),
+            Some("info")
         );
-        assert_eq!(
-            mcp_table_key("  [mcp_servers.work]"),
-            Some("work".to_owned())
-        );
-        assert_eq!(mcp_table_key("[mcp_servers.work.env]"), None);
-        assert_eq!(mcp_table_key("[mcp_servers]"), None);
-        assert_eq!(mcp_table_key("[profile]"), None);
-        assert_eq!(mcp_table_key("command = \"x\""), None);
+    }
+
+    #[test]
+    fn a_windows_command_path_reads_back_exactly() {
+        // The real command is the binary's own path, which on Windows is full of
+        // backslashes and may hold a space or an apostrophe. Whatever quoting the
+        // writer picks, Codex has to read back the exact same path.
+        for directory in [
+            r"C:\Users\someone\Apps\Monica CLI",
+            r"C:\Users\O'Brien\Apps\Monica CLI",
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let path = Client::Codex.config_path(home.path());
+            let command = format!(r"{directory}\monica-pass.exe");
+            let client = format!(r"{directory}\data\clients\work.client.json");
+            let one = json!({"work": {"command": command, "args": ["mcp", "--client", client]}});
+
+            install(Client::Codex, home.path(), &one).unwrap();
+
+            let merged = read(&path);
+            assert_eq!(
+                codex_server(&merged, "work"),
+                (
+                    command.clone(),
+                    vec!["mcp".to_owned(), "--client".to_owned(), client.clone()]
+                ),
+                "{merged}"
+            );
+            assert!(!install(Client::Codex, home.path(), &one).unwrap().changed);
+        }
     }
 
     #[test]
