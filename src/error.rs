@@ -86,6 +86,10 @@ pub enum GatewayError {
     StateUnavailable,
     #[error("The grant has reached its request limit. Try again later.")]
     RateLimited,
+    #[error(
+        "The broker stayed busy with other calls for too long, so this call was not sent. Wait a moment, then retry the same call with the same arguments."
+    )]
+    BrokerBusy,
     #[error("The upstream service could not be reached.")]
     UpstreamUnavailable,
     #[error("The upstream service rejected the request. Check the account permissions.")]

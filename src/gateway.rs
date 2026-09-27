@@ -3,6 +3,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -21,11 +22,26 @@ use crate::vault::{Credential, Vault};
 
 const MAX_JOURNAL_ENTRIES: usize = 4096;
 const MAX_STATE_BYTES: u64 = 8 * 1024 * 1024;
-/// How long an approved call queues for the broker behind whatever call is in
-/// flight. A person has just said yes, so it waits its turn instead of bouncing
-/// straight back, but only briefly: the bridge stops listening at
-/// `protocol::CALL_TIMEOUT`.
-const RESUME_WAIT: Duration = Duration::from_secs(5);
+/// How long the broker gives itself to answer one call. The bridge stops
+/// listening at `protocol::CALL_TIMEOUT`, and a reply that lands after that is
+/// lost: a read has to be sent again and a write can only be reported as an
+/// unknown outcome. The margin covers the loopback round trip and the audit line
+/// written once the service has answered.
+pub(crate) const CALL_BUDGET: Duration = Duration::from_secs(22);
+/// How long a call queues behind the one in flight before it gives up with
+/// `broker_busy`. The broker still runs one call at a time, which keeps journal
+/// and lock decisions ordered, but a client that sends two calls at once should
+/// see the second one run rather than bounce.
+pub(crate) const QUEUE_WAIT: Duration = Duration::from_secs(5);
+/// Calls allowed to queue at once; the next one is turned away immediately.
+pub(crate) const MAX_QUEUED: usize = 8;
+/// Service time held back while a call first waits on something else, a
+/// person's answer or its turn. An approval given at the last moment would
+/// otherwise send a request with no time left to finish.
+pub(crate) const UPSTREAM_RESERVE: Duration = Duration::from_secs(5);
+/// The least time a request is sent with. Below it nothing leaves and nothing
+/// is spent, so the caller can safely retry the same call.
+const MIN_SEND: Duration = Duration::from_secs(1);
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -89,6 +105,8 @@ pub struct Gateway {
     listen: std::net::SocketAddrV4,
     http: reqwest::Client,
     state: Mutex<ExecutionState>,
+    /// Callers currently queued for `state`, bounded by `MAX_QUEUED`.
+    queued: AtomicUsize,
     approvals: Arc<ApprovalQueue>,
 }
 
@@ -126,6 +144,7 @@ impl Gateway {
             listen: config.listen,
             http,
             approvals: ApprovalQueue::new(),
+            queued: AtomicUsize::new(0),
             state: Mutex::new(ExecutionState {
                 journal,
                 usage,
@@ -169,12 +188,31 @@ impl Gateway {
         self.vault.lock()
     }
 
+    /// Takes the broker's single execution slot, queueing at most `wait` behind
+    /// the call in flight. The queue is bounded in length as well as in time.
+    async fn turn(&self, wait: Duration) -> Result<MutexGuard<'_, ExecutionState>> {
+        struct Leave<'a>(&'a AtomicUsize);
+        impl Drop for Leave<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::AcqRel);
+            }
+        }
+        if let Ok(state) = self.state.try_lock() {
+            return Ok(state);
+        }
+        let ahead = self.queued.fetch_add(1, Ordering::AcqRel);
+        let _leave = Leave(&self.queued);
+        if ahead >= MAX_QUEUED {
+            return Err(GatewayError::BrokerBusy);
+        }
+        tokio::time::timeout(wait, self.state.lock())
+            .await
+            .map_err(|_| GatewayError::BrokerBusy)
+    }
+
     /// Tool discovery is authenticated, rate-limited and disclosure-checked too.
     pub(crate) async fn discovery_access(&self, capability: &str) -> Result<(Grant, Connection)> {
-        let mut state = self
-            .state
-            .try_lock()
-            .map_err(|_| GatewayError::RateLimited)?;
+        let mut state = self.turn(QUEUE_WAIT).await?;
         let (grant, binding) = self.access(capability)?;
         Self::charge_rate(&mut state, &grant)?;
         self.validate_public_access(capability, &grant, &binding)?;
@@ -273,12 +311,11 @@ impl Gateway {
     }
 
     pub async fn call(&self, capability: &str, call: ToolCall) -> Result<Value> {
-        // A single active operation bounds work and keeps journal/lock decisions ordered.
-        // A caller can retry a read; writes retain the same request ID.
-        let mut state = self
-            .state
-            .try_lock()
-            .map_err(|_| GatewayError::RateLimited)?;
+        // A single active operation bounds work and keeps journal/lock decisions
+        // ordered; a call that arrives meanwhile waits its turn. Every wait below
+        // comes out of one budget, so the reply is back before the bridge gives up.
+        let deadline = Instant::now() + CALL_BUDGET;
+        let mut state = self.turn(QUEUE_WAIT).await?;
         let mut event = AuditEvent {
             timestamp: chrono::Utc::now().timestamp(),
             grant: None,
@@ -291,7 +328,7 @@ impl Gateway {
         let result = match self.prepare(capability, call, &mut state, &mut event) {
             Ok(Prepared::Answered(value)) => Ok(value),
             Ok(Prepared::Dispatch(dispatch)) => {
-                self.dispatch(capability, state, *dispatch, &mut event)
+                self.dispatch(capability, state, *dispatch, &mut event, deadline)
                     .await
             }
             Err(error) => Err(error),
@@ -408,16 +445,20 @@ impl Gateway {
         mut state: MutexGuard<'_, ExecutionState>,
         mut call: Dispatch,
         event: &mut AuditEvent,
+        deadline: Instant,
     ) -> Result<Value> {
         if let Some((key, request)) = call.approval.take() {
             // A person may take the whole window to answer, and that is no reason
             // to turn away every other grant on this broker in the meantime. The
             // lock is let go for the wait and taken back before anything is spent.
+            // Both waits stop early enough to leave the service its reserve.
             drop(state);
-            self.await_approval(key, request).await?;
-            state = tokio::time::timeout(RESUME_WAIT, self.state.lock())
-                .await
-                .map_err(|_| GatewayError::RateLimited)?;
+            self.await_approval(key, request, deadline - UPSTREAM_RESERVE)
+                .await?;
+            let left = deadline
+                .saturating_duration_since(Instant::now())
+                .saturating_sub(UPSTREAM_RESERVE);
+            state = self.turn(QUEUE_WAIT.min(left)).await?;
             // While the lock was free the grant could have been revoked, the vault
             // locked, or this same write dispatched by a twin that was waiting on
             // the same answer. Everything the wait could have changed is read again.
@@ -446,6 +487,11 @@ impl Gateway {
             journal_key,
             ..
         } = call;
+        // Nothing has left or been spent yet, so a call without time to finish
+        // stops here and the same call can be retried as it is.
+        if deadline.saturating_duration_since(Instant::now()) < MIN_SEND {
+            return Err(GatewayError::BrokerBusy);
+        }
         // A replayed write returns above, so retrying an interrupted call never
         // spends a second unit of the budget.
         self.charge_calls(&mut state, &grant)?;
@@ -467,7 +513,11 @@ impl Gateway {
                 return Err(GatewayError::StateUnavailable);
             }
         }
-        let result = upstream::execute(&self.http, &binding, &credential, &arguments).await;
+        let timeout = deadline
+            .saturating_duration_since(Instant::now())
+            .min(upstream::TIMEOUT);
+        let result =
+            upstream::execute(&self.http, &binding, &credential, &arguments, timeout).await;
         if let Some(key) = &journal_key {
             let record = state
                 .journal
@@ -501,10 +551,10 @@ impl Gateway {
         result
     }
 
-    /// Holds a call until a person answers, for as long as one MCP request can
-    /// wait. A timeout leaves the request on screen, so the retry that follows
-    /// picks up an answer given late instead of asking a second time.
-    async fn await_approval(&self, key: String, request: Request) -> Result<()> {
+    /// Holds a call until a person answers, for at most `approval::WAIT` and never
+    /// past `until`. A timeout leaves the request on screen, so the retry that
+    /// follows picks up an answer given late instead of asking a second time.
+    async fn await_approval(&self, key: String, request: Request, until: Instant) -> Result<()> {
         let ticket: Ticket = self.approvals.ask(&key, request);
         let started = Instant::now();
         loop {
@@ -519,7 +569,7 @@ impl Gateway {
                 self.approvals.deny_all();
                 return Err(GatewayError::UnlockRequired);
             }
-            if started.elapsed() >= crate::approval::WAIT {
+            if started.elapsed() >= crate::approval::WAIT || Instant::now() >= until {
                 return Err(GatewayError::ApprovalTimeout);
             }
             tokio::time::sleep(Duration::from_millis(50)).await;

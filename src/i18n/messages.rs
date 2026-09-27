@@ -594,6 +594,7 @@ catalog! {
     ErrorCredentialUnavailable => ["The credential is unavailable or does not match the configured service.", "凭据不可用，或与配置的服务不匹配。"],
     ErrorStateUnavailable => ["Local state could not be read or safely written.", "无法读取或安全写入本地数据。"],
     ErrorRateLimited => ["The grant has reached its request limit. Try again later.", "已达到此授权的请求限额，请稍后重试。"],
+    ErrorBrokerBusy => ["The broker stayed busy with other calls for too long, so this call was not sent. Wait a moment, then retry the same call with the same arguments.", "代理忙于处理其他调用的时间过长，本次调用没有发出。请稍等片刻，再以相同参数重试同一次调用。"],
     ErrorUpstreamUnavailable => ["The upstream service could not be reached.", "无法连接上游服务。"],
     ErrorUpstreamRejected => ["The upstream service rejected the request. Check the account permissions.", "上游服务拒绝了请求，请检查账号权限。"],
     ErrorRedirectBlocked => ["An upstream redirect was blocked.", "已阻止上游服务的重定向。"],

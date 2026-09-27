@@ -55,7 +55,9 @@ Monica CLI 是本机的凭据代理。服务 Token 与数据库主密码由人�
 - `permission_denied` → 该操作或仓库不在授权内（未知工具名也回这个码）。核对 `tools` 与
   `repositories`，不要重试越界调用。
 - `repository_required` → 授权含多份仓库而你没指定，补上确切的 `repository` 再调一次。
-- `rate_limited` → 触发每分钟限额，或你并发了多个调用。改成一次只发一个、等待后重试。
+- `rate_limited` → 触发了每分钟限额。等一会儿再重试。
+- `broker_busy` → 代理忙于其他调用，本次排队超时，请求没有发出。稍等后用完全相同的参数
+  （含同一个 `request_id`）重试。
 - `invalid_request` → 参数结构问题（多了键、类型不对、读请求带了 body）。修正后重试一次。
 - `upstream_rejected` → 请求已发出但被服务端拒绝。这是账号侧问题，报告给人，不要重试。
 - `approval_denied` → 本人看过这次调用并拒绝了。**绝不重试，也绝不换个写法再来一次**；

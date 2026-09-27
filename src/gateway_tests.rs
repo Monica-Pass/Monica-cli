@@ -1461,3 +1461,142 @@ async fn a_write_dispatched_while_its_twin_waited_is_not_sent_again() {
     assert_eq!(first.unwrap()["issue"]["number"], 46);
     assert_eq!(fixture.upstream.requests().len(), 1);
 }
+
+fn slow(value: Value, delay: Duration) -> Reply {
+    Reply {
+        delay,
+        ..Reply::json(value)
+    }
+}
+
+#[tokio::test]
+async fn two_calls_sent_at_once_both_run_instead_of_bouncing() {
+    let fixture = Fixture::new(
+        Provider::Github,
+        &[Operation::ListIssues],
+        vec![
+            slow(json!([]), Duration::from_secs(1)),
+            Reply::json(json!([])),
+        ],
+    )
+    .await;
+    let read = fixture.call(Operation::ListIssues, json!({"repository":REPOSITORY}));
+    let second = async {
+        fixture.upstream.wait_for_requests(1).await;
+        // The first call is in flight upstream; this one used to read `rate_limited`.
+        fixture
+            .gateway
+            .call(&fixture.capability, read.clone())
+            .await
+    };
+    let (first, second) = tokio::join!(
+        fixture.gateway.call(&fixture.capability, read.clone()),
+        second
+    );
+    assert_eq!(first.unwrap()["items"], json!([]));
+    assert_eq!(second.unwrap()["items"], json!([]));
+    assert_eq!(fixture.upstream.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn a_call_queued_too_long_is_refused_as_busy_and_spends_nothing() {
+    let fixture = Fixture::new(
+        Provider::Github,
+        &[Operation::ListIssues],
+        vec![slow(
+            json!([]),
+            crate::gateway::QUEUE_WAIT + Duration::from_secs(2),
+        )],
+    )
+    .await;
+    cap_calls(&fixture, 5);
+    let read = fixture.call(Operation::ListIssues, json!({"repository":REPOSITORY}));
+    let second = async {
+        fixture.upstream.wait_for_requests(1).await;
+        let started = Instant::now();
+        let result = fixture
+            .gateway
+            .call(&fixture.capability, read.clone())
+            .await;
+        (result, started.elapsed())
+    };
+    let (first, (second, waited)) = tokio::join!(
+        fixture.gateway.call(&fixture.capability, read.clone()),
+        second
+    );
+    assert_eq!(first.unwrap()["items"], json!([]));
+    assert_eq!(second.unwrap_err(), GatewayError::BrokerBusy);
+    assert!(waited >= crate::gateway::QUEUE_WAIT, "{waited:?}");
+    assert_eq!(fixture.upstream.requests().len(), 1);
+    assert_eq!(calls_spent(&fixture), 1, "the refused call sent nothing");
+}
+
+#[tokio::test]
+async fn the_queue_is_bounded_and_the_overflow_is_refused_at_once() {
+    let fixture = Fixture::new(
+        Provider::Github,
+        &[Operation::ListIssues],
+        vec![slow(json!([]), Duration::from_secs(2))],
+    )
+    .await;
+    let read = fixture.call(Operation::ListIssues, json!({"repository":REPOSITORY}));
+    let crowd = async {
+        fixture.upstream.wait_for_requests(1).await;
+        futures_util::future::join_all((0..=crate::gateway::MAX_QUEUED).map(|_| async {
+            let started = Instant::now();
+            let result = fixture.gateway.discovery_access(&fixture.capability).await;
+            (result.map(|_| ()), started.elapsed())
+        }))
+        .await
+    };
+    let (first, crowd) = tokio::join!(
+        fixture.gateway.call(&fixture.capability, read.clone()),
+        crowd
+    );
+    assert_eq!(first.unwrap()["items"], json!([]));
+    // One more caller than the queue holds: it is told at once, while the call in
+    // flight still has the broker, instead of being parked with the others.
+    assert!(
+        crowd.iter().any(|(result, waited)| {
+            *result == Err(GatewayError::BrokerBusy) && *waited < Duration::from_secs(1)
+        }),
+        "{crowd:?}"
+    );
+    assert!(crowd.iter().any(|(result, _)| result.is_ok()), "{crowd:?}");
+}
+
+/// An approval given late used to leave the service its full 20 seconds on top,
+/// so the reply could arrive after the bridge had stopped listening. Whatever the
+/// person and the service take, the broker answers within its own budget.
+#[tokio::test]
+async fn a_late_approval_still_answers_before_the_bridge_gives_up() {
+    let fixture = Fixture::new(
+        Provider::Github,
+        &[Operation::ListIssues],
+        vec![slow(json!([]), Duration::from_secs(60))],
+    )
+    .await;
+    set_approval(&fixture, ApprovalPolicy::All);
+    let read = fixture.call(Operation::ListIssues, json!({"repository":REPOSITORY}));
+    let late = async {
+        parked(&fixture).await;
+        tokio::time::sleep(Duration::from_secs(8)).await;
+        let approvals = fixture.gateway.approvals();
+        approvals.decide(approvals.waiting()[0].id, Decision::Approved);
+    };
+    let started = Instant::now();
+    let (result, ()) = tokio::join!(fixture.gateway.call(&fixture.capability, read), late);
+    let took = started.elapsed();
+    assert_eq!(result.unwrap_err(), GatewayError::UpstreamUnavailable);
+    assert_eq!(fixture.upstream.requests().len(), 1, "the request was sent");
+    assert!(
+        took < crate::gateway::CALL_BUDGET + Duration::from_secs(1),
+        "{took:?}"
+    );
+    // An unqueued call still gets the whole approval window, and the budget stays
+    // inside the bridge's patience: both are relations between constants.
+    assert!(
+        crate::approval::WAIT + crate::gateway::UPSTREAM_RESERVE <= crate::gateway::CALL_BUDGET
+    );
+    assert!(crate::gateway::CALL_BUDGET < crate::protocol::CALL_TIMEOUT);
+}

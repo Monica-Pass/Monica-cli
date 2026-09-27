@@ -13,6 +13,10 @@ use crate::vault::Credential;
 
 pub const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
+/// The longest one service request may take. The broker can shorten it for a
+/// single call, so its reply still reaches the bridge in time.
+pub(crate) const TIMEOUT: Duration = Duration::from_secs(20);
+
 pub fn client() -> Result<reqwest::Client> {
     client_builder()
         .build()
@@ -26,7 +30,7 @@ pub(crate) fn client_builder() -> reqwest::ClientBuilder {
         .retry(reqwest::retry::never())
         .no_proxy()
         .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(20))
+        .timeout(TIMEOUT)
         .pool_max_idle_per_host(0)
 }
 
@@ -35,6 +39,7 @@ pub(crate) async fn execute(
     binding: &Connection,
     credential: &Credential,
     arguments: &Arguments,
+    timeout: Duration,
 ) -> Result<Value> {
     let url = match arguments {
         Arguments::Api(args) => args.url(&binding.api_base)?,
@@ -75,7 +80,8 @@ pub(crate) async fn execute(
                 url,
             )
             .headers(headers)
-            .headers(args.extra_headers()?);
+            .headers(args.extra_headers()?)
+            .timeout(timeout);
         if let Some(body) = &args.body {
             request = request.json(body);
         }
@@ -102,7 +108,8 @@ pub(crate) async fn execute(
             client.post(url).headers(headers).json(&body)
         }
         _ => client.get(url).headers(headers),
-    };
+    }
+    .timeout(timeout);
     let result = read_response(request, binding, credential, arguments).await;
     // Once a write has been dispatched, a malformed/blocked response cannot prove
     // that the issue was not created. Every such outcome must remain non-replayable.

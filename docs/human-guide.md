@@ -705,7 +705,7 @@ gated  work    joyins/example-repo  create_issue            2026-09-23 03:26  un
 
 ### 没人应答时会发生什么
 
-- 调用最多等 **15 秒**（MCP 桥在 25 秒后就不再相信有回音，等更久会把一次没批完的调用变成结果未知的写入）。超时后 AI 收到 `approval_timeout`，实测原文：
+- 调用最多等 **15 秒**（MCP 桥在 25 秒后就不再相信有回音，等更久会把一次没批完的调用变成结果未知的写入）。如果这次调用先排队超过 2 秒，等待时间会相应缩短（最短 12 秒），保证批准后上游请求还有至少 5 秒。超时后 AI 收到 `approval_timeout`，实测原文：
 
 ```json
 {"command":"call","error":{"code":"approval_timeout","message":"This call waits for a person to approve it in the terminal running Monica's broker. Ask them to approve it, then retry the same call with the same arguments."},"ok":false}
@@ -872,7 +872,8 @@ monica keys export 工作机 -o id_ed25519.pub          # 只出公钥
 | MCP 客户端报"服务器启动但调用失败" | `broker_unavailable` | 桥起来了，但 loopback 代理没在跑、或回包读不懂（桥会在 2 秒连不上、25 秒总超时后这样报） | 保持第 3 步那个终端开着；写类工具同样情形报的是 `write_outcome_unknown` |
 | 换个仓库就报权限 | `permission_denied` | 该操作或仓库不在这份授权里；**未知工具名也回这个码** | `monica show <连接名>` 核对范围与操作，或 `grant` 一份新的 |
 | 多仓库授权下 AI 漏填仓库 | `repository_required` | 没有 `default_repository` 可推断 | 让 AI 显式传 `repository`，不要为此扩大授权 |
-| 连续调用后短时失败 | `rate_limited` | 两种原因：触发 `--rpm` 每分钟限额；或 AI **并发**发起多个工具调用，撞上代理内部状态锁（代理只容忍串行，与用量无关） | 先让 AI 一次只发一个调用；仍然频繁出现就把 `--rpm` 调低到匹配实际用量 |
+| 连续调用后短时失败 | `rate_limited` | 触发了 `--rpm` 每分钟限额 | 等一分钟；经常出现就按实际用量调整 `--rpm` |
+| 调用偶尔报"代理忙" | `broker_busy` | 代理一次只执行一个调用，同时到达的调用排队；排了 5 秒还没轮到（通常是前面有个很慢的上游请求），或已有 8 个在排队。请求没有发出，不消耗次数 | 让 AI 稍等后用同一参数重试；经常出现说明 AI 同时发的调用太多，或上游服务很慢 |
 | AI 报"你本人拒绝了这次调用" | `approval_denied` | 这份授权带 `--approval write`／`all`，而你在 TUI 按了 `n` 或在 `serve` 终端输了 `n` | 这是你的决定生效了，不是故障。确实要做就让 AI 用**完全相同的参数**重发一次，它会重新问你；不要为了让它绕过询问去改门槛。另有两种连带拒绝：待批项超过 8 条时最旧那条被作废，以及代理锁库（此时回的是 `unlock_required`） |
 | AI 报"没人来得及回答" | `approval_timeout` | 带门槛的调用等了 15 秒没人应答：你没在跑代理的那个终端前，或代理根本没有可应答的终端（`--json`、管道、后台） | 到代理所在终端待命（停在主页或授权页），让 AI 用同一参数、同一 `request_id` 重试；长期需要无人值守就别给这份授权设门槛 |
 

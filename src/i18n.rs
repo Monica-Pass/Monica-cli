@@ -225,6 +225,7 @@ impl Language {
             GatewayError::CredentialUnavailable => Message::ErrorCredentialUnavailable,
             GatewayError::StateUnavailable => Message::ErrorStateUnavailable,
             GatewayError::RateLimited => Message::ErrorRateLimited,
+            GatewayError::BrokerBusy => Message::ErrorBrokerBusy,
             GatewayError::UpstreamUnavailable => Message::ErrorUpstreamUnavailable,
             GatewayError::UpstreamRejected => Message::ErrorUpstreamRejected,
             GatewayError::RedirectBlocked => Message::ErrorRedirectBlocked,
