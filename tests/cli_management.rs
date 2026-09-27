@@ -1540,3 +1540,120 @@ fn one_command_writes_the_entry_into_an_ai_clients_own_file() {
         "exactly one backup for the one file that changed: {states:?}"
     );
 }
+
+#[test]
+fn a_first_run_is_told_the_next_step_at_every_stage() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path();
+    let next = || success(cli(path, &["next", "--json"], None));
+    // No vault is the first-run state, not a damaged one, and says so.
+    failure(cli(path, &["status", "--json"], None), "setup_required");
+    let data = next();
+    assert_eq!(data["stage"], "vault");
+    assert_eq!(
+        data["commands"],
+        json!(["monica add <name> --repo <owner/repo>"])
+    );
+    assert!(
+        !path.join("gateway.json").exists(),
+        "next must not create state"
+    );
+
+    success(cli(
+        path,
+        &["init", "--json", "--secrets-stdin"],
+        Some(&password()),
+    ));
+    assert_eq!(next()["stage"], "connection");
+    success(cli(
+        path,
+        &["connect", "work", "--json", "--secrets-stdin"],
+        Some(&credentials()),
+    ));
+    let data = next();
+    assert_eq!(data["stage"], "grant");
+    assert_eq!(
+        data["commands"],
+        json!(["monica grant <grant> -c work -r <owner/repo>"])
+    );
+    success(cli(
+        path,
+        &[
+            "grant",
+            "agent",
+            "-c",
+            "work",
+            "-r",
+            "example/project",
+            "--json",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    ));
+    let data = next();
+    assert_eq!(data["stage"], "broker");
+    assert_eq!(data["commands"], json!(["monica serve"]));
+    let done: Vec<_> = data["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|step| step["done"] == true)
+        .map(|step| step["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(done, ["vault", "connection", "grant"]);
+
+    // A grant whose window closed is renewed, not re-created.
+    ConfigStore::new(path.join("gateway.json"))
+        .update(|config| {
+            let mut config = config.unwrap();
+            config.grants[0].issued_at -= 7200;
+            config.grants[0].expires_at = config.grants[0].issued_at + 60;
+            Ok((config, ()))
+        })
+        .unwrap();
+    let data = next();
+    assert_eq!(
+        (data["stage"].as_str(), data["renew"].as_bool()),
+        (Some("grant"), Some(true))
+    );
+    assert_eq!(data["commands"], json!(["monica refresh agent"]));
+}
+
+#[test]
+fn a_mistyped_command_is_pointed_at_the_real_one_without_echoing_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = cli(directory.path(), &["--lang", "en", "grnt"], None);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("Did you mean `grant`?"),
+        "{output:?}"
+    );
+    // A secret pasted where a flag or command belongs is never repeated back.
+    for args in [
+        vec![
+            "--lang",
+            "en",
+            "add",
+            "work",
+            "-r",
+            "example/project",
+            "--tokn",
+            TOKEN,
+        ],
+        vec!["--lang", "en", TOKEN],
+        vec![
+            "--lang",
+            "en",
+            "add",
+            "work",
+            "-r",
+            "example/project",
+            "--password",
+            PASSWORD,
+        ],
+    ] {
+        let output = cli(directory.path(), &args, None);
+        assert_eq!(output.status.code(), Some(2));
+        no_secrets(&output);
+    }
+}

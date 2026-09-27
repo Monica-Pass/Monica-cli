@@ -270,6 +270,10 @@ impl ConfigStore {
     }
 
     pub fn load(&self) -> Result<Config> {
+        // A missing file is the first-run state, not damage, and says so.
+        if !self.path.exists() {
+            return Err(GatewayError::SetupRequired);
+        }
         let config: Config = read_json(&self.path, MAX_CONFIG_BYTES)?;
         config.validate()?;
         Ok(config)

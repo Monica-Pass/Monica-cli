@@ -170,6 +170,8 @@ monica-pass add work-github --repo your-org/your-repo --note "Track product issu
 
 Monica prompts for the token and master password using hidden input. `--serve` keeps the gateway running after setup. Without it, the command exits after saving the configuration; run `monica-pass serve` when you want to unlock the gateway.
 
+Not sure what comes next? Run `monica-pass next`. It reads only public metadata and names the missing step (vault, connection, grant, broker, AI client) together with the command for it. `monica-pass --help` lists the commands in seven task groups under a three-step quick start, and a mistyped command is answered with the closest real one.
+
 For GitLab:
 
 ```sh
@@ -414,7 +416,7 @@ WebDAV sync transfers the encrypted vault. Local AI grant files and operation lo
 ## Further reading
 
 - [Human usage guide](docs/human-guide.md) (Chinese): the full flow from creating a vault to connecting an AI client, plus the troubleshooting tables.
-- [Command practice book](docs/reference/index.html) (Chinese): every command with real captured output, plus a browser practice mode that grades what you type against the same grammar without running anything. Open `index.html` locally.
+- [Command practice book](docs/reference/index.html) (Chinese): a pixel quest of 22 levels across seven regions, every command with real captured output, plus a free practice mode that grades what you type against the same grammar without running anything. Open `index.html` locally.
 - [AI usage guide](docs/ai-guide.md) (Chinese): paste-ready rules for an agent's project instructions, with the action for every error code.
 - [CLI automation](docs/automation.md) (Chinese): the `--secrets-stdin` protocol and stable JSON results.
 - [General service API proxy](docs/service-api.md) (Chinese): request format and limits for `api_read` / `api_write`.

@@ -84,6 +84,10 @@ pub enum GatewayError {
     CredentialUnavailable,
     #[error("Local state could not be read or safely written.")]
     StateUnavailable,
+    #[error(
+        "No vault is set up here yet. Run `monica add <name> --repo <owner/repo>` to create one with a first connection, or `monica next` to see every step."
+    )]
+    SetupRequired,
     #[error("The grant has reached its request limit. Try again later.")]
     RateLimited,
     #[error(

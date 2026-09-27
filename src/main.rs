@@ -1,5 +1,6 @@
 mod cli;
 mod cli_discovery;
+mod cli_guide;
 mod cli_input;
 mod cli_language;
 mod cli_output;
@@ -565,6 +566,79 @@ mod tests {
         }
         tokens.sort();
         tokens
+    }
+
+    #[test]
+    fn help_groups_cover_every_command_and_match_the_practice_book() {
+        use clap::CommandFactory;
+        let mut command = Cli::command();
+        command.build();
+        let visible: Vec<String> = command
+            .get_subcommands()
+            .filter(|child| !child.is_hide_set())
+            .map(|child| child.get_name().to_owned())
+            .collect();
+        let grouped: Vec<&str> = cli_guide::GROUPS
+            .iter()
+            .flat_map(|(_, _, names)| names.iter().copied())
+            .collect();
+        // A new command left out of the table would vanish from `--help`.
+        for name in &visible {
+            let count = grouped.iter().filter(|entry| **entry == name).count();
+            assert_eq!(count, 1, "`{name}` must sit in exactly one help group");
+        }
+        for name in &grouped {
+            assert!(
+                visible.iter().any(|entry| entry == name),
+                "`{name}` is not a visible command"
+            );
+        }
+        // The practice book groups the same commands the same way, in the same order.
+        let file = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("docs")
+            .join("reference")
+            .join("examples.json");
+        let book: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+        let ids: Vec<&str> = book["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|group| group["id"].as_str().unwrap())
+            .collect();
+        let ours: Vec<&str> = cli_guide::GROUPS.iter().map(|(id, _, _)| *id).collect();
+        assert_eq!(ids, ours);
+        for (id, _, names) in cli_guide::GROUPS {
+            for name in names.iter().filter(|name| **name != "help") {
+                assert_eq!(book["commands"][name]["group"], *id, "`{name}`");
+            }
+        }
+    }
+
+    #[test]
+    fn a_suggestion_names_the_real_command_and_never_the_typed_text() {
+        use monica_pass_cli::i18n::Language;
+        let command = || {
+            let mut command = <Cli as clap::CommandFactory>::command();
+            command.build();
+            cli_language::localize(command, Language::En)
+        };
+        let suggest = |args: &[&str]| {
+            let error = command().try_get_matches_from(args).unwrap_err();
+            cli_language::suggestion(&error, &command())
+        };
+        assert_eq!(suggest(&["monica", "grnt"]).as_deref(), Some("grant"));
+        // Clap proposes the alias `s`; a person is told the command it stands for.
+        assert_eq!(
+            suggest(&["monica", "webdav", "snyc"]).as_deref(),
+            Some("sync")
+        );
+        assert_eq!(
+            suggest(&["monica", "add", "work", "-r", "a/b", "--rpo", "c/d"]).as_deref(),
+            Some("--repo")
+        );
+        let secret = "ghp_synthetic0000000000000000000000000000";
+        assert_eq!(suggest(&["monica", secret]), None);
     }
 
     /// Same projection build.mjs --check compares: a flag's long name, or the

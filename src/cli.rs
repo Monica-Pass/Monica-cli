@@ -201,6 +201,8 @@ pub enum Command {
     /// Show connection, grant and broker metadata without revealing credentials.
     #[command(visible_alias = "st")]
     Status,
+    /// Show which setup step is still missing and the command for it.
+    Next,
     /// Read the local gateway audit trail: which grant ran which operation, and how it ended.
     Audit {
         /// Restrict the trail to one grant name.
@@ -401,6 +403,7 @@ impl Command {
             Self::Serve => "serve",
             Self::Lock => "lock",
             Self::Status => "status",
+            Self::Next => "next",
             Self::Audit { .. } => "audit",
             Self::Tiga { command } => match command {
                 TigaCommand::Show => "tiga show",

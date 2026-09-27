@@ -6,7 +6,7 @@ window.MONICA_TEACH = {
   "version": "monica 0.5.0",
   "grammarVersion": 1,
   "generatedFrom": "monica commands --json",
-  "commandCount": 50,
+  "commandCount": 51,
   "groups": [
    {
     "id": "start",
@@ -998,6 +998,67 @@ window.MONICA_TEACH = {
    ]
   },
   {
+   "key": "next",
+   "path": [
+    "next"
+   ],
+   "name": "next",
+   "parent": "",
+   "summary": "Show which setup step is still missing and the command for it; reads only public metadata",
+   "aliases": [],
+   "args": [
+    {
+     "id": "help",
+     "long": "help",
+     "short": "h",
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Print help"
+    }
+   ],
+   "jsonSupported": true,
+   "longRunning": false,
+   "subcommandRequired": false,
+   "argGroups": [],
+   "secretRequired": [],
+   "group": "start",
+   "summaryZh": "告诉你设置还差哪一步、该敲哪条命令：建库、存连接、开授权、启动代理、接入 AI 客户端。",
+   "whenToUse": "刚装好不知道从哪开始，或者 AI 突然调不通、想知道卡在哪一步时。它只读公开元数据，不解锁、不改东西。",
+   "handAuthored": false,
+   "pitfalls": [
+    "最后一步「AI 客户端」只是建议：next 不读 AI 客户端自己的配置文件，所以接没接好它看不出来，用 check 验证。",
+    "所有授权都过期时，next 让你 refresh 旧授权，而不是再 grant 一份新的。"
+   ],
+   "examples": [
+    {
+     "cmd": "monica next --lang zh-CN",
+     "note": "全新的机器：还没有保险库，第一步就是 add。",
+     "tested": true,
+     "out": "进度  → 保险库 · 连接 · AI 授权 · 代理 · AI 客户端\n\n下一步：这里还没有保险库。一条命令就能建好保险库、保存第一个连接并生成只读 AI 授权，过程中会要求设置新的主密码并输入服务 Token。已经有保险库文件？改用 monica open <文件>。\n  monica add <name> --repo <owner/repo>\n\n在浏览器里练习这些命令：https://monica-pass.github.io/Monica-cli/reference/"
+    },
+    {
+     "cmd": "monica next",
+     "note": "连接和授权都有了，只差把代理跑起来。",
+     "tested": true,
+     "out": "Progress  ✓ vault ✓ connection ✓ AI grant → broker · AI client\n\nNext: the broker is stopped, so AI calls cannot reach the vault. Unlock it and keep that terminal open; it stops on lock or when the five-minute session ends.\n  monica serve\n\nPractice these commands in a browser: https://monica-pass.github.io/Monica-cli/reference/"
+    },
+    {
+     "cmd": "monica next --json",
+     "note": "给脚本用：stage 是当前这一步，commands 里的命令名固定写成 monica，不随语言变化。",
+     "tested": true,
+     "out": "{\"command\":\"next\",\"data\":{\"commands\":[\"monica add <name> --repo <owner/repo>\"],\"renew\":false,\"stage\":\"vault\",\"steps\":[{\"done\":false,\"id\":\"vault\"},{\"done\":false,\"id\":\"connection\"},{\"done\":false,\"id\":\"grant\"},{\"done\":false,\"id\":\"broker\"},{\"done\":false,\"id\":\"client\"}]},\"ok\":true}"
+    }
+   ]
+  },
+  {
    "key": "status",
    "path": [
     "status"
@@ -1036,7 +1097,7 @@ window.MONICA_TEACH = {
    "whenToUse": "任何时候的默认第一步；它不解锁，也不改东西。",
    "handAuthored": false,
    "pitfalls": [
-    "还没有保险库时 status 会报 state_unavailable，这不是坏了——先跑 init 或 open。",
+    "还没有保险库时 status 会报 setup_required，并提示第一步该敲什么；想看完整进度就用 monica next。",
     "Calls 列的 1/5 是「已用/上限」，不限次时写 unlimited。"
    ],
    "examples": [
@@ -5146,6 +5207,129 @@ window.MONICA_TEACH = {
    },
    "answer": "monica add gitlab-cn -p gitlab -b https://gitlab.example.com/api/v4/ -r your-org/other --allow-write --ttl-minutes 60 -n \"内部镜像仓库\"",
    "why": "API 前缀必须是 /api/v4/，结尾斜杠不能少；少了会得到 invalid_config，那句提示说的是「配置」，其实是你给的地址。"
+  },
+  {
+   "id": "next-step",
+   "key": "next",
+   "title": "不知道下一步？问它",
+   "prompt": "刚装好 Monica，不确定先做什么。敲一条命令，让它自己告诉你还差哪一步。",
+   "expect": {
+    "key": "next",
+    "flags": [],
+    "positionals": 0
+   },
+   "answer": "monica next",
+   "why": "next 只读公开元数据：库在不在、有没有连接和授权、代理跑没跑。它把缺的那一步连同命令一起打出来，卡住时随时可以回来问。"
+  },
+  {
+   "id": "unlock",
+   "key": "serve",
+   "title": "把代理叫醒",
+   "prompt": "连接和授权都开好了，可 AI 还是调不通：代理没在运行。把它解锁跑起来。",
+   "expect": {
+    "key": "serve",
+    "flags": [],
+    "positionals": 0,
+    "forbid": [
+     "--json"
+    ]
+   },
+   "answer": "monica serve",
+   "why": "serve（别名 u）解锁保险库并运行代理，直到锁定、Ctrl+C 或 5 分钟会话到期。AI 的每次调用都要经过它。"
+  },
+  {
+   "id": "disk-format",
+   "key": "mdbx check",
+   "title": "不开锁，看清库文件",
+   "prompt": "想确认当前这份库文件的格式和大小，但不想输入主密码。",
+   "expect": {
+    "key": "mdbx check",
+    "flags": [],
+    "positionals": 0
+   },
+   "answer": "monica mdbx check",
+   "why": "mdbx check 只读文件头，不解密、不写入，所以不要密码。版本对不上时它会提醒你先备份。"
+  },
+  {
+   "id": "disk-files",
+   "key": "mdbx files",
+   "title": "同步前数一数附属文件",
+   "prompt": "准备同步前，看看库文件旁边还有哪些附属文件、各占多大。",
+   "expect": {
+    "key": "mdbx files",
+    "flags": [],
+    "positionals": 0
+   },
+   "answer": "monica mdbx files",
+   "why": "files 会列出库文件和旁边的 WAL、索引文件。WAL 不为空说明有客户端正在写，先等它写完再同步。"
+  },
+  {
+   "id": "tiga-look",
+   "key": "tiga show",
+   "title": "看一眼库的安全等级",
+   "prompt": "看看这份库现在跑在哪个安全等级上，以及每一级要付出什么代价。",
+   "expect": {
+    "key": "tiga show",
+    "flags": [],
+    "positionals": 0
+   },
+   "answer": "monica tiga show",
+   "why": "tiga show 同时列出库里记着的等级和实际生效的等级；调低等级要用 tiga set 并写明理由。"
+  },
+  {
+   "id": "retell-note",
+   "key": "note",
+   "title": "改一句 AI 能看到的备注",
+   "prompt": "连接 work 的公开备注要改成「只读跟踪 bug」。AI 会看到这句话，所以里面不能有密码或 Token。",
+   "expect": {
+    "key": "note",
+    "flags": [],
+    "positionals": 2
+   },
+   "answer": "monica note work \"只读跟踪 bug\"",
+   "why": "note 的两个位置参数是连接名和新备注。备注对 AI 可见，Monica 会拒绝看起来像凭据的内容。"
+  },
+  {
+   "id": "shelve",
+   "key": "move",
+   "title": "把条目放进另一个分类",
+   "prompt": "把 ID 为 3f2a9c10 的条目移到 ID 为 7b44e0d2 的分类下面。",
+   "expect": {
+    "key": "move",
+    "flags": [],
+    "positionals": 2
+   },
+   "answer": "monica move 3f2a9c10 7b44e0d2",
+   "why": "move 先写要搬的条目或分类，再写目标分类，两个 ID 都从 library 里查。移动不会改变条目本身。"
+  },
+  {
+   "id": "cloud-login",
+   "key": "webdav login",
+   "title": "连上你的 WebDAV",
+   "prompt": "用用户名 alice 登录 https://dav.example.com/dav/Monica/ 这个 WebDAV。密码稍后在隐藏输入里填。",
+   "expect": {
+    "key": "webdav login",
+    "flags": [
+     "--url",
+     "--username"
+    ],
+    "positionals": 0
+   },
+   "answer": "monica webdav login -u https://dav.example.com/dav/Monica/ -n alice",
+   "why": "密码不能写在命令行上，它通过隐藏输入或 --secrets-stdin 提供；登录成功后才会存进这台电脑的凭据管理器。"
+  },
+  {
+   "id": "cloud-sync",
+   "key": "webdav sync",
+   "title": "两边一起同步",
+   "prompt": "这份库已经连上 WebDAV，把本地和远端的改动同步一次。",
+   "expect": {
+    "key": "webdav sync",
+    "flags": [],
+    "positionals": 0
+   },
+   "answer": "monica webdav sync",
+   "why": "sync 用 ETag 做条件写入：两边都改过时它会保留两份并停下，绝不覆盖对方。"
   }
  ],
  "notes": {
@@ -5155,5 +5339,5 @@ window.MONICA_TEACH = {
   "normalised": "输出里的绝对路径做了两处机械替换，方便阅读：临时保险库目录写成 %LOCALAPPDATA%\\MonicaPass，可执行文件写成 <monica-pass>。文字内容、表格对齐、报错原文都保持采集时的样子。",
   "secretInput": "需要密码或 Token 的命令，在真实终端里会隐式提示输入；示例里的「stdin 载荷」是给自动化（--secrets-stdin）看的字段形状，值都是假的。"
  },
- "generatedAt": "2026-09-23"
+ "generatedAt": "2026-09-27"
 };

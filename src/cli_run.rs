@@ -361,6 +361,11 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
                 name = label,
                 tiga = tiga.as_str()
             ));
+            output.note(tr!(
+                lang,
+                CliNextAfterInit,
+                bin = crate::cli_guide::program()
+            ));
         }
         Command::Tiga { command } => {
             let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
@@ -524,8 +529,23 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
         }
         Command::Status => {
             let data = admin::status(&store)?;
+            let unfinished = [&data["connections"], &data["grants"]]
+                .iter()
+                .any(|list| list.as_array().is_none_or(Vec::is_empty));
             let human = (!output.json).then(|| cli_table::render_status(&data, lang));
             output.result_text("status", data, human)?;
+            if unfinished {
+                output.note(tr!(
+                    lang,
+                    CliNextAfterInit,
+                    bin = crate::cli_guide::program()
+                ));
+            }
+        }
+        Command::Next => {
+            let data = crate::cli_guide::next(&store)?;
+            let human = (!output.json).then(|| crate::cli_guide::render_next(&data, lang));
+            output.result_text("next", data, human)?;
         }
         Command::Audit { grant, limit } => {
             let data = admin::read_audit(&store, grant.as_deref(), limit as usize)?;

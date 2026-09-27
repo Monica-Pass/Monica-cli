@@ -895,6 +895,7 @@ monica keys export 工作机 -o id_ed25519.pub          # 只出公钥
 | 删不掉或挪不走一个分类 | `protected_collection` | 它是手机 Monica 存新条目的根分类，没了它这份库在手机侧就变回只读 | 别动它；条目要挪就往别的分类挪，或把根分类改名（改名允许）。见 [5.2](#52-与手机-monica-共用一份数据库) |
 | 备注保存失败 | `invalid_note` | 超 1024 UTF-8 字节（中文约 340 字）或含控制/双向覆盖字符 | 精简备注，去掉特殊符号 |
 | 保存被拒且提示含密钥 | `sensitive_metadata` | 公开字段里出现凭据特征的字符串，或**会话密码原样出现在地址、名称、备注中**（实测按子串判定，一两位的极短密码几乎必然撞上 WebDAV 地址） | 把密钥移出公开字段；WebDAV 撞码时改用足够长度的应用密码，而不是怀疑地址写错 |
+| 刚装好就报"还没有保险库" | `setup_required` | 这台机器（或 `-C` 指向的位置）还没有配置文件，这是首次使用的正常状态 | 运行 `monica next` 看第一步；通常是 `monica add <名称> --repo <所有者/仓库>` |
 | 本地状态读写失败 | `state_unavailable` | 磁盘不可写、文件被外部改坏、锁异常 | 检查目录权限与磁盘；必要时从备份恢复（第 8 节） |
 | 续期时报凭据不可用 | `credential_unavailable` | 该连接的 Token 已被更换，指纹不再匹配 | 用 `monica grant` 重新签发一份，而不是续旧的 |
 
@@ -970,7 +971,7 @@ monica keys export 工作机 -o id_ed25519.pub          # 只出公钥
 ## 14. 延伸阅读
 
 - [给 AI 的使用说明](ai-guide.md) —— 直接粘进 AI 项目规则的段落 + 全部错误码的工具侧动作
-- [命令练习本](reference/index.html) —— 全部命令、实测输出，以及在浏览器里练手敲的练习模式（只校验语法，不执行）
+- [命令练习本](reference/index.html) —— 像素闯关、全部命令、实测输出，以及在浏览器里练手敲的自由练习（只校验语法，不执行）
 - [CLI 自动化](automation.md) —— `--secrets-stdin` 协议与 JSON 结果约定
 - [通用服务 API 代理](service-api.md) —— `api_read` / `api_write` 的请求与限制
 - [安全边界、授权与恢复](../SECURITY.md) —— 边界的设计理由与残余风险

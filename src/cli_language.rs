@@ -59,9 +59,52 @@ pub(super) fn parse() -> Result<(Cli, Language), ExitCode> {
             // Rejected argv can contain an accidentally pasted secret. Only
             // fixed diagnostics may be echoed into terminal logs.
             eprintln!("monica-pass: {}", language.text(message));
+            // A suggestion is a name taken from the grammar, never the typed text.
+            if let Some(suggestion) = suggestion(&error, &localized_command(language)) {
+                eprintln!("{}", tr!(language, CliDidYouMean, suggestion = suggestion));
+            }
             Err(ExitCode::from(2))
         }
     }
+}
+
+/// Clap's own "did you mean", kept only when it names a real command, alias or
+/// long flag somewhere in the grammar, so nothing the person typed is echoed.
+/// An alias is answered with the name it stands for: `grant`, not `g`.
+pub(super) fn suggestion(error: &clap::Error, command: &Command) -> Option<String> {
+    use clap::error::{ContextKind, ContextValue};
+    fn known(command: &Command, names: &mut Vec<(String, String)>) {
+        for arg in command.get_arguments() {
+            if let Some(long) = arg.get_long() {
+                names.push((format!("--{long}"), format!("--{long}")));
+                for alias in arg.get_visible_aliases().into_iter().flatten() {
+                    names.push((format!("--{alias}"), format!("--{long}")));
+                }
+            }
+        }
+        for child in command.get_subcommands() {
+            let name = child.get_name().to_owned();
+            names.push((name.clone(), name.clone()));
+            for alias in child.get_visible_aliases() {
+                names.push((alias.to_owned(), name.clone()));
+            }
+            known(child, names);
+        }
+    }
+    let value = error
+        .get(ContextKind::SuggestedSubcommand)
+        .or_else(|| error.get(ContextKind::SuggestedArg))?;
+    let candidate = match value {
+        ContextValue::String(text) => text.clone(),
+        ContextValue::Strings(list) => list.first()?.clone(),
+        _ => return None,
+    };
+    let mut names = Vec::new();
+    known(command, &mut names);
+    names
+        .into_iter()
+        .find(|(name, _)| *name == candidate)
+        .map(|(_, canonical)| canonical)
 }
 
 fn localized_command(language: Language) -> Command {
@@ -152,7 +195,8 @@ pub(super) fn localize(mut command: Command, language: Language) -> Command {
     // None keeps the about the parser derived from its doc comment. Falling back to
     // CliAbout here used to relabel every unmapped command as the crate tagline.
     let about: Option<Message> = match command.get_name() {
-        "monica-pass" => Some(CliAbout),
+        "monica" | "monica-pass" => Some(CliAbout),
+        "next" => Some(CliNextHelp),
         "tui" => Some(CliTuiHelp),
         "add" => Some(CliAddHelp),
         "list" => Some(CliListHelp),
@@ -238,7 +282,7 @@ pub(super) fn localize(mut command: Command, language: Language) -> Command {
             .hide_default_value(language == Language::ZhCn)
             .hide_possible_values(language == Language::ZhCn)
     });
-    command.mut_subcommands(|child| {
+    command = command.mut_subcommands(|child| {
         let about = match child.get_name() {
             "list" if webdav => Some(CliDavListHelp),
             "open" if webdav => Some(CliDavOpenHelp),
@@ -267,7 +311,24 @@ pub(super) fn localize(mut command: Command, language: Language) -> Command {
             });
         }
         child
-    })
+    });
+    if command.get_name() == "monica" {
+        // The root lists its commands by task rather than one flat block. The body
+        // is written once every child carries its translated summary, and clap
+        // only fills in the options below it. No command summary contains a
+        // brace, which the template language would read as a tag.
+        let body = crate::cli_guide::root_help(&command, language);
+        command = command.help_template(format!(
+            "{{before-help}}{{about-with-newline}}
+{} {{usage}}
+
+{body}{}:
+{{options}}{{after-help}}",
+            tr!(language, CliUsage),
+            tr!(language, CliOptionsHeading)
+        ));
+    }
+    command
 }
 
 fn argument_message(id: &str) -> Option<Message> {

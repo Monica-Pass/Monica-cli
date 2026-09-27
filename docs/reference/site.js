@@ -15,6 +15,9 @@
     return;
   }
 
+  const QUEST = window.MONICA_QUEST || null;
+  if (QUEST) QUEST.mount(document.getElementById('quest-root'));
+
   const engine = GRAMMAR.create({
     cli: DATA.meta.cli,
     commands: DATA.commands,
@@ -24,19 +27,15 @@
   const GROUPS = DATA.meta.groups || [];
   const GROUP_LABEL = new Map(GROUPS.map((g) => [g.id, g.label]));
 
-  const STORE_DRILL = 'monica-teach:drills';
   const STORE_THEME = 'monica-teach:theme';
 
   const state = {
-    view: 'table',
+    view: 'quest',
+    questArg: '',
     group: 'all',
     marks: new Set(),
     search: '',
     key: DATA.commands[0].key,
-    mode: 'drill',
-    drill: 0,
-    tries: 0,
-    done: readJson(STORE_DRILL, []),
   };
 
   // ------------------------------ helpers ---------------------------------
@@ -426,136 +425,6 @@
 
   // ------------------------------- practice -------------------------------
 
-  function grade(line, drill) {
-    return GRAMMAR.gradeDrill(engine, line, drill);
-  }
-
-  function renderProgress() {
-    const total = DATA.drills.length;
-    const done = state.done.length;
-    $('drill-readout').textContent =
-      String(done).padStart(2, '0') + '/' + String(total).padStart(2, '0');
-    const bar = clear($('drill-bar'));
-    DATA.drills.forEach((drill, index) => {
-      const seg = el('i');
-      if (state.done.indexOf(drill.id) >= 0) seg.className = 'is-done';
-      if (index === state.drill) seg.className += (seg.className ? ' ' : '') + 'is-current';
-      seg.title = drill.title;
-      bar.appendChild(seg);
-    });
-  }
-
-  function hintText(drill) {
-    return (
-      '第 ' +
-      String(state.drill + 1).padStart(2, '0') +
-      ' 关  /  monica ' +
-      drill.key +
-      (state.done.indexOf(drill.id) >= 0 ? '   [已过]' : '')
-    );
-  }
-
-  function renderDrill() {
-    renderProgress();
-    const drill = DATA.drills[state.drill];
-    const pick = clear($('drill-pick'));
-    DATA.drills.forEach((item, index) => {
-      const option = el('option', null, String(index + 1).padStart(2, '0') + '  ' + item.title);
-      option.value = String(index);
-      if (index === state.drill) option.selected = true;
-      pick.appendChild(option);
-    });
-
-    const card = clear($('drill-card'));
-    card.appendChild(
-      el('div', 'drill-hintline', hintText(drill)),
-    );
-    card.appendChild(el('h2', 'drill-scene', drill.title));
-    card.appendChild(el('p', 'drill-prompt', drill.prompt));
-
-    const label = el('label', 'field');
-    label.appendChild(el('span', 'field-label', '你的命令'));
-    const input = el('input');
-    input.type = 'text';
-    input.spellcheck = false;
-    input.autocomplete = 'off';
-    input.id = 'drill-input';
-    input.placeholder = 'monica ' + drill.key + ' …';
-    label.appendChild(input);
-    card.appendChild(label);
-
-    const actions = el('div', 'drill-actions');
-    const check = el('button', 'pill pill-accent', '检查');
-    check.type = 'button';
-    check.onclick = () => submitDrill(drill);
-    const show = el('button', 'pill pill-ghost', '看答案');
-    show.type = 'button';
-    show.onclick = () => revealDrill(drill);
-    const detail = el('button', 'linklike', '打开这条命令的说明');
-    detail.type = 'button';
-    detail.onclick = () => openDetail(drill.key);
-    actions.appendChild(check);
-    actions.appendChild(show);
-    actions.appendChild(detail);
-    card.appendChild(actions);
-    card.appendChild(el('div', 'verdict', ''));
-
-    input.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        submitDrill(drill);
-      }
-    });
-    $('mode-drill').classList.add('is-active');
-  }
-
-  function submitDrill(drill) {
-    const input = $('drill-input');
-    const line = (input.value || '').trim();
-    const verdict = $('drill-card').querySelector('.verdict');
-    state.tries += 1;
-    const graded = grade(line, drill);
-    clear(verdict);
-    input.classList.toggle('is-bad', !graded.ok);
-    if (graded.ok) {
-      verdict.className = 'verdict ok';
-      verdict.appendChild(el('h3', null, '[ 通过 ] 语法与意图都对'));
-      verdict.appendChild(el('div', 'answer', line));
-      verdict.appendChild(el('p', 'why', drill.why));
-      if (state.done.indexOf(drill.id) < 0) {
-        state.done.push(drill.id);
-        writeJson(STORE_DRILL, state.done);
-        renderProgress();
-        $('drill-card').querySelector('.drill-hintline').textContent = hintText(drill);
-      }
-      state.tries = 0;
-      return;
-    }
-    verdict.className = 'verdict bad';
-    verdict.appendChild(el('h3', null, '[ 还不对 ] 第 ' + state.tries + ' 次尝试'));
-    const ul = el('ul');
-    for (const problem of graded.problems) ul.appendChild(el('li', null, problem));
-    verdict.appendChild(ul);
-    if (state.tries >= 2) {
-      const hint = el('p', 'why', '卡住了？按「看答案」，它会连原因一起给你。');
-      verdict.appendChild(hint);
-    }
-  }
-
-  function revealDrill(drill) {
-    const verdict = $('drill-card').querySelector('.verdict');
-    clear(verdict);
-    verdict.className = 'verdict';
-    verdict.appendChild(el('h3', null, '[ 答案 ]'));
-    verdict.appendChild(el('div', 'answer', drill.answer));
-    verdict.appendChild(el('p', 'why', drill.why));
-    const input = $('drill-input');
-    if (input) {
-      input.value = drill.answer;
-      input.classList.remove('is-bad');
-    }
-  }
-
   function renderFree(prefill) {
     const input = $('free-input');
     if (prefill !== undefined) input.value = prefill;
@@ -639,16 +508,9 @@
   }
 
   function gotoPractice(mode, prefill) {
-    state.mode = mode;
-    if (mode === 'free') {
-      setView('practice');
-      setMode('free');
-      renderFree(prefill);
-      location.hash = '#practice/free';
-    } else {
-      setView('practice');
-      setMode('drill');
-    }
+    setView('practice');
+    renderFree(prefill);
+    location.hash = '#practice';
   }
 
   // ------------------------------- shell ----------------------------------
@@ -662,21 +524,12 @@
       node.classList.toggle('is-active', node.dataset.view === view);
     }
     if (view === 'detail') renderDetail();
-    if (view === 'practice') {
-      renderDrill();
-      renderFree();
-      setMode(state.mode);
+    if (view === 'practice') renderFree();
+    if (QUEST) {
+      if (view === 'quest') QUEST.show(state.questArg);
+      else QUEST.hide();
     }
     markScrollable(document);
-  }
-
-  function setMode(mode) {
-    state.mode = mode;
-    for (const node of document.querySelectorAll('.mode-item')) {
-      node.classList.toggle('is-active', node.dataset.mode === mode);
-    }
-    $('mode-drill').classList.toggle('is-active', mode === 'drill');
-    $('mode-free').classList.toggle('is-active', mode === 'free');
   }
 
   function openDetail(key) {
@@ -728,19 +581,13 @@
   function routeFromHash() {
     const raw = decodeURIComponent((location.hash || '').replace(/^#/, ''));
     const [view, arg] = raw.split('/');
+    // Drills used to live under #practice/<id>; they are quest levels now.
+    if (view === 'practice' && arg && arg !== 'free') {
+      location.replace('#quest/' + arg);
+      return;
+    }
     if (view === 'practice') {
-      if (arg === 'free') {
-        setView('practice');
-        setMode('free');
-        return;
-      }
-      if (arg) {
-        const index = DATA.drills.findIndex((drill) => drill.id === arg);
-        if (index >= 0) state.drill = index;
-      }
       setView('practice');
-      setMode('drill');
-      renderDrill();
       return;
     }
     if (view === 'detail' && arg && byKey.has(arg)) {
@@ -748,7 +595,12 @@
       setView('detail');
       return;
     }
-    setView('table');
+    if (view === 'table') {
+      setView('table');
+      return;
+    }
+    state.questArg = view === 'quest' ? arg || '' : '';
+    setView(QUEST ? 'quest' : 'table');
   }
 
   // ------------------------------- wiring ---------------------------------
@@ -769,12 +621,10 @@
   for (const node of document.querySelectorAll('.viewnav-item')) {
     node.onclick = () => {
       const view = node.dataset.view;
-      setView(view);
-      location.hash = '#' + view;
+      if (view === 'quest') state.questArg = '';
+      if (location.hash === '#' + view) setView(view);
+      else location.hash = '#' + view;
     };
-  }
-  for (const node of document.querySelectorAll('.mode-item')) {
-    node.onclick = () => setMode(node.dataset.mode);
   }
   $('search').addEventListener('input', (event) => {
     state.search = event.target.value;
@@ -793,31 +643,6 @@
   $('free-check').onclick = () => {
     renderFreeVerdict();
     $('free-input').focus();
-  };
-  $('drill-pick').addEventListener('change', (event) => {
-    state.drill = Number(event.target.value) || 0;
-    state.tries = 0;
-    renderDrill();
-    location.hash = '#practice/' + DATA.drills[state.drill].id;
-  });
-  $('drill-prev').onclick = () => {
-    state.drill = (state.drill - 1 + DATA.drills.length) % DATA.drills.length;
-    state.tries = 0;
-    renderDrill();
-    location.hash = '#practice/' + DATA.drills[state.drill].id;
-  };
-  $('drill-next').onclick = () => {
-    state.drill = (state.drill + 1) % DATA.drills.length;
-    state.tries = 0;
-    renderDrill();
-    location.hash = '#practice/' + DATA.drills[state.drill].id;
-  };
-  $('drill-reset').onclick = () => {
-    state.done = [];
-    state.drill = 0;
-    state.tries = 0;
-    writeJson(STORE_DRILL, state.done);
-    renderDrill();
   };
   $('theme-toggle').onclick = () => {
     applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');

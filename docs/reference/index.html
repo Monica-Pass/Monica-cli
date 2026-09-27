@@ -11,21 +11,23 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Doto:wght@400..900&family=Space+Grotesk:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Doto:wght@400..900&family=Press+Start+2P&family=Space+Grotesk:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="site.css" />
+    <link rel="stylesheet" href="quest.css" />
   </head>
   <body>
     <header class="masthead">
-      <a class="brand" href="#table">
+      <a class="brand" href="#quest">
         <img src="../images/logo.png" alt="" width="28" height="28" />
         <span class="brand-word">MONICA</span>
         <span class="brand-sep">/</span>
         <span class="brand-sub">命令练习本</span>
       </a>
       <nav class="viewnav" id="viewnav" aria-label="视图切换">
-        <button class="viewnav-item is-active" data-view="table">总表</button>
+        <button class="viewnav-item is-active" data-view="quest">闯关</button>
+        <button class="viewnav-item" data-view="table">总表</button>
         <button class="viewnav-item" data-view="detail">详情</button>
         <button class="viewnav-item" data-view="practice">练习</button>
       </nav>
@@ -36,8 +38,17 @@
     </header>
 
     <main>
+      <!-- ============================ 闯关 ============================ -->
+      <section class="view is-active" id="view-quest" aria-labelledby="quest-title">
+        <div class="view-head">
+          <h1 class="display" id="quest-title">闯关</h1>
+          <p class="lede" id="quest-lede">跟着 Monica 走过 7 个区域，每关敲一条真实的 monica 命令。只按真实语法检查，不执行，也碰不到任何凭据。</p>
+        </div>
+        <div id="quest-root"></div>
+      </section>
+
       <!-- ============================ 总表 ============================ -->
-      <section class="view is-active" id="view-table" aria-labelledby="table-title">
+      <section class="view" id="view-table" aria-labelledby="table-title">
         <div class="view-head">
           <h1 class="display" id="table-title">全部命令</h1>
           <p class="lede" id="table-lede"></p>
@@ -83,34 +94,12 @@
       <!-- ============================ 练习 ============================ -->
       <section class="view" id="view-practice" aria-labelledby="practice-title">
         <div class="view-head">
-          <h1 class="display" id="practice-title">练习</h1>
+          <h1 class="display" id="practice-title">自由练习</h1>
           <p class="lede" id="practice-boundary"></p>
           <p class="pane-hint" id="practice-limits"></p>
         </div>
 
-        <div class="mode-switch" role="group" aria-label="练习模式">
-          <button class="mode-item is-active" data-mode="drill" type="button">关卡</button>
-          <button class="mode-item" data-mode="free" type="button">自由输入</button>
-        </div>
-
-        <div id="mode-drill" class="mode-pane is-active">
-          <div class="progress-block">
-            <div class="progress-meta">
-              <span class="mono-label">关卡进度</span>
-              <span class="progress-readout" id="drill-readout">00/00</span>
-            </div>
-            <div class="segmented-bar" id="drill-bar" aria-hidden="true"></div>
-          </div>
-          <div class="drill-card" id="drill-card"></div>
-          <div class="drill-nav">
-            <button class="pill" id="drill-prev" type="button">← 上一关</button>
-            <select class="drill-pick" id="drill-pick" aria-label="跳到某关"></select>
-            <button class="pill pill-accent" id="drill-next" type="button">下一关 →</button>
-          </div>
-          <button class="linklike" id="drill-reset" type="button">清空练习记录</button>
-        </div>
-
-        <div id="mode-free" class="mode-pane">
+        <div id="mode-free" class="mode-pane is-active">
           <p class="pane-hint">
             随便敲一条 <code>monica …</code>。逐字对照 <code>monica commands --json</code> 的真实语法：命令名与别名、缩写与堆叠的短选项、取值、必填项、位置参数个数、是否支持
             <code>--json</code>、<code>-h</code> / <code>help</code> 的帮助短路。不会执行，也不会碰到任何凭据。
@@ -150,6 +139,7 @@
 
     <script src="data.js"></script>
     <script src="grammar.js"></script>
+    <script src="quest.js"></script>
     <script src="site.js"></script>
   </body>
 </html>
