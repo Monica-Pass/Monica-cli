@@ -27,6 +27,7 @@
       </a>
       <nav class="viewnav" id="viewnav" aria-label="视图切换">
         <button class="viewnav-item is-active" data-view="quest">闯关</button>
+        <button class="viewnav-item" data-view="guide">上手</button>
         <button class="viewnav-item" data-view="table">总表</button>
         <button class="viewnav-item" data-view="detail">详情</button>
         <button class="viewnav-item" data-view="practice">练习</button>
@@ -43,8 +44,58 @@
         <div class="view-head">
           <h1 class="display" id="quest-title">闯关</h1>
           <p class="lede" id="quest-lede">跟着 Monica 走过 7 个区域，每关敲一条真实的 monica 命令。只按真实语法检查，不执行，也碰不到任何凭据。</p>
+          <p class="pane-hint">第一次使用？<a href="#guide">先看上手路线：人来配置，AI 按授权调用 →</a></p>
         </div>
         <div id="quest-root"></div>
+      </section>
+
+      <section class="view" id="view-guide" aria-labelledby="guide-title">
+        <div class="view-head">
+          <span class="mono-label">START HERE / 人与 AI</span>
+          <h1 class="display" id="guide-title">从一条命令开始</h1>
+          <p class="lede">先认清操作对象，再按顺序接入。命令记不住时，运行 <code>monica next</code>。</p>
+        </div>
+        <dl class="object-guide">
+          <div><dt>CONNECTION · 连接</dt><dd>保存服务凭据，例如 <code>work-github</code>。用 <code>connections</code>、<code>show</code> 查看。</dd></div>
+          <div><dt>GRANT · 授权</dt><dd>限定 AI 的范围、操作和时长，例如 <code>review-agent</code>。用 <code>status</code> 查看。</dd></div>
+          <div><dt>BROKER · 代理</dt><dd><code>serve</code> 启动的调用通道。会话 5 分钟，和授权有效期分开计算。</dd></div>
+        </dl>
+        <div class="guide-paths">
+          <article class="panel">
+            <span class="mono-label">01 / 人来操作</span>
+            <h2>先配置，再启动</h2>
+            <ol class="setup-route">
+              <li>创建连接与同名只读授权<pre>monica add work-github --repo your-org/repo</pre></li>
+              <li>配置 AI 客户端（这里选 Codex）<pre>monica mcp-config work-github --install codex</pre></li>
+              <li>启动代理，保持这个终端打开<pre>monica serve</pre></li>
+              <li>在另一个终端验证通道<pre>monica check work-github</pre></li>
+            </ol>
+            <p class="pane-hint">使用自定义 <code>--config</code> 时，每一步和另一个终端都沿用同一路径。<code>check</code> 验证代理通道，AI 客户端仍需加载配置。</p>
+            <details><summary>连接和授权可以不同名</summary>
+              <p>在已有连接 work-github 上创建另一份授权：</p>
+              <pre>monica grant review-agent --connection work-github --repo your-org/repo
+monica next --grant review-agent</pre>
+              <p>之后用 <code>mcp-config review-agent</code>、<code>check review-agent</code>、<code>renew review-agent</code>。续期只需主密码；它会轮换 capability，随后重启 MCP 并重新启动代理。</p>
+            </details>
+            <a href="#quest">进入像素闯关 →</a>
+          </article>
+          <article class="panel">
+            <span class="mono-label">02 / AI 与受信执行器</span>
+            <h2>先摘要，再查一条命令</h2>
+            <pre>monica commands --summary --json
+monica commands grant --json</pre>
+            <p>摘要用来定位命令。完整说明包含参数角色、前提条件、执行影响、信任边界与重试规则；不必每次读取整棵语法树。</p>
+            <ul class="pitfalls">
+              <li>发现命令不等于获得执行权限。本地管理仍需人的授权；MCP 只提供当前 grant 允许的服务操作。</li>
+              <li>AI 提交公开参数。受信执行器通过 <code>--secrets-stdin</code> 注入秘密；密码和 Token 不进对话、参数或环境变量。</li>
+              <li><code>--json</code> 不弹提示。读取 <code>error.code</code> 和 <code>error.recovery</code>，先恢复前提条件。</li>
+              <li>授权到期请人续期；写入结果不确定时先核对，不换新的 <code>request_id</code> 盲目重试。</li>
+            </ul>
+            <p>MCP 内从 <code>monica_list_connections {}</code> 开始，读取授权工具和范围。CLI 的 <code>commands</code> 是另一层接口。</p>
+            <a href="#detail/commands">查看发现接口 →</a>
+          </article>
+        </div>
+        <p class="compat-note">推荐写法：<code>connections</code> / <code>mcp-config</code> / <code>renew</code>。旧命令 <code>list</code> / <code>settings</code> / <code>refresh</code> 和缩写继续可用；执行 JSON 的 command 标识保持原值。TUI 重载列表用 <code>:reload</code>，旧 <code>:refresh</code> 仍兼容。</p>
       </section>
 
       <!-- ============================ 总表 ============================ -->
@@ -106,7 +157,7 @@
           </p>
           <label class="field">
             <span class="field-label">命令</span>
-            <input id="free-input" type="text" spellcheck="false" autocomplete="off" placeholder="monica grant work2 -c work -r your-org/repo --ttl-minutes 60" />
+            <input id="free-input" type="text" spellcheck="false" autocomplete="off" placeholder="monica grant review-agent --connection work-github --repo your-org/repo" />
           </label>
           <div class="free-suggest" id="free-suggest"></div>
           <div class="drill-actions free-check">
@@ -127,7 +178,8 @@
         <span class="mono-label">读下去</span>
         <p>
           <a href="https://github.com/Monica-Pass/Monica-cli/blob/main/docs/human-guide.md">人向手册</a> ·
-          <a href="https://github.com/Monica-Pass/Monica-cli/blob/main/docs/ai-guide.md">给 AI 的说明</a> ·
+            <a href="https://github.com/Monica-Pass/Monica-cli/blob/main/docs/ai-guide.md">给 AI 的说明</a> ·
+            <a href="https://github.com/Monica-Pass/Monica-cli/blob/main/docs/mdbx-compatibility.md">MDBX 跨端兼容</a> ·
           <a href="https://github.com/Monica-Pass/Monica-cli">仓库</a>
         </p>
       </div>
@@ -139,6 +191,7 @@
 
     <script src="data.js"></script>
     <script src="grammar.js"></script>
+    <script src="contracts.js"></script>
     <script src="quest.js"></script>
     <script src="site.js"></script>
   </body>

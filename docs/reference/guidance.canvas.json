@@ -1,0 +1,414 @@
+{
+  "title": "Monica CLI · 人与 AI 的命令指南",
+  "brief": "保留像素闯关，新增上手入口、对象说明与命令执行契约。",
+  "frame": "phone",
+  "platform": "web",
+  "paletteKey": "coral",
+  "theme": {
+    "dark": true,
+    "bothModes": true,
+    "contrast": "standard",
+    "shape": "rounded",
+    "font": "roboto",
+    "emphasized": true,
+    "motion": "expressive"
+  },
+  "frames": [
+    {
+      "id": "guide",
+      "name": "上手 · 桌面",
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 920,
+      "note": "闯关仍为默认。上手入口给人和 AI 两条阅读路径。",
+      "bg": "surface"
+    },
+    {
+      "id": "contract",
+      "name": "详情 · 执行前须知",
+      "x": 1360,
+      "y": 0,
+      "w": 1280,
+      "h": 920,
+      "bg": "surface"
+    },
+    {
+      "id": "mobile",
+      "name": "上手 · 手机",
+      "x": 2720,
+      "y": 0,
+      "w": 390,
+      "h": 1100,
+      "bg": "surface"
+    }
+  ],
+  "groups": [
+    {
+      "id": "g1",
+      "x": 0,
+      "y": 0,
+      "axis": "x",
+      "items": [
+        {
+          "id": "p1",
+          "variant": "filled",
+          "icon": null,
+          "kind": "topAppBar",
+          "label": "MONICA / 命令练习本",
+          "size": 1280
+        }
+      ]
+    },
+    {
+      "id": "g2",
+      "x": 0,
+      "y": 88,
+      "axis": "x",
+      "items": [
+        {
+          "id": "p2",
+          "variant": "filled",
+          "icon": null,
+          "kind": "tabs",
+          "size": 1280,
+          "selected": 1,
+          "tabs": [
+            {
+              "label": "闯关"
+            },
+            {
+              "label": "上手"
+            },
+            {
+              "label": "总表"
+            },
+            {
+              "label": "详情"
+            },
+            {
+              "label": "练习"
+            }
+          ],
+          "actions": {
+            "tab:1": {
+              "to": "guide",
+              "transition": "fade"
+            },
+            "tab:3": {
+              "to": "contract",
+              "transition": "fade"
+            }
+          },
+          "label": ""
+        }
+      ]
+    },
+    {
+      "id": "g3",
+      "x": 1360,
+      "y": 0,
+      "axis": "x",
+      "items": [
+        {
+          "id": "p3",
+          "variant": "filled",
+          "icon": null,
+          "kind": "topAppBar",
+          "label": "MONICA / 命令练习本",
+          "size": 1280
+        }
+      ]
+    },
+    {
+      "id": "g4",
+      "x": 1360,
+      "y": 88,
+      "axis": "x",
+      "items": [
+        {
+          "id": "p4",
+          "variant": "filled",
+          "icon": null,
+          "kind": "tabs",
+          "size": 1280,
+          "selected": 3,
+          "tabs": [
+            {
+              "label": "闯关"
+            },
+            {
+              "label": "上手"
+            },
+            {
+              "label": "总表"
+            },
+            {
+              "label": "详情"
+            },
+            {
+              "label": "练习"
+            }
+          ],
+          "actions": {
+            "tab:1": {
+              "to": "guide",
+              "transition": "fade"
+            },
+            "tab:3": {
+              "to": "contract",
+              "transition": "fade"
+            }
+          },
+          "label": ""
+        }
+      ]
+    },
+    {
+      "id": "g5",
+      "x": 24,
+      "y": 165,
+      "axis": "x",
+      "items": [
+        {
+          "id": "p5",
+          "variant": "filled",
+          "icon": null,
+          "kind": "text",
+          "label": "从一条命令开始",
+          "size": 36,
+          "bold": true
+        }
+      ]
+    },
+    {
+      "id": "g6",
+      "x": 24,
+      "y": 228,
+      "axis": "x",
+      "items": [
+        {
+          "id": "p6",
+          "variant": "filled",
+          "icon": null,
+          "kind": "text",
+          "label": "连接 CONNECTION 保存凭据 · 授权 GRANT 限定 AI 的访问 · 代理 BROKER 运行调用",
+          "size": 18
+        }
+      ]
+    },
+    {
+      "id": "g7",
+      "x": 24,
+      "y": 290,
+      "axis": "x",
+      "items": [
+        {
+          "id": "p7",
+          "variant": "filled",
+          "icon": null,
+          "kind": "card",
+          "noImage": true,
+          "size": 600,
+          "size2": 330,
+          "label": "我来操作",
+          "supporting": "1  monica add work-github --repo your-org/repo\n2  monica mcp-config work-github --install codex\n3  monica serve（保持终端打开）\n4  另一个终端：monica check work-github\n\n不确定状态？monica next --grant work-github"
+        }
+      ]
+    },
+    {
+      "id": "g8",
+      "x": 656,
+      "y": 290,
+      "axis": "x",
+      "items": [
+        {
+          "id": "p8",
+          "variant": "filled",
+          "icon": null,
+          "kind": "card",
+          "noImage": true,
+          "size": 600,
+          "size2": 330,
+          "label": "让 AI 调用",
+          "supporting": "先看 monica commands --summary --json\n再看 monica commands grant --json\n检查对象、前提、影响和重试规则\n\n发现命令不等于获准管理保险库。\n受信执行器注入秘密；MCP 只执行已授权操作。"
+        }
+      ]
+    },
+    {
+      "id": "g9",
+      "x": 24,
+      "y": 650,
+      "axis": "x",
+      "items": [
+        {
+          "id": "p9",
+          "variant": "filled",
+          "icon": null,
+          "kind": "text",
+          "label": "旧命令仍兼容：list → connections · settings → mcp-config · refresh → renew",
+          "size": 18
+        }
+      ]
+    },
+    {
+      "id": "g10",
+      "x": 24,
+      "y": 710,
+      "axis": "x",
+      "items": [
+        {
+          "id": "p10",
+          "variant": "filled",
+          "icon": null,
+          "kind": "button",
+          "label": "去闯关练习",
+          "size": 320,
+          "note": "链接回现有像素世界，保持存档、主题与键盘操作。"
+        }
+      ]
+    },
+    {
+      "id": "g11",
+      "x": 1384,
+      "y": 170,
+      "axis": "x",
+      "items": [
+        {
+          "id": "p11",
+          "variant": "filled",
+          "icon": null,
+          "kind": "text",
+          "label": "monica mcp-config GRANT",
+          "size": 36,
+          "bold": true
+        }
+      ]
+    },
+    {
+      "id": "g12",
+      "x": 1384,
+      "y": 245,
+      "axis": "x",
+      "items": [
+        {
+          "id": "p12",
+          "variant": "filled",
+          "icon": null,
+          "kind": "card",
+          "noImage": true,
+          "size": 1232,
+          "size2": 330,
+          "label": "执行前须知",
+          "supporting": "对象：已有授权名 GRANT\n前提：本地配置与授权存在\n影响：保存 Monica 的 MCP 片段文件\n带 --install CLIENT 时：合并写入客户端配置\n边界：受信本地管理；MCP 无法调用\n重试：先检查结果，避免盲目重做"
+        }
+      ]
+    },
+    {
+      "id": "g13",
+      "x": 1384,
+      "y": 625,
+      "axis": "x",
+      "items": [
+        {
+          "id": "p13",
+          "variant": "filled",
+          "icon": null,
+          "kind": "text",
+          "label": "参数与选项 → 示例与实测输出 → 容易踩的地方",
+          "size": 22
+        }
+      ]
+    },
+    {
+      "id": "g14",
+      "x": 2744,
+      "y": 24,
+      "axis": "x",
+      "items": [
+        {
+          "id": "p14",
+          "variant": "filled",
+          "icon": null,
+          "kind": "text",
+          "label": "MONICA / 上手",
+          "size": 24,
+          "bold": true
+        }
+      ]
+    },
+    {
+      "id": "g15",
+      "x": 2744,
+      "y": 92,
+      "axis": "x",
+      "items": [
+        {
+          "id": "p15",
+          "variant": "filled",
+          "icon": null,
+          "kind": "text",
+          "label": "从一条命令开始",
+          "size": 28
+        }
+      ]
+    },
+    {
+      "id": "g16",
+      "x": 2744,
+      "y": 158,
+      "axis": "x",
+      "items": [
+        {
+          "id": "p16",
+          "variant": "filled",
+          "icon": null,
+          "kind": "card",
+          "noImage": true,
+          "size": 342,
+          "size2": 160,
+          "label": "三个对象",
+          "supporting": "连接：保存服务凭据\n授权：限定 AI 访问\n代理：运行时调用通道"
+        }
+      ]
+    },
+    {
+      "id": "g17",
+      "x": 2744,
+      "y": 342,
+      "axis": "x",
+      "items": [
+        {
+          "id": "p17",
+          "variant": "filled",
+          "icon": null,
+          "kind": "card",
+          "noImage": true,
+          "size": 342,
+          "size2": 300,
+          "label": "我来操作",
+          "supporting": "创建连接与授权\n配置 AI 客户端\n启动前台代理\n另开终端检查\n\n长命令独立滚动，页面不横溢。"
+        }
+      ]
+    },
+    {
+      "id": "g18",
+      "x": 2744,
+      "y": 666,
+      "axis": "x",
+      "items": [
+        {
+          "id": "p18",
+          "variant": "filled",
+          "icon": null,
+          "kind": "card",
+          "noImage": true,
+          "size": 342,
+          "size2": 290,
+          "label": "让 AI 调用",
+          "supporting": "先摘要，再按命令查询\n检查前提与影响\n发现不代表授权\n受信执行器注入秘密"
+        }
+      ]
+    }
+  ]
+}

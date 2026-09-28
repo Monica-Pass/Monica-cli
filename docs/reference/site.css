@@ -59,6 +59,28 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+.object-guide, .guide-paths { display: grid; gap: 24px; }
+.object-guide { grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0 0 32px; }
+.object-guide > div { border-top: 2px solid var(--border-visible); padding: 18px 0; }
+.object-guide dt { font-weight: 700; color: var(--display); }
+.object-guide dd { margin: 10px 0 0; color: var(--secondary); }
+.guide-paths { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.guide-paths .panel { min-width: 0; }
+.guide-paths h2 { font-size: 25px; margin: 12px 0 24px; }
+.guide-paths pre { overflow-x: auto; padding: 14px; border: 1px solid var(--border-visible); background: var(--bg); }
+.guide-paths details { margin: 24px 0; }
+.guide-paths summary { cursor: pointer; font-weight: 700; }
+.setup-route { padding-left: 22px; }
+.setup-route li { margin-bottom: 20px; }
+.compat-note { color: var(--secondary); padding: 24px 0; }
+.contract-facts { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 12px 24px; }
+.contract-facts dt { color: var(--secondary); }
+.contract-facts dd { margin: 0; overflow-wrap: anywhere; }
+.contract-facts ul { padding-left: 18px; margin: 0; }
+.contract-facts li + li { margin-top: 6px; }
+@media (max-width: 860px) { .object-guide, .guide-paths { grid-template-columns: 1fr; } }
+@media (max-width: 560px) { .contract-facts { grid-template-columns: 1fr; gap: 6px; } .contract-facts dd { margin-bottom: 16px; } }
+
 a {
   color: var(--interactive);
   text-decoration: none;

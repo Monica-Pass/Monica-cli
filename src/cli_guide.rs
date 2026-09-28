@@ -42,13 +42,28 @@ pub(super) const GROUPS: &[(&str, Message, &[&str])] = &[
     (
         "connections",
         Message::HelpGroupConnections,
-        &["add", "connect", "list", "show", "note", "token", "delete"],
+        &[
+            "add",
+            "connect",
+            "connections",
+            "show",
+            "note",
+            "token",
+            "delete",
+        ],
     ),
     (
         "grants",
         Message::HelpGroupGrants,
         &[
-            "grant", "settings", "check", "refresh", "revoke", "audit", "call", "mcp",
+            "grant",
+            "mcp-config",
+            "check",
+            "renew",
+            "revoke",
+            "audit",
+            "call",
+            "mcp",
         ],
     ),
     (
@@ -120,97 +135,122 @@ pub(super) fn root_help(command: &Command, language: Language) -> String {
 }
 
 /// One setup step, in the order a first run meets them.
-const STEPS: [&str; 5] = ["vault", "connection", "grant", "broker", "client"];
+const STEPS: [&str; 5] = ["vault", "connection", "grant", "client", "broker"];
 
-/// Reads configuration, grant and broker metadata only. It never opens the
-/// vault, asks for a password or reads an AI client's own files, so the last
-/// step is advice rather than a finding.
-pub(super) fn next(store: &ConfigStore) -> Result<Value> {
+/// Reads public metadata only. Client integration remains unverified: no AI
+/// configuration files are opened and no state is created by this guide.
+pub(super) fn next(store: &ConfigStore, selected: Option<&str>) -> Result<Value> {
+    if let Some(name) = selected {
+        monica_pass_cli::model::validate_name(name)?;
+    }
     let status = match admin::status(store) {
         Ok(status) => Some(status),
         Err(GatewayError::SetupRequired) => None,
         Err(error) => return Err(error),
     };
-    let names = |key: &str| -> Vec<String> {
+    next_from_status(status.as_ref(), selected)
+}
+
+fn next_from_status(status: Option<&Value>, selected: Option<&str>) -> Result<Value> {
+    let items = |key: &str| -> Vec<&Value> {
         status
-            .as_ref()
-            .and_then(|status| status[key].as_array())
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| item["name"].as_str().map(str::to_owned))
-                    .collect()
-            })
+            .and_then(|s| s[key].as_array())
+            .map(|items| items.iter().collect())
             .unwrap_or_default()
     };
-    let connections = names("connections");
-    let grants: Vec<&Value> = status
-        .as_ref()
-        .and_then(|status| status["grants"].as_array())
-        .map(|grants| grants.iter().collect())
-        .unwrap_or_default();
-    let usable = grants.iter().find(|grant| {
-        grant["expired"] == Value::Bool(false) && grant["refresh_required"] == Value::Bool(false)
-    });
-    let running = status.as_ref().is_some_and(|status| {
-        status["broker_running"] == Value::Bool(true)
-            && status["lock_requested"] != Value::Bool(true)
-    });
-    let grant_name = |grant: &Value| grant["name"].as_str().unwrap_or("<grant>").to_owned();
-
+    let connections = items("connections");
+    let grants = items("grants");
+    let chosen = if let Some(selected) = selected {
+        Some(
+            *grants
+                .iter()
+                .find(|g| g["name"] == selected)
+                .ok_or(GatewayError::NotFound)?,
+        )
+    } else if grants.len() == 1 {
+        Some(grants[0])
+    } else {
+        None
+    };
+    let usable = chosen.is_some_and(|g| g["expired"] == false && g["refresh_required"] == false);
+    let running =
+        status.is_some_and(|s| s["broker_running"] == true && s["lock_requested"] != true);
+    let name = chosen.and_then(|g| g["name"].as_str()).unwrap_or("<GRANT>");
     let (stage, commands, renew) = if status.is_none() {
         (
             "vault",
-            vec!["add <name> --repo <owner/repo>".to_owned()],
+            vec!["add <CONNECTION> --repo <owner/repo>".to_owned()],
             false,
         )
     } else if connections.is_empty() {
         (
             "connection",
-            vec!["add <name> --repo <owner/repo>".to_owned()],
+            vec!["add <CONNECTION> --repo <owner/repo>".to_owned()],
             false,
         )
-    } else if let Some(grant) = usable {
-        if running {
-            let name = grant_name(grant);
-            (
-                "client",
-                vec![
-                    format!("settings {name} --install <claude|codex|cursor|vscode>"),
-                    format!("check {name}"),
-                ],
-                false,
-            )
-        } else {
-            ("broker", vec!["serve".to_owned()], false)
-        }
-    } else if let Some(grant) = grants.first() {
+    } else if chosen.is_none() && grants.len() > 1 {
         (
-            "grant",
-            vec![format!("refresh {}", grant_name(grant))],
-            true,
+            "grant_selection",
+            vec!["status".to_owned(), "next --grant <GRANT>".to_owned()],
+            false,
         )
+    } else if usable {
+        let mut commands = vec![format!(
+            "mcp-config {name} --install <claude|codex|cursor|vscode>"
+        )];
+        if !running {
+            commands.push("serve".to_owned());
+        }
+        commands.push(format!("check {name}"));
+        ("client", commands, false)
+    } else if chosen.is_some() {
+        ("grant", vec![format!("renew {name}")], true)
     } else {
+        let connection = if connections.len() == 1 {
+            connections[0]["name"].as_str().unwrap_or("<CONNECTION>")
+        } else {
+            "<CONNECTION>"
+        };
         (
             "grant",
             vec![format!(
-                "grant <grant> -c {} -r <owner/repo>",
-                connections[0]
+                "grant <GRANT> --connection {connection} --repo <owner/repo>"
             )],
             false,
         )
     };
-    let reached = STEPS.iter().position(|step| *step == stage).unwrap_or(0);
     let steps: Vec<_> = STEPS
         .iter()
-        .enumerate()
-        .map(|(index, id)| json!({"id": id, "done": index < reached}))
+        .map(|id| {
+            let done = match *id {
+                "vault" => status.is_some(),
+                "connection" => !connections.is_empty(),
+                "grant" => usable,
+                "broker" => running,
+                _ => false,
+            };
+            let state = if *id == "client" {
+                "unverified"
+            } else if done {
+                "ready"
+            } else {
+                "missing"
+            };
+            json!({"id":id,"done":done,"state":state})
+        })
         .collect();
+    let commands: Vec<_> = commands.iter().map(|c| format!("monica {c}")).collect();
+    let actions: Vec<_> = commands.iter().map(|command| json!({
+        "command": command,
+        "terminal": if command.contains(" check ") {"another"} else {"current"},
+        "condition": if command.contains(" mcp-config ") {"if_client_not_configured"} else {"next_step"},
+    })).collect();
     Ok(json!({
-        "stage": stage,
-        "renew": renew,
-        "steps": steps,
-        "commands": commands.iter().map(|command| format!("monica {command}")).collect::<Vec<_>>(),
+        "stage":stage,"renew":renew,"steps":steps,"commands":commands,"actions":actions,
+        "selected_grant":chosen.map(|g| &g["name"]),
+        "available_grants":grants.iter().map(|g| &g["name"]).collect::<Vec<_>>(),
+        "client_integration":"unverified",
+        "broker_running":running,
     }))
 }
 
@@ -242,12 +282,17 @@ pub(super) fn render_next(data: &Value, language: Language) -> String {
     let why = match (stage, data["renew"] == Value::Bool(true)) {
         ("vault", _) => Message::NextWhyVault,
         ("connection", _) => Message::NextWhyConnection,
+        ("grant_selection", _) => Message::NextChooseGrant,
         ("grant", true) => Message::NextWhyRenew,
         ("grant", false) => Message::NextWhyGrant,
         ("broker", _) => Message::NextWhyBroker,
         _ => Message::NextWhyClient,
     };
     out.push_str(&language.format(why, &[("bin", &bin)]));
+    if stage == "client" {
+        out.push('\n');
+        out.push_str(language.text(Message::NextTerminalOrder));
+    }
     out.push('\n');
     for command in data["commands"].as_array().into_iter().flatten() {
         let command = command.as_str().unwrap_or_default();
@@ -257,4 +302,47 @@ pub(super) fn render_next(data: &Value, language: Language) -> String {
     out.push('\n');
     out.push_str(&tr!(language, NextPractice, url = PRACTICE_URL));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn broker_readiness_does_not_claim_client_integration_and_multiple_grants_need_selection() {
+        let mut status = json!({"connections":[{"name":"work-github"}],"grants":[
+            {"name":"reader", "expired":false, "refresh_required":false},
+            {"name":"writer", "expired":false, "refresh_required":false}
+        ],"broker_running":true,"lock_requested":false});
+        let choice = next_from_status(Some(&status), None).unwrap();
+        assert_eq!(choice["stage"], "grant_selection");
+        assert_eq!(choice["selected_grant"], Value::Null);
+        assert_eq!(
+            next_from_status(Some(&status), Some("missing")),
+            Err(GatewayError::NotFound)
+        );
+        let selected = next_from_status(Some(&status), Some("writer")).unwrap();
+        assert_eq!(selected["selected_grant"], "writer");
+        assert_eq!(
+            selected["commands"],
+            json!([
+                "monica mcp-config writer --install <claude|codex|cursor|vscode>",
+                "monica check writer"
+            ])
+        );
+        assert_eq!(
+            selected["steps"][3],
+            json!({"id":"client","done":false,"state":"unverified"})
+        );
+        assert_eq!(selected["steps"][4]["done"], true);
+        status["lock_requested"] = true.into();
+        let stopped = next_from_status(Some(&status), Some("reader")).unwrap();
+        assert_eq!(stopped["commands"][1], "monica serve");
+        assert_eq!(stopped["actions"][2]["terminal"], "another");
+        assert_eq!(stopped["steps"][4]["done"], false);
+        status["grants"][0]["refresh_required"] = true.into();
+        let expired = next_from_status(Some(&status), Some("reader")).unwrap();
+        assert_eq!(expired["commands"], json!(["monica renew reader"]));
+        assert_eq!(expired["steps"][2]["done"], false);
+    }
 }

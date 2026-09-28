@@ -9,7 +9,7 @@ use crate::cli::Cli;
 use crate::cli_input::{MAX_SECRET_BYTES, required_fields};
 use crate::cli_output::Output;
 
-pub fn run(topic: &[String], language: Language, output: Output) -> Result<()> {
+pub fn run(topic: &[String], summary: bool, language: Language, output: Output) -> Result<()> {
     let mut command = Cli::command();
     command.build();
     command =
@@ -27,7 +27,28 @@ pub fn run(topic: &[String], language: Language, output: Output) -> Result<()> {
         command = child;
         path.push(command.get_name().to_owned());
     }
-    if output.json {
+    if summary {
+        let mut entries = Vec::new();
+        summarize(&command, &path, &mut entries);
+        let human = entries
+            .iter()
+            .map(|entry| {
+                format!(
+                    "{}  {}",
+                    entry["path"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    entry["summary"].as_str().unwrap_or_default()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        output.result_text("commands", json!({"schema_version":1,"format":"summary","commands":entries,"detail":"monica commands <COMMAND> --json","discovery_grants_authority":false}), Some(human))
+    } else if output.json {
         let data = describe(&command, &path);
         output.result("commands", data, None)
     } else {
@@ -56,6 +77,7 @@ pub(crate) fn describe(command: &Command, path: &[String]) -> Value {
             .map(|value| value.to_string_lossy().into_owned()).collect();
         json!({
             "id": arg.get_id().as_str(),
+            "role": crate::cli_contract::argument_role(&name, arg),
             "long": arg.get_long(),
             "short": arg.get_short().map(|short| short.to_string()),
             "aliases": arg.get_visible_aliases().unwrap_or_default(),
@@ -103,6 +125,8 @@ pub(crate) fn describe(command: &Command, path: &[String]) -> Value {
     json!({
         "schema_version": 1,
         "name": command.get_name(),
+        "execution_command": crate::cli_contract::execution_name(&name),
+        "semantics": crate::cli_contract::describe(&name),
         "path": path,
         "aliases": command.get_visible_aliases().collect::<Vec<_>>(),
         "summary": command.get_about().map(ToString::to_string),
@@ -116,6 +140,30 @@ pub(crate) fn describe(command: &Command, path: &[String]) -> Value {
     })
 }
 
+fn summarize(command: &Command, path: &[String], entries: &mut Vec<Value>) {
+    let name = path.join(" ");
+    if !path.is_empty() {
+        let semantics = crate::cli_contract::describe(&name).unwrap_or(Value::Null);
+        entries.push(json!({
+            "path":path,
+            "aliases":command.get_visible_aliases().collect::<Vec<_>>(),
+            "summary":command.get_about().map(ToString::to_string),
+            "target":semantics["target"],
+            "trust_boundary":semantics["trust_boundary"],
+            "secret_fields":required_fields(&name).iter().map(|field| field.name()).collect::<Vec<_>>(),
+            "subcommand_required":command.is_subcommand_required_set(),
+        }));
+    }
+    for child in command
+        .get_subcommands()
+        .filter(|child| child.get_name() != "help" && discoverable(child, path))
+    {
+        let mut child_path = path.to_vec();
+        child_path.push(child.get_name().to_owned());
+        summarize(child, &child_path, entries);
+    }
+}
+
 /// Key management is intentionally hidden from the ordinary top-level help because it is a
 /// human-only surface, but its public metadata is still needed by trusted local executors.
 /// Private key export remains outside the AI discovery contract.
@@ -124,4 +172,65 @@ fn discoverable(command: &Command, parent_path: &[String]) -> bool {
         return false;
     }
     !command.is_hide_set() || (parent_path.is_empty() && command.get_name() == "keys")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_discovered_command_has_semantics_and_summary_stays_small() {
+        let mut root = Cli::command();
+        root.build();
+        let full = describe(&root, &[]);
+        fn check(node: &Value) {
+            let semantics = &node["semantics"];
+            assert!(semantics.is_object(), "missing semantics: {}", node["path"]);
+            assert_eq!(semantics["discovery_grants_authority"], false);
+            assert_eq!(semantics["mcp_tool"], false);
+            assert!(semantics["prerequisites"].is_array());
+            assert!(semantics["effects"].is_array());
+            assert!(semantics["retry"].is_string());
+            let name = node["path"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" ");
+            let fields: Vec<_> = required_fields(crate::cli_contract::execution_name(&name))
+                .iter()
+                .map(|f| f.name())
+                .collect();
+            assert_eq!(node["secret_input"]["required"], json!(fields));
+            for child in node["commands"].as_array().unwrap() {
+                check(child);
+            }
+        }
+        check(&full);
+        let mut summary = Vec::new();
+        summarize(&root, &[], &mut summary);
+        assert!(
+            serde_json::to_vec(&summary).unwrap().len() * 4
+                < serde_json::to_vec(&full).unwrap().len()
+        );
+        assert!(
+            !summary
+                .iter()
+                .any(|entry| entry["path"] == json!(["keys", "export"]))
+        );
+        let settings = full["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "mcp-config")
+            .unwrap();
+        assert_eq!(settings["execution_command"], "settings");
+        assert!(
+            settings["semantics"]["effects"]
+                .as_array()
+                .unwrap()
+                .contains(&json!({"when":"--install", "effect":"merge_client_config"}))
+        );
+    }
 }

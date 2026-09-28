@@ -50,8 +50,8 @@ Monica CLI 是本机的凭据代理。服务 Token 与数据库主密码由人�
 
 - `unauthorized` → 你的 capability 已失效。停下，让人重新取 MCP 配置并重启本服务。
 - `reauthorization_required` → 停下，按下面的话术请人续期，续期后必须重启 MCP 入口。
-- `unlock_required` → 本地代理需要一次新的解锁，让人执行 `monica u`。
-- `broker_unavailable` → 桥连不上本地代理。让人执行 `monica u` 后重试一次。
+- `unlock_required` → 本地代理需要一次新的解锁，让人执行 `monica serve`。
+- `broker_unavailable` → 桥连不上本地代理。让人执行 `monica serve` 后重试一次。
 - `permission_denied` → 该操作或仓库不在授权内（未知工具名也回这个码）。核对 `tools` 与
   `repositories`，不要重试越界调用。
 - `repository_required` → 授权含多份仓库而你没指定，补上确切的 `repository` 再调一次。
@@ -70,7 +70,7 @@ Monica CLI 是本机的凭据代理。服务 Token 与数据库主密码由人�
 一句话讲清四件事：哪份授权、为什么停了、请执行什么、之后还要做什么。
 
 > 这份授权（grant 名取自 `authorization.grant`）的〈时间窗口已到期 / 调用次数已用尽〉，
-> 我不能再自行续期。请在本地终端执行 `monica refresh <grant 名>`（只需数据库主密码），
+> 我不能再自行续期。请在本地终端执行 `monica renew <grant 名>`（只需数据库主密码），
 > 然后重启这个 MCP 服务入口——续期换发了新凭据，旧的已经失效，不重启我就连不回去。
 
 其他错误同样要报明错误码原文，不要只说"调用失败"。

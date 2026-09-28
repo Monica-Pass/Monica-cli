@@ -1,5 +1,8 @@
 # CLI 分段流同步设计（与 Monica Android 互操作）
 
+> 2026-09-28：附件传输、目录探测失败和即时取消规则已更新，当前行为及本轮合成验证以 [MDBX 跨端兼容](mdbx-compatibility.md) 为准。下文带日期的真实云取证记录保留其当时范围，本轮未使用真实云账号。
+
+
 状态：已实施，实现落在 `src/segment.rs`，与设计原文的偏差集中记在第 12 节。这份文档的目的在于让
 `webdav sync` 从「整文件替换」升级为引擎的分段合并协议，从而能真正与手机上的 Monica 共用同一个远端保险库。
 第 1~9 节是设计原文，仍然成立的部分不再重述；第 1 节末尾「当前实现对这类远端库一律拒绝」描述的是
@@ -141,9 +144,7 @@ deviceId   gateway.json 增加 webdav_device_id：monica-cli-<UUIDv4>，生成�
    `etag` 全为 `null`），因此**不能**依赖 `If-Match`；同理，若服务器忽略 `If-None-Match`，误覆盖只能靠
    写后核对发现，所以这一步不是可选项。同名已存在时按 Android 的做法：字节相同 → 当作成功跳过，
    不同 → 报冲突（`AND/webdav/WebDavConditionalWriter.kt:27-44`、`WebDavMdbxFileSource.kt:206-228`）。
-4. 附件库（`blobs/`）留到后续阶段：先确认 `mdbx-storage` 的 `filesystem-blob-store` 特性在
-   `default-features = false` 下的实际行为，再决定是否纳入第一版。第一版继续对带外置附件的库报
-   `external_blobs_unsupported`。
+4. 2026-09-28 已启用 `filesystem-blob-store`：附件密文按相同摘要路径传输，分段与其引用 Blob 全部确认后才推进游标；缺块恢复及便携副本有合成回归。
 
 ## 7. 与现有单文件模式共存
 
@@ -283,13 +284,13 @@ README / `docs/human-guide.md` / `docs/ai-guide.md` / `SECURITY.md` 的「不支
 - `If-None-Match: *` 创建后**立刻 GET 回来核对载荷摘要**（`upload_segment`，`segment.rs:548`）：这个部署没有
   强 ETag，回复不是证据。摘要不符报 `sync_segment_corrupt`，游标不动。
 - 同名已存在：字节相同当成功跳过，不同报冲突——与第 6 节第 3 条一致。
-- 附件仍不支持，带外置附件的库照旧 `external_blobs_unsupported`。
+- 附件通过引擎 Blob Provider/Transfer API 传输，create-only 后 GET 核对密文摘要；缺块不确认游标。
 
 ### 5. 没有 `mode` 字段（与第 7 节不同）
 
 `RemoteBinding` 保持整文件语义，没有加 `mode: "file" | "segment"`。模式判定改成每次 `sync` / `publish` /
 `open_remote` 前对远端父目录做一次 Depth:1 PROPFIND：出现 `<path>.sync`（或它下面任意条目）即走分段，
-列目录失败按「未检测到」处理，普通单文件对端行为不变。代价是每次同步多一次 PROPFIND；换来的是手机建过库的
+列目录失败明确报错，不能回退到整库覆盖。本地有外置 Blob 时也选择分段协议。代价是每次同步多一次 PROPFIND；换来的是手机建过库的
 目录零配置自动识别，用户不必先声明模式。两条路径共用 profile、锁与 `gateway.json`，分段只额外使用
 `gateway.sync.json` 与 `gateway.sync/` 暂存目录。自动同步仍未引入后台常驻。
 

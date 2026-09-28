@@ -151,6 +151,7 @@ impl Field {
 
 #[derive(Clone)]
 pub(super) enum Kind {
+    Inspect(String),
     SwitchDatabase {
         id: String,
         name: String,
@@ -364,6 +365,20 @@ impl Form {
                     ),
                     Field::secret(tr!(lang, MasterPasswordLabel)),
                 ],
+            ),
+            Kind::Inspect(_) => (
+                if lang == crate::i18n::Language::En {
+                    "Read-only object details"
+                } else {
+                    "只读项目详情"
+                },
+                if lang == crate::i18n::Language::En {
+                    "Unlock for a temporary view. Every field starts hidden."
+                } else {
+                    "解锁后临时查看，所有字段值默认隐藏。"
+                }
+                .to_owned(),
+                vec![Field::secret(tr!(lang, MasterPasswordLabel))],
             ),
             Kind::Library => (
                 if lang == crate::i18n::Language::En {
@@ -824,6 +839,10 @@ impl Form {
                 }
             }
             Kind::Library => Action::Library(self.secret(0)),
+            Kind::Inspect(id) => Action::Inspect {
+                id: id.clone(),
+                password: self.secret(0),
+            },
             Kind::Add { new_vault } => {
                 let creating = *new_vault;
                 let provider = match self.text(2) {

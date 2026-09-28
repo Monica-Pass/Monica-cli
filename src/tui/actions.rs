@@ -22,6 +22,10 @@ pub(super) enum DeleteTarget {
 }
 
 pub(super) enum Action {
+    Inspect {
+        id: String,
+        password: Zeroizing<String>,
+    },
     SwitchDatabase {
         id: String,
         password: Zeroizing<String>,
@@ -152,6 +156,7 @@ impl Action {
                 | Self::Move { .. }
                 | Self::Delete { .. }
                 | Self::Library(_)
+                | Self::Inspect { .. }
                 | Self::Add { .. }
                 | Self::Note { .. }
                 | Self::Init { .. }
@@ -179,7 +184,7 @@ impl Action {
             | Self::Category { .. }
             | Self::Move { .. } => Message::PendingConnect,
             Self::Delete { .. } => Message::PendingDelete,
-            Self::Library(_) => Message::PendingUnlock,
+            Self::Library(_) | Self::Inspect { .. } => Message::PendingUnlock,
             Self::Add { .. } => Message::PendingAdd,
             Self::Note { .. } => Message::PendingNote,
             Self::Init { .. } => Message::PendingInit,
@@ -203,6 +208,7 @@ impl Action {
 }
 
 pub(super) enum Outcome {
+    Inspection(crate::object::Inspection),
     Library {
         library: crate::library::Library,
         /// Key entries read in the same unlock, so a tree row can be marked as a key.
@@ -343,6 +349,12 @@ pub(super) async fn perform(
                     .await
                     .map_err(|_| GatewayError::StateUnavailable)??,
             )
+        }
+        Action::Inspect { id, password } => {
+            tokio::task::spawn_blocking(move || crate::object::inspect(&store, &password, &id))
+                .await
+                .map_err(|_| GatewayError::StateUnavailable)?
+                .map(Outcome::Inspection)
         }
         Action::Add {
             options,

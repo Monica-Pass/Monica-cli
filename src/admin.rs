@@ -27,8 +27,9 @@ use crate::vault::Vault;
 
 #[derive(clap::Args)]
 pub struct GrantOptions {
+    #[arg(value_name = "GRANT")]
     pub name: String,
-    #[arg(short = 'c', long)]
+    #[arg(short = 'c', long, value_name = "CONNECTION")]
     pub connection: String,
     /// Exact repository paths, or * for an explicit service-wide API grant.
     #[arg(short = 'r', long = "repo", required = true)]
@@ -54,6 +55,7 @@ pub struct GrantOptions {
 #[derive(Clone, clap::Args)]
 pub struct RefreshOptions {
     /// Existing grant to re-authorize with a fresh capability.
+    #[arg(value_name = "GRANT")]
     pub name: String,
     /// New window in minutes. Omit to reuse the window this grant was issued with.
     #[arg(short = 't', long = "ttl-minutes", visible_alias = "ttl", value_parser = clap::value_parser!(u32).range(1..=1440))]
@@ -69,6 +71,7 @@ pub struct RefreshOptions {
 #[derive(Clone, clap::Args)]
 pub struct AddOptions {
     /// A short name the AI will use, such as work-github.
+    #[arg(value_name = "CONNECTION")]
     pub name: String,
     /// Optional human-facing display title (Chinese allowed). The name stays the ASCII handle.
     #[arg(long, default_value = "")]

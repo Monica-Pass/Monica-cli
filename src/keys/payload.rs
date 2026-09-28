@@ -130,6 +130,35 @@ pub fn set_ssh_key_data(payload: &mut Value, raw: &str) {
     }
 }
 
+/// Patch only the requested fields, retaining the producer's alias and JSON shape.
+pub fn edit_ssh_comment(payload: &mut Value, comment: &str) -> Result<()> {
+    let key = [SSH_KEY_FIELD, SSH_KEY_FIELD_ALIAS]
+        .into_iter()
+        .find(|key| payload.get(*key).is_some_and(|value| !value.is_null()))
+        .ok_or(GatewayError::InvalidKeyMaterial)?;
+    let is_string = payload[key].is_string();
+    let mut inner = if let Some(raw) = payload[key].as_str() {
+        serde_json::from_str(raw).map_err(|_| GatewayError::InvalidKeyMaterial)?
+    } else {
+        payload[key].clone()
+    };
+    let data = SshKeyData::from_value(&inner)?;
+    if data.schema != super::openssh::SCHEMA_V1 {
+        return Err(GatewayError::ObjectReadOnly);
+    }
+    inner["publicKeyOpenSsh"] = Value::String(super::openssh::public_line_with_comment(
+        &data.public_key_openssh,
+        comment,
+    )?);
+    inner["comment"] = Value::String(comment.trim().to_owned());
+    payload[key] = if is_string {
+        Value::String(serde_json::to_string(&inner).map_err(|_| GatewayError::InvalidKeyMaterial)?)
+    } else {
+        inner
+    };
+    Ok(())
+}
+
 /// The eight keys `SshKeyData` models, plus everything else the producer carried.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SshKeyData {
@@ -632,6 +661,49 @@ mod tests {
                 .len(),
             8
         );
+    }
+
+    #[test]
+    fn comment_edits_preserve_alias_shape_absent_null_and_nested_extensions() {
+        let pair = super::super::openssh::SshKeyPair::generate(
+            super::super::openssh::SshAlgorithm::Ed25519,
+            "old",
+        )
+        .unwrap();
+        for key in [SSH_KEY_FIELD, SSH_KEY_FIELD_ALIAS] {
+            for string_shape in [false, true] {
+                let mut inner: Value = serde_json::from_str(r#"{"keySize":null,"future":{"big":123456789012345678901234567890,"items":[false,"",null]}}"#).unwrap();
+                inner["publicKeyOpenSsh"] = json!(pair.public_key_openssh);
+                let original = inner.clone();
+                let mut outer = json!({"unrelated": null});
+                outer[key] = if string_shape {
+                    json!(serde_json::to_string(&inner).unwrap())
+                } else {
+                    inner
+                };
+                edit_ssh_comment(&mut outer, "new").unwrap();
+                assert_eq!(outer[key].is_string(), string_shape);
+                let patched: Value = if string_shape {
+                    serde_json::from_str(outer[key].as_str().unwrap()).unwrap()
+                } else {
+                    outer[key].clone()
+                };
+                assert_eq!(patched["future"], original["future"]);
+                assert_eq!(patched["keySize"], Value::Null);
+                assert!(patched.get("schema").is_none() && patched.get("format").is_none());
+                assert_eq!(patched["comment"], "new");
+                assert_eq!(outer.as_object().unwrap().len(), 2);
+                let mut future = patched;
+                future["schema"] = json!("monica.ssh-key.v99");
+                outer[key] = future;
+                let before = outer.clone();
+                assert!(matches!(
+                    edit_ssh_comment(&mut outer, "wrong"),
+                    Err(GatewayError::ObjectReadOnly)
+                ));
+                assert_eq!(outer, before);
+            }
+        }
     }
 
     #[test]

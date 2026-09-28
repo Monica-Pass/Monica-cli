@@ -301,7 +301,7 @@
     if (example.tested === true) {
       const chips = el('div', 'chip-row');
       chips.appendChild(el('span', 'chip chip-ok', '实测输出'));
-      chips.appendChild(el('span', 'chip', '0.5.0'));
+      chips.appendChild(el('span', 'chip', example.capturedAt || '此前版本快照'));
       foot.appendChild(chips);
     } else {
       const chips = el('div', 'chip-row');
@@ -343,7 +343,9 @@
           (cmd.aliases.length ? '   别名 ' + cmd.aliases.join(', ') : ''),
       ),
     );
-    head.appendChild(el('h1', 'detail-title', DATA.meta.cli + ' ' + cmd.key));
+    const title = el('h1', 'detail-title', DATA.meta.cli + ' ' + cmd.key);
+    title.id = 'detail-title';
+    head.appendChild(title);
     head.appendChild(el('p', 'detail-zh', cmd.summaryZh));
     head.appendChild(el('p', 'detail-en', cmd.summary));
     if (cmd.whenToUse) head.appendChild(el('p', 'detail-when', cmd.whenToUse));
@@ -352,6 +354,7 @@
     host.appendChild(head);
 
     const sections = el('div', 'sections');
+    if (cmd.semantics) sections.appendChild(contractPanel(cmd));
 
     const argsPanel = el('div', 'panel');
     argsPanel.appendChild(el('h2', 'panel-title', '参数与选项'));
@@ -421,6 +424,36 @@
     nav.appendChild(next);
     host.appendChild(nav);
     markScrollable(host);
+  }
+
+  function contractPanel(cmd) {
+    const label = window.MONICA_CONTRACT.label;
+    const contract = cmd.semantics;
+    const panel = el('section', 'panel');
+    panel.appendChild(el('h2', 'panel-title', '执行前须知'));
+    const facts = el('dl', 'contract-facts');
+    function fact(title, values) {
+      facts.appendChild(el('dt', null, title));
+      const value = el('dd');
+      if (Array.isArray(values)) {
+        if (!values.length) value.textContent = '无额外条件';
+        else {
+          const list = el('ul');
+          values.forEach((text) => list.appendChild(el('li', null, text)));
+          value.appendChild(list);
+        }
+      } else value.textContent = values;
+      facts.appendChild(value);
+    }
+    fact('操作对象', label(contract.target));
+    fact('前提条件', contract.prerequisites.map(label));
+    fact('执行影响', contract.effects.map((item) => label(item.when) + '：' + label(item.effect)));
+    fact('信任边界', label(contract.trust_boundary));
+    fact('重试规则', label(contract.retry));
+    if (cmd.executionCommand !== cmd.key) fact('JSON 标识', 'command: ' + cmd.executionCommand + '（兼容旧脚本）');
+    panel.appendChild(facts);
+    panel.appendChild(el('p', 'pane-hint', '这些规则由 CLI 生成。发现命令不授予执行权限；前提、范围和人的授权仍需满足。'));
+    return panel;
   }
 
   // ------------------------------- practice -------------------------------
@@ -533,6 +566,7 @@
   }
 
   function openDetail(key) {
+    key = canonicalKey(key);
     if (!byKey.has(key)) return;
     state.key = key;
     setView('detail');
@@ -580,7 +614,8 @@
 
   function routeFromHash() {
     const raw = decodeURIComponent((location.hash || '').replace(/^#/, ''));
-    const [view, arg] = raw.split('/');
+    const [view, rawArg] = raw.split('/');
+    const arg = view === 'detail' ? canonicalKey(rawArg) : rawArg;
     // Drills used to live under #practice/<id>; they are quest levels now.
     if (view === 'practice' && arg && arg !== 'free') {
       location.replace('#quest/' + arg);
@@ -599,8 +634,17 @@
       setView('table');
       return;
     }
+    if (view === 'guide') {
+      setView('guide');
+      return;
+    }
     state.questArg = view === 'quest' ? arg || '' : '';
     setView(QUEST ? 'quest' : 'table');
+  }
+
+  function canonicalKey(key) {
+    // Preserve bookmarked legacy command pages without creating duplicate entries.
+    return ({ list: 'connections', settings: 'mcp-config', refresh: 'renew' })[key] || key;
   }
 
   // ------------------------------- wiring ---------------------------------

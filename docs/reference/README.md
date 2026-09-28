@@ -4,8 +4,8 @@
 并让你在浏览器里练手敲命令——只按同一份语法检查你敲的每个参数，**不会执行任何命令，
 也碰不到任何凭据**。
 
-- 四个视图：`闯关`（默认页，像素世界地图 + 22 关）、`总表`（搜索 + 分组 + 标记筛选）、
-  `详情`（参数表、示例、实测输出、容易踩的地方）、`练习`（自由输入）。
+- 五个视图：`闯关`（默认页，像素世界地图 + 22 关）、`上手`（人类接入与 AI 发现两条路线）、`总表`（搜索 + 分组 + 标记筛选）、
+  `详情`（操作对象、前提、执行影响、重试规则、参数、示例）、`练习`（自由输入）。旧命令的详情链接仍可打开。
 - 闯关：`examples.json` 里的每道 drill 是一关，按命令所属分组落在 7 个区域里。像素画全部用
   canvas 按逻辑像素绘制、整数放大，精灵就是 `quest.js` 里的字符画，没有图片资源。每关答对后
   播放专属场景，再把这条命令的实测输出逐行打出来。提示分三级（用哪条命令 → 要带哪些参数 →
@@ -16,6 +16,7 @@
   （`monica-teach:quest`）和主题都只存在本机 `localStorage`。
 - 设计草图：[M3E Canvas](https://lnkiai.github.io/m3e-canvas/) 上的可编辑草图，链接见本目录的
   `design-sketch.md`。
+  上手与执行契约的补充草图见 [guidance-design.md](guidance-design.md)，源文件为 `guidance.canvas.json`。
 
 ## 打开
 
@@ -32,7 +33,7 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| `index.html` | 页面骨架，四个视图都在同一页，用 hash 路由 |
+| `index.html` | 页面骨架，五个视图都在同一页，用 hash 路由 |
 | `site.css` | Nothing 风格样式与断点（860 / 560） |
 | `site.js` | 渲染与交互，不含任何命令数据 |
 | `quest.js` | 像素闯关：地图、精灵、场景动画、三级提示与星级；判分调用同一个 `grammar.js` |
@@ -41,6 +42,7 @@
 | `build.mjs` | 生成器，同时是校验器 |
 | `examples.json` | 手写内容：中文摘要、分组、示例行、关卡、说明 |
 | `grammar.js` | 语法引擎，浏览器和 `build.mjs` 共用同一份 |
+| `contracts.js` | CLI 执行契约代码的中文解释，生成器检查覆盖度 |
 
 ## 更新流程
 
@@ -57,6 +59,10 @@ node docs/reference/build.mjs --check       # 只比对，不写文件
 `tested: false` 必须写明为什么没采。它还会打印哪些条目是手写的（目前只有 `keys export`，
 它故意不出现在 `commands --json` 里）。
 
+`--check` 比较完整生成数据（排除生成日期），包括语法、执行契约、别名、参数角色和教学文案。
+输出旁标有采集日期；旧样本标为「此前版本快照」，不会假称已在本轮全部复采。2026-09-28 新采集的
+发现、next、connections、mcp-config 与 renew 示例来自当前 release，在一次性目录中完成。
+
 生成数据不需要在 CI 里装 node：`cargo test` 带一个
 `teaching_site_data_matches_the_live_grammar`，直接把 `data.js` 和进程内的 clap 语法树比对
 命令名与长选项集合，漂移就失败。（本仓库目前没有 CI 工作流，这个守卫靠本地 `cargo test` 生效。）
@@ -66,7 +72,7 @@ node docs/reference/build.mjs --check       # 只比对，不写文件
 练习模式不是「看着像就行」，它按 `grammar.js` 逐字判定，目标是和 `clap` 在每个缩写写法上给出
 同样的接受／拒绝：
 
-- 命令别名（`monica ck work`）、长选项别名（`--no-prompt`）；
+- 命令别名（`monica check work`）、长选项别名（`--no-prompt`）；
 - 全局参数放在命令名之前（`monica -j list`、`monica --lang en status`）；
 - 值连着写（`-cwork`）、短选项堆叠（`-ws`）、`--flag=value`；
 - 裸 `--` 之后一律算位置参数（`monica note work -- --json`）；
@@ -74,7 +80,7 @@ node docs/reference/build.mjs --check       # 只比对，不写文件
   可以叠加的 ArgGroup（`keys edit --title --note`）、必须接子命令的分组（`webdav`）；
 - 候选值连同别名与大小写（`language zh`、`language ZH-CN` 通过，`--provider GITHUB` 不通过）；
 - 帮助短路：`--help`／`-h`（含 `-jh` 这种堆叠）出现在任何位置都只打印帮助，`keys help` 这类
-  内建 `help` 词只在有子命令的命令上成立（`list help` 是多余位置参数），`--version`／`-V` 只在根上；
+  内建 `help` 词只在有子命令的命令上成立（`connections help` 是多余位置参数），`--version`／`-V` 只在根上；
   帮助词**之前**的错误照报（`check --bogus -h` 仍失败），之后的检查全部跳过（`keys gpg n -h` 通过）。
 
 一致性是量出来的，不是推出来的：把 `target/release/monica-pass.exe` 跑在临时目录的一次性配置上，
@@ -101,7 +107,7 @@ node docs/reference/build.mjs --check       # 只比对，不写文件
 
 三处已知边界（页面上也写在 `练习` 顶部）：
 
-1. 数字范围检查没做。`refresh --ttl abc`／`--ttl 70000` 真解析器会拒，练习本会放过——
+1. 数字范围检查没做。`renew --ttl abc`／`--ttl 70000` 真解析器会拒，练习本会放过——
    `commands --json` 里没有值类型／范围（clap 4.6 不公开 `ValueKind`），造不出来就不假装。
    候选值列表是公开的，所以那部分做了。
 2. `monica tui --json` 这类「解析得过、CLI 自己拒绝运行」的组合，练习本在解析层就报 `no_json`，

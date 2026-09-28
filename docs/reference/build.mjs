@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const { create: createGrammar, gradeDrill } = require('./grammar.js');
+const { labels: contractLabels } = require('./contracts.js');
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..', '..');
@@ -88,6 +89,8 @@ function flatten(node, out) {
     name: node.name,
     parent: node.path.slice(0, -1).join(' '),
     summary: node.summary ?? '',
+    semantics: node.semantics,
+    executionCommand: node.execution_command,
     aliases: node.aliases ?? [],
     args: own,
     jsonSupported: node.json_supported === true,
@@ -107,6 +110,7 @@ function flatten(node, out) {
 function publicArg(arg) {
   return {
     id: arg.id,
+    role: arg.role,
     long: arg.long,
     short: arg.short,
     aliases: arg.aliases ?? [],
@@ -154,6 +158,13 @@ const binary = findBinary();
 const rawGrammar = readGrammar(binary);
 const nodes = [];
 flatten(rawGrammar, nodes);
+for (const node of nodes) {
+  if (!node.semantics) { errors.push(`${node.key}: missing execution semantics`); continue; }
+  const s = node.semantics;
+  for (const code of [s.target, s.trust_boundary, s.retry, ...s.prerequisites, ...s.effects.flatMap(e => [e.when, e.effect])]) {
+    if (!code.startsWith('--') && !Object.hasOwn(contractLabels, code)) errors.push(`${node.key}: missing semantic label ${code}`);
+  }
+}
 const grammarKeys = new Set(nodes.map((node) => node.key));
 
 const authored = JSON.parse(readFileSync(EXAMPLES, 'utf8'));
@@ -306,6 +317,8 @@ for (const [key, entry] of Object.entries(authored.commands)) {
     name: node?.name ?? key.split(' ').at(-1),
     parent: node?.parent ?? (key.includes(' ') ? key.split(' ').slice(0, -1).join(' ') : ''),
     summary: node?.summary ?? entry.summary ?? '',
+    semantics: node?.semantics ?? null,
+    executionCommand: node?.executionCommand ?? null,
     aliases: node?.aliases ?? [],
     args: node?.args ?? [],
     jsonSupported: node?.jsonSupported ?? false,
@@ -350,12 +363,11 @@ const header = banner
 if (checkOnly) {
   const existing = readFileSync(OUT, 'utf8');
   const payload = existing.slice(existing.indexOf('{'), existing.lastIndexOf('}') + 1);
-  const shape = (list) =>
-    JSON.stringify(list.map((c) => [c.key, c.args.map((a) => a.long ?? a.id).sort()]));
-  const before = shape(JSON.parse(payload).commands);
-  const after = shape(commands);
+  const { generatedAt, ...previous } = JSON.parse(payload);
+  const before = JSON.stringify(previous);
+  const after = JSON.stringify(data);
   if (before !== after) {
-    console.error('data.js is stale: the command grammar changed, re-run build.mjs');
+    console.error('data.js is stale: grammar, semantics or teaching content changed, re-run build.mjs');
     process.exit(1);
   }
   console.log(`data.js matches the live grammar (${nodes.length} commands)`);

@@ -47,6 +47,7 @@ window.MONICA_TEACH = {
   "globals": [
    {
     "id": "config",
+    "role": null,
     "long": "config",
     "short": "C",
     "aliases": [],
@@ -65,6 +66,7 @@ window.MONICA_TEACH = {
    },
    {
     "id": "lang",
+    "role": null,
     "long": "lang",
     "short": "l",
     "aliases": [],
@@ -92,6 +94,7 @@ window.MONICA_TEACH = {
    },
    {
     "id": "json",
+    "role": null,
     "long": "json",
     "short": "j",
     "aliases": [],
@@ -112,6 +115,7 @@ window.MONICA_TEACH = {
    },
    {
     "id": "non_interactive",
+    "role": null,
     "long": "non-interactive",
     "short": null,
     "aliases": [
@@ -134,6 +138,7 @@ window.MONICA_TEACH = {
    },
    {
     "id": "secrets_stdin",
+    "role": null,
     "long": "secrets-stdin",
     "short": null,
     "aliases": [],
@@ -163,12 +168,45 @@ window.MONICA_TEACH = {
    "name": "init",
    "parent": "",
    "summary": "Create an encrypted MDBX3 vault; requires a new master password",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "create_vault",
+      "when": "always"
+     },
+     {
+      "effect": "write_local_config",
+      "when": "always"
+     },
+     {
+      "effect": "switch_vault",
+      "when": "always"
+     },
+     {
+      "effect": "reset_grants",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "new_vault_path",
+     "broker_stopped",
+     "secure_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "database",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "init",
    "aliases": [
     "n"
    ],
    "args": [
     {
      "id": "vault",
+     "role": "new_file",
      "long": "vault",
      "short": "v",
      "aliases": [],
@@ -187,6 +225,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "port",
+     "role": "port",
      "long": "port",
      "short": "p",
      "aliases": [],
@@ -207,6 +246,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "name",
+     "role": "label",
      "long": "name",
      "short": null,
      "aliases": [],
@@ -225,6 +265,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "tiga",
+     "role": "tiga",
      "long": "tiga",
      "short": null,
      "aliases": [],
@@ -249,6 +290,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -272,7 +314,7 @@ window.MONICA_TEACH = {
     "password"
    ],
    "group": "start",
-   "summaryZh": "新建一个加密保险库（MDBX3），同时写好本地配置文件。第一次用只要这一步。",
+   "summaryZh": "新建一个加密保险库（MDBX3）并写入本地配置。也可用 add 一并创建连接与授权。",
    "whenToUse": "这台机器上还没有保险库时；或者你想另起一个完全独立的库。",
    "handAuthored": false,
    "pitfalls": [
@@ -283,31 +325,35 @@ window.MONICA_TEACH = {
    "examples": [
     {
      "cmd": "monica init",
-     "note": "只提示一次主密码，之后所有写操作都用它。名字默认取库文件的名称。",
+     "note": "人工终端会要求设置并确认主密码；受信执行器通过 stdin 注入 password 字段。",
      "secrets": "{\"password\":\"<新主密码>\"}",
      "tested": true,
-     "out": "Created MDBX3 vault: %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\nConfiguration: %LOCALAPPDATA%\\MonicaPass\\gateway.json\nDatabase name: gateway · Tiga: multi"
+     "out": "Created MDBX3 vault: %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\nConfiguration: %LOCALAPPDATA%\\MonicaPass\\gateway.json\nDatabase name: gateway · Tiga: multi",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica init --vault D:\\vaults\\second.mdbx",
      "note": "换路径新建，旧库仍然登记在案，之后用 monica use 来回切。",
      "secrets": "{\"password\":\"<新主密码>\"}",
      "tested": true,
-     "out": "Created MDBX3 vault: D:\\vaults\\second.mdbx\nConfiguration: %LOCALAPPDATA%\\MonicaPass\\gateway.json\nDatabase name: second · Tiga: multi"
+     "out": "Created MDBX3 vault: D:\\vaults\\second.mdbx\nConfiguration: %LOCALAPPDATA%\\MonicaPass\\gateway.json\nDatabase name: second · Tiga: multi",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica init --name work-vault --tiga sky",
      "note": "--name 只是本地标签（这一行和 monica databases 显示它），文件名不跟着改；--tiga 决定新库从哪一档起步，不写就是 multi。",
      "secrets": "{\"password\":\"<新主密码>\"}",
      "tested": true,
-     "out": "Created MDBX3 vault: %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\nConfiguration: %LOCALAPPDATA%\\MonicaPass\\gateway.json\nDatabase name: work-vault · Tiga: sky"
+     "out": "Created MDBX3 vault: %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\nConfiguration: %LOCALAPPDATA%\\MonicaPass\\gateway.json\nDatabase name: work-vault · Tiga: sky",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica init --tiga power",
      "note": "最严的一档：解锁要两个要素、导出和打印全关。建库本身 release 实测 1.9 秒，但这份库此后每次解锁都要按 power 的 Argon2id 参数算一遍——release 实测 1.4 秒，debug 构建实测 31 秒。",
      "secrets": "{\"password\":\"<新主密码>\"}",
      "tested": true,
-     "out": "Created MDBX3 vault: %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\nConfiguration: %LOCALAPPDATA%\\MonicaPass\\gateway.json\nDatabase name: gateway · Tiga: power"
+     "out": "Created MDBX3 vault: %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\nConfiguration: %LOCALAPPDATA%\\MonicaPass\\gateway.json\nDatabase name: gateway · Tiga: power",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica init --port 47832",
@@ -325,12 +371,29 @@ window.MONICA_TEACH = {
    "name": "databases",
    "parent": "",
    "summary": "List the current and previously opened databases",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "read_public_metadata",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [],
+    "retry": "repeatable_read",
+    "schema_version": 1,
+    "target": "database",
+    "trust_boundary": "public_local_inspection"
+   },
+   "executionCommand": "databases",
    "aliases": [
     "db"
    ],
    "args": [
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -364,13 +427,15 @@ window.MONICA_TEACH = {
     {
      "cmd": "monica databases",
      "tested": true,
-     "out": "No database is registered here yet. Run monica-pass init to create one."
+     "out": "No database is registered here yet. Run monica-pass init to create one.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica databases",
      "note": "登记了两个库时：带 * 的是当前库，另一行的 ID 才能拿去 use。",
      "tested": true,
-     "out": "Database   ID                                    Path\n* second   current                               D:\\vaults\\second.mdbx\n  gateway  8b547a3e-42fa-44d7-95cb-ec9e23d18201  %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\n* is the database already open. To switch, run monica-pass use <ID> with an ID from another row."
+     "out": "Database   ID                                    Path\n* second   current                               D:\\vaults\\second.mdbx\n  gateway  8b547a3e-42fa-44d7-95cb-ec9e23d18201  %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\n* is the database already open. To switch, run monica-pass use <ID> with an ID from another row.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -382,10 +447,38 @@ window.MONICA_TEACH = {
    "name": "use",
    "parent": "",
    "summary": "Switch to a saved database ID; requires its password and keeps old grants revoked",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "switch_vault",
+      "when": "always"
+     },
+     {
+      "effect": "reset_grants",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "saved_database",
+     "secure_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "database_id",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "use",
    "aliases": [],
    "args": [
     {
      "id": "id",
+     "role": "database_id",
      "long": null,
      "short": null,
      "aliases": [],
@@ -394,7 +487,7 @@ window.MONICA_TEACH = {
      "repeatable": false,
      "takesValue": true,
      "valueNames": [
-      "ID"
+      "DATABASE_ID"
      ],
      "choices": [],
      "choiceAliases": [],
@@ -404,6 +497,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -439,14 +533,16 @@ window.MONICA_TEACH = {
      "note": "ID 从 monica databases 的另一行复制。",
      "secrets": "{\"password\":\"<该库主密码>\"}",
      "tested": true,
-     "out": "Now using '8b547a3e-42fa-44d7-95cb-ec9e23d18201'. Earlier AI grants stay revoked; create new ones."
+     "out": "Now using '8b547a3e-42fa-44d7-95cb-ec9e23d18201'. Earlier AI grants stay revoked; create new ones.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica use current",
      "note": "当前行不给 ID，这样写会被拒。",
      "secrets": "{\"password\":\"<该库主密码>\"}",
      "tested": true,
-     "out": "monica-pass: The request is invalid or contains unsupported fields."
+     "out": "monica-pass: The request is invalid or contains unsupported fields.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -458,10 +554,24 @@ window.MONICA_TEACH = {
    "name": "mdbx",
    "parent": "",
    "summary": "Inspect the database file itself: its format, its parts, its size. Never unlocks or writes",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [],
+    "mcp_tool": false,
+    "prerequisites": [
+     "subcommand_required"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "subcommand",
+    "trust_boundary": "command_group"
+   },
+   "executionCommand": "mdbx",
    "aliases": [],
    "args": [
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -488,7 +598,7 @@ window.MONICA_TEACH = {
    "handAuthored": false,
    "pitfalls": [
     "这一类全程只读：不解锁、不写库、不升版本，因此也不要主密码。",
-    "它看的是文件，不是库里的条目；要看内容用 monica list / show，要看安全等级用 monica tiga show。子命令：check / files。"
+    "它看的是文件，不是库里的条目；要看内容用 monica connections / show，要看安全等级用 monica tiga show。子命令：check / files。"
    ],
    "examples": [
     {
@@ -496,7 +606,8 @@ window.MONICA_TEACH = {
      "note": "不带子命令只会得到一次参数错误。",
      "teachesError": true,
      "tested": true,
-     "out": "monica-pass: Could not parse arguments. Use --help for usage."
+     "out": "monica-pass: Could not parse arguments. Use --help for usage.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -509,10 +620,29 @@ window.MONICA_TEACH = {
    "name": "check",
    "parent": "mdbx",
    "summary": "Read the format header of a vault file and how much disk it takes",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "read_file_metadata",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "explicit_file_or_configured_vault"
+    ],
+    "retry": "repeatable_read",
+    "schema_version": 1,
+    "target": "vault_file",
+    "trust_boundary": "public_local_inspection"
+   },
+   "executionCommand": "mdbx check",
    "aliases": [],
    "args": [
     {
      "id": "vault",
+     "role": "file",
      "long": null,
      "short": null,
      "aliases": [],
@@ -531,6 +661,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -565,30 +696,35 @@ window.MONICA_TEACH = {
      "cmd": "monica mdbx check",
      "note": "查当前数据库。Schema 一行的「this build」是这份 CLI 自带的引擎版本，两者不等时 Upgrade 才会亮。",
      "tested": true,
-     "out": "File         %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\nSize         516.0 KiB\nModified     2026-09-23 17:50\nFormat       MDBX-2\nSchema       17 · this build 17\nReadable by  readers ≥ MDBX-1, writers ≥ MDBX-2\nUpgrade      not needed"
+     "out": "File         %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\nSize         516.0 KiB\nModified     2026-09-23 17:50\nFormat       MDBX-2\nSchema       17 · this build 17\nReadable by  readers ≥ MDBX-1, writers ≥ MDBX-2\nUpgrade      not needed",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica mdbx check --lang zh-CN",
      "tested": true,
-     "out": "文件      %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\n大小      516.0 KiB\n最后修改  2026-09-23 17:50\n格式版本  MDBX-2\n结构版本  17 · 当前引擎 17\n兼容下限  读取端 ≥ MDBX-1，写入端 ≥ MDBX-2\n升级      不需要"
+     "out": "文件      %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\n大小      516.0 KiB\n最后修改  2026-09-23 17:50\n格式版本  MDBX-2\n结构版本  17 · 当前引擎 17\n兼容下限  读取端 ≥ MDBX-1，写入端 ≥ MDBX-2\n升级      不需要",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica mdbx check %LOCALAPPDATA%\\MonicaPass\\second.mdbx",
      "note": "位置参数就是一个文件路径，可以是当前库之外的另一个文件；这条仍然只是读，也不会把它切成当前库。",
      "tested": true,
-     "out": "File         %LOCALAPPDATA%\\MonicaPass\\second.mdbx\nSize         516.0 KiB\nModified     2026-09-23 17:50\nFormat       MDBX-2\nSchema       17 · this build 17\nReadable by  readers ≥ MDBX-1, writers ≥ MDBX-2\nUpgrade      not needed"
+     "out": "File         %LOCALAPPDATA%\\MonicaPass\\second.mdbx\nSize         516.0 KiB\nModified     2026-09-23 17:50\nFormat       MDBX-2\nSchema       17 · this build 17\nReadable by  readers ≥ MDBX-1, writers ≥ MDBX-2\nUpgrade      not needed",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica mdbx check %LOCALAPPDATA%\\MonicaPass\\notes.txt",
      "note": "文件在、但不是数据库（或文件头没通过只读完整性检查）。",
      "tested": true,
-     "out": "monica-pass: This file could not be read as an MDBX vault, or its header failed the read-only integrity check. The file itself was not modified."
+     "out": "monica-pass: This file could not be read as an MDBX vault, or its header failed the read-only integrity check. The file itself was not modified.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica mdbx check nope.mdbx",
      "note": "路径不存在时的样子：这些命令只做读，不会顺手替你把文件建出来。",
      "tested": true,
-     "out": "monica-pass: There is no database file at that path. These commands only read, so they never create one."
+     "out": "monica-pass: There is no database file at that path. These commands only read, so they never create one.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -601,10 +737,29 @@ window.MONICA_TEACH = {
    "name": "files",
    "parent": "mdbx",
    "summary": "List the vault file and every file beside it, with the size of each",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "read_file_metadata",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "explicit_file_or_configured_vault"
+    ],
+    "retry": "repeatable_read",
+    "schema_version": 1,
+    "target": "vault_file",
+    "trust_boundary": "public_local_inspection"
+   },
+   "executionCommand": "mdbx files",
    "aliases": [],
    "args": [
     {
      "id": "vault",
+     "role": "file",
      "long": null,
      "short": null,
      "aliases": [],
@@ -623,6 +778,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -658,18 +814,21 @@ window.MONICA_TEACH = {
      "cmd": "monica mdbx files",
      "note": "刚 check 过一次的库：多出空的一对日志。",
      "tested": true,
-     "out": "Directory  %LOCALAPPDATA%\\MonicaPass\n\nType                   Item              Size       Modified\nvault file             gateway.mdbx      516.0 KiB  2026-09-23 17:50\nwrite-ahead log        gateway.mdbx-wal  0 B        2026-09-23 17:50\nwrite-ahead log index  gateway.mdbx-shm  32.0 KiB   2026-09-23 17:50\n3 items, 548.0 KiB on disk\nThe write-ahead log beside the vault is empty. Any connection to a WAL database creates it and its index file, this read-only listing included, so their presence proves the vault was opened here, not that something holds it now."
+     "out": "Directory  %LOCALAPPDATA%\\MonicaPass\n\nType                   Item              Size       Modified\nvault file             gateway.mdbx      516.0 KiB  2026-09-23 17:50\nwrite-ahead log        gateway.mdbx-wal  0 B        2026-09-23 17:50\nwrite-ahead log index  gateway.mdbx-shm  32.0 KiB   2026-09-23 17:50\n3 items, 548.0 KiB on disk\nThe write-ahead log beside the vault is empty. Any connection to a WAL database creates it and its index file, this read-only listing included, so their presence proves the vault was opened here, not that something holds it now.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica mdbx files",
      "note": "同一个库，带上了附件目录：多出一行，目录那行的字节是把附件树累加出来的。",
      "tested": true,
-     "out": "Directory  %LOCALAPPDATA%\\MonicaPass\n\nType                   Item                Size       Modified\nvault file             gateway.mdbx        516.0 KiB  2026-09-23 17:50\nwrite-ahead log        gateway.mdbx-wal    0 B        2026-09-23 17:50\nwrite-ahead log index  gateway.mdbx-shm    32.0 KiB   2026-09-23 17:50\nattachments            gateway.mdbx.blobs  4 B        2026-09-23 17:51\n4 items, 548.0 KiB on disk\nThe write-ahead log beside the vault is empty. Any connection to a WAL database creates it and its index file, this read-only listing included, so their presence proves the vault was opened here, not that something holds it now."
+     "out": "Directory  %LOCALAPPDATA%\\MonicaPass\n\nType                   Item                Size       Modified\nvault file             gateway.mdbx        516.0 KiB  2026-09-23 17:50\nwrite-ahead log        gateway.mdbx-wal    0 B        2026-09-23 17:50\nwrite-ahead log index  gateway.mdbx-shm    32.0 KiB   2026-09-23 17:50\nattachments            gateway.mdbx.blobs  4 B        2026-09-23 17:51\n4 items, 548.0 KiB on disk\nThe write-ahead log beside the vault is empty. Any connection to a WAL database creates it and its index file, this read-only listing included, so their presence proves the vault was opened here, not that something holds it now.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica mdbx files --lang zh-CN",
      "tested": true,
-     "out": "所在目录  %LOCALAPPDATA%\\MonicaPass\n\n类型          名称              大小       最后修改\n保险库文件    gateway.mdbx      516.0 KiB  2026-09-23 17:50\n预写日志      gateway.mdbx-wal  0 B        2026-09-23 17:50\n预写日志索引  gateway.mdbx-shm  32.0 KiB   2026-09-23 17:50\n共 3 项，占用 548.0 KiB\n保险库旁边的预写日志是空的。任何连接打开 WAL 数据库时都会创建它和它的索引文件，包括本次只读列出；因此它们只说明该库在此被打开过，不能说明此刻仍被占用。"
+     "out": "所在目录  %LOCALAPPDATA%\\MonicaPass\n\n类型          名称              大小       最后修改\n保险库文件    gateway.mdbx      516.0 KiB  2026-09-23 17:50\n预写日志      gateway.mdbx-wal  0 B        2026-09-23 17:50\n预写日志索引  gateway.mdbx-shm  32.0 KiB   2026-09-23 17:50\n共 3 项，占用 548.0 KiB\n保险库旁边的预写日志是空的。任何连接打开 WAL 数据库时都会创建它和它的索引文件，包括本次只读列出；因此它们只说明该库在此被打开过，不能说明此刻仍被占用。",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -681,10 +840,24 @@ window.MONICA_TEACH = {
    "name": "tiga",
    "parent": "",
    "summary": "Read or change the security profile this vault runs on",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [],
+    "mcp_tool": false,
+    "prerequisites": [
+     "subcommand_required"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "subcommand",
+    "trust_boundary": "command_group"
+   },
+   "executionCommand": "tiga",
    "aliases": [],
    "args": [
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -720,7 +893,8 @@ window.MONICA_TEACH = {
      "note": "不带子命令只会得到一次参数错误。",
      "teachesError": true,
      "tested": true,
-     "out": "monica-pass: Could not parse arguments. Use --help for usage."
+     "out": "monica-pass: Could not parse arguments. Use --help for usage.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -733,10 +907,38 @@ window.MONICA_TEACH = {
    "name": "show",
    "parent": "tiga",
    "summary": "Show the stored profile, the one actually in force, and what each costs you",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "read_vault_metadata",
+      "when": "always"
+     },
+     {
+      "effect": "restore_android_root",
+      "when": "android_root_missing"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "secure_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "vault",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "tiga show",
    "aliases": [],
    "args": [
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -774,26 +976,30 @@ window.MONICA_TEACH = {
      "note": "一切正常时只有一行「Profile」：登记的和你正在跑的是同一个。",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Profile     multi\nCompliance  meets the stored profile\n\nSetting         Value\nUnlock          1 factor(s), security key no\nSession         idle 10m · max 2h\nClipboard       30s · secure no\nExport / print  yes / yes\nDevice          standard\nAudit           sensitive operations"
+     "out": "Profile     multi\nCompliance  meets the stored profile\n\nSetting         Value\nUnlock          1 factor(s), security key no\nSession         idle 10m · max 2h\nClipboard       30s · secure no\nExport / print  yes / yes\nDevice          standard\nAudit           sensitive operations",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica tiga show",
      "note": "库被调低过之后：登记等级仍是 multi，实际跑 sky，例外和被削弱的字段一起列出来。",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Stored profile     multi\nEffective profile  sky\nCompliance         reduced under a recorded exception\n\nSetting         Value\nUnlock          1 factor(s), security key no\nSession         idle 30m · max 12h\nClipboard       1m · secure no\nExport / print  yes / yes\nDevice          not specified\nAudit           security changes\nPolicy warnings:\npolicy exception 795a4073-a253-49d5-aa17-cd418d058168 weakens: idle_timeout_secs, max_lifetime_secs, lock_on_background, fresh_auth_window_secs, reveal_requires_fresh_auth, clipboard_ttl_secs, copy_requires_fresh_auth, attachment_temp_files_allowed, minimum_device_assurance, audit_level\nThis vault keeps its multi name and runs sky until someone raises it back. `monica tiga show` repeats that for as long as the exception stands."
+     "out": "Stored profile     multi\nEffective profile  sky\nCompliance         reduced under a recorded exception\n\nSetting         Value\nUnlock          1 factor(s), security key no\nSession         idle 30m · max 12h\nClipboard       1m · secure no\nExport / print  yes / yes\nDevice          not specified\nAudit           security changes\nPolicy warnings:\npolicy exception 795a4073-a253-49d5-aa17-cd418d058168 weakens: idle_timeout_secs, max_lifetime_secs, lock_on_background, fresh_auth_window_secs, reveal_requires_fresh_auth, clipboard_ttl_secs, copy_requires_fresh_auth, attachment_temp_files_allowed, minimum_device_assurance, audit_level\nThis vault keeps its multi name and runs sky until someone raises it back. `monica tiga show` repeats that for as long as the exception stands.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica tiga show",
      "note": "以 --tiga power 建好的库：等级没被调低，但解锁方式只有密码，所以标成「需要整改」。",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Profile     power\nCompliance  below policy, remediation required\n\nSetting         Value\nUnlock          2 factor(s), security key yes\nSession         idle 2m · max 15m\nClipboard       10s · secure yes\nExport / print  no / no\nDevice          trusted hardware\nAudit           all decisions\nThis vault does run its power policy; what falls short is how it is unlocked. power asks for more than a password alone, so the flag stays until an unlock method that strong is added."
+     "out": "Profile     power\nCompliance  below policy, remediation required\n\nSetting         Value\nUnlock          2 factor(s), security key yes\nSession         idle 2m · max 15m\nClipboard       10s · secure yes\nExport / print  no / no\nDevice          trusted hardware\nAudit           all decisions\nThis vault does run its power policy; what falls short is how it is unlocked. power asks for more than a password alone, so the flag stays until an unlock method that strong is added.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica tiga show --lang zh",
      "tested": true,
-     "out": "运行等级  power\n合规状态  低于策略，需要整改\n\n项目         取值\n解锁         需 2 个要素，安全密钥 有\n会话         空闲 2m · 最长 15m\n剪贴板       10s · 安全剪贴板 有\n导出 / 打印  无 / 无\n设备保证     可信硬件\n审计         全部决策\n该保险库确实按 power 策略运行，不足之处是解锁方式：power 要求的不只是密码。补上足够强的解锁方式后，这个标记才会消除。"
+     "out": "运行等级  power\n合规状态  低于策略，需要整改\n\n项目         取值\n解锁         需 2 个要素，安全密钥 有\n会话         空闲 2m · 最长 15m\n剪贴板       10s · 安全剪贴板 有\n导出 / 打印  无 / 无\n设备保证     可信硬件\n审计         全部决策\n该保险库确实按 power 策略运行，不足之处是解锁方式：power 要求的不只是密码。补上足够强的解锁方式后，这个标记才会消除。",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -806,10 +1012,36 @@ window.MONICA_TEACH = {
    "name": "set",
    "parent": "tiga",
    "summary": "Move the vault to another profile. Lowering it records a reason in the vault",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "change_security_profile",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "secure_password_input",
+     "vault_policy_allows_change",
+     "reason_when_lowering"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "vault_profile",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "tiga set",
    "aliases": [],
    "args": [
     {
      "id": "level",
+     "role": "profile",
      "long": null,
      "short": null,
      "aliases": [],
@@ -832,6 +1064,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "reason",
+     "role": "text",
      "long": "reason",
      "short": null,
      "aliases": [],
@@ -850,6 +1083,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -888,35 +1122,40 @@ window.MONICA_TEACH = {
      "note": "往上调是一次普通变更：一次密码提示，立刻生效。",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Profile     multi\nCompliance  meets the stored profile\n\nSetting         Value\nUnlock          1 factor(s), security key no\nSession         idle 10m · max 2h\nClipboard       30s · secure no\nExport / print  yes / yes\nDevice          standard\nAudit           sensitive operations"
+     "out": "Profile     multi\nCompliance  meets the stored profile\n\nSetting         Value\nUnlock          1 factor(s), security key no\nSession         idle 10m · max 2h\nClipboard       30s · secure no\nExport / print  yes / yes\nDevice          standard\nAudit           sensitive operations",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica tiga set sky --reason \"shared laptop at the office, offline recovery only\"",
      "note": "调低要理由。例外当场写进库，输出也当场分成两行。",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Stored profile     multi\nEffective profile  sky\nCompliance         reduced under a recorded exception\n\nSetting         Value\nUnlock          1 factor(s), security key no\nSession         idle 30m · max 12h\nClipboard       1m · secure no\nExport / print  yes / yes\nDevice          not specified\nAudit           security changes\nPolicy warnings:\npolicy exception 795a4073-a253-49d5-aa17-cd418d058168 weakens: idle_timeout_secs, max_lifetime_secs, lock_on_background, fresh_auth_window_secs, reveal_requires_fresh_auth, clipboard_ttl_secs, copy_requires_fresh_auth, attachment_temp_files_allowed, minimum_device_assurance, audit_level\nThis vault keeps its multi name and runs sky until someone raises it back. `monica tiga show` repeats that for as long as the exception stands."
+     "out": "Stored profile     multi\nEffective profile  sky\nCompliance         reduced under a recorded exception\n\nSetting         Value\nUnlock          1 factor(s), security key no\nSession         idle 30m · max 12h\nClipboard       1m · secure no\nExport / print  yes / yes\nDevice          not specified\nAudit           security changes\nPolicy warnings:\npolicy exception 795a4073-a253-49d5-aa17-cd418d058168 weakens: idle_timeout_secs, max_lifetime_secs, lock_on_background, fresh_auth_window_secs, reveal_requires_fresh_auth, clipboard_ttl_secs, copy_requires_fresh_auth, attachment_temp_files_allowed, minimum_device_assurance, audit_level\nThis vault keeps its multi name and runs sky until someone raises it back. `monica tiga show` repeats that for as long as the exception stands.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica tiga set sky",
      "note": "少了理由的调低被拒：语法没问题，是保险库自己不让。",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "monica-pass: Lowering the security profile is recorded in the vault as an exception, so it needs a reason. Repeat the command with --reason and say why."
+     "out": "monica-pass: Lowering the security profile is recorded in the vault as an exception, so it needs a reason. Repeat the command with --reason and say why.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica tiga set multi --reason \"back to normal\"",
      "note": "调高时给理由也被拒：那条理由无处可存，留着只会让人以为它记进了库。",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "monica-pass: This change raises the security profile, so there is nothing to justify. Repeat the command without --reason."
+     "out": "monica-pass: This change raises the security profile, so there is nothing to justify. Repeat the command without --reason.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica tiga set multi --reason \"password-only laptop\"",
      "note": "在 power 库上想调回 multi：引擎自己的授权门就拦下了。",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "monica-pass: The vault's own security policy refused this profile change. The profile you are leaving requires more assurance than a password-unlocked terminal can give, so raise or lower it in Monica for Android."
+     "out": "monica-pass: The vault's own security policy refused this profile change. The profile you are leaving requires more assurance than a password-unlocked terminal can give, so raise or lower it in Monica for Android.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -928,12 +1167,44 @@ window.MONICA_TEACH = {
    "name": "open",
    "parent": "",
    "summary": "Open a managed copy of an MDBX; preserve the source and reset grants",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "create_managed_copy",
+      "when": "always"
+     },
+     {
+      "effect": "switch_vault",
+      "when": "always"
+     },
+     {
+      "effect": "reset_grants",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "readable_mdbx_file",
+     "secure_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "vault_file",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "open",
    "aliases": [
     "o"
    ],
    "args": [
     {
      "id": "vault",
+     "role": "vault",
      "long": null,
      "short": null,
      "aliases": [],
@@ -952,6 +1223,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -980,20 +1252,23 @@ window.MONICA_TEACH = {
    "handAuthored": false,
    "pitfalls": [
     "和 init 的区别：init 造新库，open 纳管旧库。",
-    "别名 monica o。"
+    "别名 monica o。",
+    "引擎便携复制同时保留 .blobs 密文附件目录；缺附件或超限时失败，原库保留。"
    ],
    "examples": [
     {
      "cmd": "monica open D:\\vaults\\second.mdbx",
      "secrets": "{\"password\":\"<该库主密码>\"}",
      "tested": true,
-     "out": "Opening a managed copy. Previous local files are preserved; old AI grants will be cleared.\nOpened MDBX vault; recovered 0 gateway connections. Create fresh grants, then unlock the gateway."
+     "out": "Opening a managed copy. Previous local files are preserved; old AI grants will be cleared.\nOpened MDBX vault; recovered 0 gateway connections. Create fresh grants, then unlock the gateway.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica open D:\\vaults\\missing.mdbx",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Opening a managed copy. Previous local files are preserved; old AI grants will be cleared.\nmonica-pass: Local state could not be read or safely written."
+     "out": "Opening a managed copy. Previous local files are preserved; old AI grants will be cleared.\nmonica-pass: Local state could not be read or safely written.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -1005,10 +1280,46 @@ window.MONICA_TEACH = {
    "name": "next",
    "parent": "",
    "summary": "Show which setup step is still missing and the command for it; reads only public metadata",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "read_public_metadata",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [],
+    "retry": "repeatable_read",
+    "schema_version": 1,
+    "target": "grant",
+    "trust_boundary": "public_local_inspection"
+   },
+   "executionCommand": "next",
    "aliases": [],
    "args": [
     {
+     "id": "grant",
+     "role": "grant",
+     "long": "grant",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "GRANT"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "AI authorization name (GRANT), not a connection handle"
+    },
+    {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -1030,31 +1341,50 @@ window.MONICA_TEACH = {
    "argGroups": [],
    "secretRequired": [],
    "group": "start",
-   "summaryZh": "告诉你设置还差哪一步、该敲哪条命令：建库、存连接、开授权、启动代理、接入 AI 客户端。",
+   "summaryZh": "根据公开状态给出下一步；先配置 AI 客户端，再启动代理。多份授权时显式选择。",
    "whenToUse": "刚装好不知道从哪开始，或者 AI 突然调不通、想知道卡在哪一步时。它只读公开元数据，不解锁、不改东西。",
    "handAuthored": false,
    "pitfalls": [
-    "最后一步「AI 客户端」只是建议：next 不读 AI 客户端自己的配置文件，所以接没接好它看不出来，用 check 验证。",
-    "所有授权都过期时，next 让你 refresh 旧授权，而不是再 grant 一份新的。"
+    "next 不读取 AI 客户端配置；client_integration 始终为 unverified。check 只验证代理通道。",
+    "多份授权时先看 status，再运行 next --grant GRANT；不会自动挑第一份。",
+    "代理会话与授权有效期不同：serve 解锁代理，renew GRANT 重新授权。",
+    "commands 是含占位符的建议；保持相同 --config，serve 后在另一个终端执行 check。"
    ],
    "examples": [
     {
      "cmd": "monica next --lang zh-CN",
-     "note": "全新的机器：还没有保险库，第一步就是 add。",
+     "note": "全新配置：只给建议，不创建文件。",
      "tested": true,
-     "out": "进度  → 保险库 · 连接 · AI 授权 · 代理 · AI 客户端\n\n下一步：这里还没有保险库。一条命令就能建好保险库、保存第一个连接并生成只读 AI 授权，过程中会要求设置新的主密码并输入服务 Token。已经有保险库文件？改用 monica open <文件>。\n  monica add <name> --repo <owner/repo>\n\n在浏览器里练习这些命令：https://monica-pass.github.io/Monica-cli/reference/"
-    },
-    {
-     "cmd": "monica next",
-     "note": "连接和授权都有了，只差把代理跑起来。",
-     "tested": true,
-     "out": "Progress  ✓ vault ✓ connection ✓ AI grant → broker · AI client\n\nNext: the broker is stopped, so AI calls cannot reach the vault. Unlock it and keep that terminal open; it stops on lock or when the five-minute session ends.\n  monica serve\n\nPractice these commands in a browser: https://monica-pass.github.io/Monica-cli/reference/"
+     "capturedAt": "2026-09-28",
+     "out": "进度  → 保险库 · 连接 · AI 授权 · AI 客户端 · 代理\n\n下一步：这里还没有保险库。一条命令就能建好保险库、保存第一个连接并生成只读 AI 授权，过程中会要求设置新的主密码并输入服务 Token。已经有保险库文件？改用 monica-pass open <文件>。\n  monica-pass add <CONNECTION> --repo <owner/repo>\n\n在浏览器里练习这些命令：https://monica-pass.github.io/Monica-cli/reference/"
     },
     {
      "cmd": "monica next --json",
-     "note": "给脚本用：stage 是当前这一步，commands 里的命令名固定写成 monica，不随语言变化。",
+     "note": "结构化状态；客户端接入状态是 unverified。",
      "tested": true,
-     "out": "{\"command\":\"next\",\"data\":{\"commands\":[\"monica add <name> --repo <owner/repo>\"],\"renew\":false,\"stage\":\"vault\",\"steps\":[{\"done\":false,\"id\":\"vault\"},{\"done\":false,\"id\":\"connection\"},{\"done\":false,\"id\":\"grant\"},{\"done\":false,\"id\":\"broker\"},{\"done\":false,\"id\":\"client\"}]},\"ok\":true}"
+     "capturedAt": "2026-09-28",
+     "out": "{\"command\":\"next\",\"data\":{\"actions\":[{\"command\":\"monica add <CONNECTION> --repo <owner/repo>\",\"condition\":\"next_step\",\"terminal\":\"current\"}],\"available_grants\":[],\"broker_running\":false,\"client_integration\":\"unverified\",\"commands\":[\"monica add <CONNECTION> --repo <owner/repo>\"],\"renew\":false,\"selected_grant\":null,\"stage\":\"vault\",\"steps\":[{\"done\":false,\"id\":\"vault\",\"state\":\"missing\"},{\"done\":false,\"id\":\"connection\",\"state\":\"missing\"},{\"done\":false,\"id\":\"grant\",\"state\":\"missing\"},{\"done\":false,\"id\":\"client\",\"state\":\"unverified\"},{\"done\":false,\"id\":\"broker\",\"state\":\"missing\"}]},\"ok\":true}"
+    },
+    {
+     "cmd": "monica next",
+     "note": "连接与同名授权已创建，先配置客户端，再 serve。",
+     "tested": true,
+     "capturedAt": "2026-09-28",
+     "out": "Progress  ✓ vault ✓ connection ✓ AI grant → AI client · broker\n\nThe selected grant is usable. AI client integration is unverified; configure it if needed, then check authenticated discovery.\nConfigure the AI client before serve. serve keeps this terminal open; run check in another terminal using the same --config. Skip configuration if already installed. A successful check verifies the broker, not the AI client's own settings.\n  monica-pass mcp-config work-github --install <claude|codex|cursor|vscode>\n  monica-pass serve\n  monica-pass check work-github\n\nPractice these commands in a browser: https://monica-pass.github.io/Monica-cli/reference/"
+    },
+    {
+     "cmd": "monica next --json",
+     "note": "存在两份授权，要求显式选择，不默认取第一份。",
+     "tested": true,
+     "capturedAt": "2026-09-28",
+     "out": "{\"command\":\"next\",\"data\":{\"actions\":[{\"command\":\"monica status\",\"condition\":\"next_step\",\"terminal\":\"current\"},{\"command\":\"monica next --grant <GRANT>\",\"condition\":\"next_step\",\"terminal\":\"current\"}],\"available_grants\":[\"work-github\",\"review-agent\"],\"broker_running\":false,\"client_integration\":\"unverified\",\"commands\":[\"monica status\",\"monica next --grant <GRANT>\"],\"renew\":false,\"selected_grant\":null,\"stage\":\"grant_selection\",\"steps\":[{\"done\":true,\"id\":\"vault\",\"state\":\"ready\"},{\"done\":true,\"id\":\"connection\",\"state\":\"ready\"},{\"done\":false,\"id\":\"grant\",\"state\":\"missing\"},{\"done\":false,\"id\":\"client\",\"state\":\"unverified\"},{\"done\":false,\"id\":\"broker\",\"state\":\"missing\"}]},\"ok\":true}"
+    },
+    {
+     "cmd": "monica next --grant review-agent --lang zh-CN",
+     "note": "按目标授权引导；配置命令的参数是 GRANT。",
+     "tested": true,
+     "capturedAt": "2026-09-28",
+     "out": "进度  ✓ 保险库 ✓ 连接 ✓ AI 授权 → AI 客户端 · 代理\n\n所选授权当前可用。AI 客户端是否接入尚未验证；需要时先配置，再检查授权发现。\n先配置 AI 客户端，再启动 serve。serve 会占用当前终端；在另一个终端用相同的 --config 运行 check。已配置可跳过安装。check 成功仅验证代理通道，不代表 AI 客户端自身配置已验证。\n  monica-pass mcp-config review-agent --install <claude|codex|cursor|vscode>\n  monica-pass serve\n  monica-pass check review-agent\n\n在浏览器里练习这些命令：https://monica-pass.github.io/Monica-cli/reference/"
     }
    ]
   },
@@ -1066,12 +1396,31 @@ window.MONICA_TEACH = {
    "name": "status",
    "parent": "",
    "summary": "Show connection and grant metadata",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "read_public_metadata",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault"
+    ],
+    "retry": "repeatable_read",
+    "schema_version": 1,
+    "target": "vault",
+    "trust_boundary": "public_local_inspection"
+   },
+   "executionCommand": "status",
    "aliases": [
     "st"
    ],
    "args": [
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -1105,19 +1454,22 @@ window.MONICA_TEACH = {
      "cmd": "monica status",
      "note": "网关在跑、两份授权，其中一份带写入门槛。",
      "tested": true,
-     "out": "Config   %LOCALAPPDATA%\\MonicaPass\\gateway.json\nVault    %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\nGateway  127.0.0.1:47831 · running\nWebDAV   off\n\nHandle  Provider  Note\nwork    github    跟踪产品问题\n\nGrant  Handle  Scope           Operations              Expires           Calls      Gate\nwork2  work    your-org/other  list_issues             2026-09-23 10:17  1/5        off\nwork3  work    your-org/third  list_issues, get_issue  2026-09-23 09:51  unlimited  write"
+     "out": "Config   %LOCALAPPDATA%\\MonicaPass\\gateway.json\nVault    %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\nGateway  127.0.0.1:47831 · running\nWebDAV   off\n\nHandle  Provider  Note\nwork    github    跟踪产品问题\n\nGrant  Handle  Scope           Operations              Expires           Calls      Gate\nwork2  work    your-org/other  list_issues             2026-09-23 10:17  1/5        off\nwork3  work    your-org/third  list_issues, get_issue  2026-09-23 09:51  unlimited  write",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica status --lang zh-CN",
      "note": "只想这一次用中文；-l 不写偏好。",
      "tested": true,
-     "out": "配置    %LOCALAPPDATA%\\MonicaPass\\gateway.json\n保险库  %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\n代理    127.0.0.1:47831 · 已停止\nWebDAV  未启用\n\n句柄  服务    备注\nwork  github  跟踪 your-org 的 issue；只读优先\n\n尚无 AI 授权。"
+     "out": "配置    %LOCALAPPDATA%\\MonicaPass\\gateway.json\n保险库  %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\n代理    127.0.0.1:47831 · 已停止\nWebDAV  未启用\n\n句柄  服务    备注\nwork  github  跟踪 your-org 的 issue；只读优先\n\n尚无 AI 授权。",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica status --json",
      "note": "给脚本用的稳定结构；connections 里带 api_base，grants 里带到期时间戳和 refresh_required。",
      "tested": true,
-     "out": "{\"command\":\"status\",\"data\":{\"broker_running\":false,\"config\":\"%LOCALAPPDATA%\\\\MonicaPass\\\\gateway.json\",\"connections\":[{\"api_base\":\"https://api.github.com/\",\"name\":\"work\",\"note\":\"跟踪产品问题\",\"provider\":\"github\"}],\"grants\":[{\"approval\":\"off\",\"calls_used\":0,\"connection\":\"work\",\"expired\":false,\"expires_at_unix\":1790141253,\"max_calls\":0,\"name\":\"work\",\"operations\":[\"list_issues\",\"get_issue\"],\"refresh_required\":false,\"repositories\":[\"your-org/your-repo\"]}],\"listen\":\"127.0.0.1:47831\",\"vault\":\"%LOCALAPPDATA%\\\\MonicaPass\\\\gateway.mdbx\",\"webdav\":null},\"ok\":true}（实际输出还包含其余连接与授权，这里只留一条）"
+     "out": "{\"command\":\"status\",\"data\":{\"broker_running\":false,\"config\":\"%LOCALAPPDATA%\\\\MonicaPass\\\\gateway.json\",\"connections\":[{\"api_base\":\"https://api.github.com/\",\"name\":\"work\",\"note\":\"跟踪产品问题\",\"provider\":\"github\"}],\"grants\":[{\"approval\":\"off\",\"calls_used\":0,\"connection\":\"work\",\"expired\":false,\"expires_at_unix\":1790141253,\"max_calls\":0,\"name\":\"work\",\"operations\":[\"list_issues\",\"get_issue\"],\"refresh_required\":false,\"repositories\":[\"your-org/your-repo\"]}],\"listen\":\"127.0.0.1:47831\",\"vault\":\"%LOCALAPPDATA%\\\\MonicaPass\\\\gateway.mdbx\",\"webdav\":null},\"ok\":true}（实际输出还包含其余连接与授权，这里只留一条）",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -1129,6 +1481,34 @@ window.MONICA_TEACH = {
    "name": "serve",
    "parent": "",
    "summary": "Unlock and run until Ctrl+C, lock, or five-minute session expiry",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "foreground_broker",
+      "when": "always"
+     },
+     {
+      "effect": "five_minute_session",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "secure_password_input",
+     "available_loopback_port"
+    ],
+    "retry": "check_running_process_before_restart",
+    "schema_version": 1,
+    "target": "broker",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "serve",
    "aliases": [
     "s",
     "u",
@@ -1137,6 +1517,7 @@ window.MONICA_TEACH = {
    "args": [
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -1164,16 +1545,18 @@ window.MONICA_TEACH = {
    "whenToUse": "要让已接入的 AI 客户端真的能调用时。",
    "handAuthored": false,
    "pitfalls": [
-    "会话 5 分钟自动上锁，要一直用就另开一个终端守着，或定期回来解锁。",
-    "端口 47831 是整台机器共用的：已有网关在跑时，管理类命令会直接回 gateway_running。",
-    "别名 monica s / u / unlock 就是「解锁并跑起来」。"
+    "先用 mcp-config GRANT --install CLIENT 配置 AI，再执行 serve；在另一个终端运行 check GRANT。",
+    "会话最长 5 分钟，到期需由人重新解锁，不改变授权窗口。",
+    "需要访问保险库的管理操作会先停止并排空代理；完成后重新 serve。端口被其他进程占用时先检查。",
+    "旧别名 s / u / unlock 保持兼容。"
    ],
    "examples": [
     {
      "cmd": "monica serve",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Gateway ready at http://127.0.0.1:47831/. Keep this human terminal open.\nThe session locks after five minutes. Ctrl+C or 'monica-pass lock' also stops the gateway."
+     "out": "Gateway ready at http://127.0.0.1:47831/. Keep this human terminal open.\nThe session locks after five minutes. Ctrl+C or 'monica-pass lock' also stops the gateway.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -1185,6 +1568,24 @@ window.MONICA_TEACH = {
    "name": "lock",
    "parent": "",
    "summary": "Lock the running gateway and clear its vault session",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "drain_and_lock_broker",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "broker",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "lock",
    "aliases": [
     "lk",
     "L"
@@ -1192,6 +1593,7 @@ window.MONICA_TEACH = {
    "args": [
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -1223,7 +1625,8 @@ window.MONICA_TEACH = {
     {
      "cmd": "monica lock",
      "tested": true,
-     "out": "Gateway stopped; vault locked."
+     "out": "Gateway stopped; vault locked.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -1235,12 +1638,35 @@ window.MONICA_TEACH = {
    "name": "tui",
    "parent": "",
    "summary": "Open the Vim-style terminal manager (the default without a subcommand)",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "terminal_ui",
+      "when": "always"
+     },
+     {
+      "effect": "trusted_management",
+      "when": "user_action"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "human_terminal"
+    ],
+    "retry": "check_running_process_before_restart",
+    "schema_version": 1,
+    "target": "vault",
+    "trust_boundary": "human_terminal"
+   },
+   "executionCommand": "tui",
    "aliases": [
     "ui"
    ],
    "args": [
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -1284,12 +1710,33 @@ window.MONICA_TEACH = {
    "name": "language",
    "parent": "",
    "summary": "Show or save the language preference without creating or unlocking a vault",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "read_language_preference",
+      "when": "always"
+     },
+     {
+      "effect": "write_language_preference",
+      "when": "language_argument"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "language_preference",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "language",
    "aliases": [
     "lang"
    ],
    "args": [
     {
      "id": "language",
+     "role": "language",
      "long": null,
      "short": null,
      "aliases": [],
@@ -1317,6 +1764,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -1349,18 +1797,21 @@ window.MONICA_TEACH = {
     {
      "cmd": "monica language",
      "tested": true,
-     "out": "Current language: English; saved preference: auto."
+     "out": "Current language: English; saved preference: auto.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica language zh-CN",
      "tested": true,
-     "out": "语言偏好已保存：简体中文。"
+     "out": "语言偏好已保存：简体中文。",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica language",
      "note": "存过之后的回显。",
      "tested": true,
-     "out": "当前语言：简体中文；已保存偏好：zh-CN。"
+     "out": "当前语言：简体中文；已保存偏好：zh-CN。",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -1372,12 +1823,50 @@ window.MONICA_TEACH = {
    "name": "commands",
    "parent": "",
    "summary": "Discover commands, aliases and arguments; --json also describes secret input requirements",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "read_command_grammar",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [],
+    "retry": "repeatable_read",
+    "schema_version": 1,
+    "target": "command",
+    "trust_boundary": "public_local_inspection"
+   },
+   "executionCommand": "commands",
    "aliases": [
     "cmds"
    ],
    "args": [
     {
+     "id": "summary",
+     "role": null,
+     "long": "summary",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [
+      "SUMMARY"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [
+      "false"
+     ],
+     "help": "Compact command index; query a command separately for full grammar and semantics"
+    },
+    {
      "id": "topic",
+     "role": "command",
      "long": null,
      "short": null,
      "aliases": [],
@@ -1396,6 +1885,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -1417,32 +1907,36 @@ window.MONICA_TEACH = {
    "argGroups": [],
    "secretRequired": [],
    "group": "start",
-   "summaryZh": "让 CLI 自己说清有哪些命令、哪些参数、要哪些秘密字段。",
+   "summaryZh": "发现命令：先用 --summary --json 看精简索引，再按命令查询完整语法与执行契约。",
    "whenToUse": "记不全参数时；写脚本时读 --json 的机器契约。",
    "handAuthored": false,
    "pitfalls": [
     "commands <名字> --json 给单个命令的 JSON；cmds <名字> 给的是帮助文本。两者不是一回事。",
     "keys export 故意不在这份清单里：它是给人用的出口，不进入 AI 可发现的表面。",
-    "别名 cmds。"
+    "别名 cmds。",
+    "semantics 说明前提、影响、边界和重试。发现不授予执行权限；keys export 始终不进入机器发现。"
    ],
    "examples": [
     {
-     "cmd": "monica commands",
-     "note": "树状列表，别名一律标在方括号里。",
+     "cmd": "monica commands --summary --json",
+     "note": "先看精简索引；无需保险库。",
      "tested": true,
-     "out": "Monica's local credential gateway for AI, backed by MDBX3\n\nUsage: monica [OPTIONS] [COMMAND]\n\nCommands:\n  databases        List the current and previously opened databases [alias: db]\n  use              Switch to a saved database ID; requires its password and keeps old grants revoked\n  token            Replace a stored Token through secure input; revoke its old AI grants\n  rename-category  Rename a native MDBX category by its stable ID\n  rename-entry     Rename an entry's display title by its connection handle; Chinese is allowed\n  library          Browse database categories and entry summaries after unlocking [alias: tree]\n  …                （其余 27 行同构）"
+     "capturedAt": "2026-09-28",
+     "out": "{\"command\":\"commands\",\"data\":{\"commands\":[{\"aliases\":[\"db\"],\"path\":[\"databases\"],\"secret_fields\":[],\"subcommand_required\":false,\"summary\":\"List the current and previously opened databases\",\"target\":\"database\",\"trust_boundary\":\"public_local_inspection\"},{\"aliases\":[],\"path\":[\"use\"],\"secret_fields\":[\"password\"],\"subcommand_required\":false,\"summary\":\"Switch to a saved database ID; requires its password and keeps old grants revoked\",\"target\":\"database_id\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[],\"path\":[\"token\"],\"secret_fields\":[\"password\",\"token\"],\"subcommand_required\":false,\"summary\":\"Replace a stored Token through secure input; revoke its old AI grants\",\"target\":\"connection\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[],\"path\":[\"rename-category\"],\"secret_fields\":[\"password\"],\"subcommand_required\":false,\"summary\":\"Rename a native MDBX category by its stable ID\",\"target\":\"category_id\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[],\"path\":[\"rename-entry\"],\"secret_fields\":[\"password\"],\"subcommand_required\":false,\"summary\":\"Rename an entry's display title by its connection handle; Chinese is allowed\",\"target\":\"connection\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"k\"],\"path\":[\"keys\"],\"secret_fields\":[\"password\"],\"subcommand_required\":false,\"summary\":\"Manage SSH and GPG key entries; bare keys lists them\",\"target\":\"vault\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[],\"path\":[\"keys\",\"ssh\"],\"secret_fields\":[\"password\"],\"subcommand_required\":false,\"summary\":\"Generate an OpenSSH key or import a private PEM file\",\"target\":\"new_key_entry\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[],\"path\":[\"keys\",\"gpg\"],\"secret_fields\":[\"password\"],\"subcommand_required\":false,\"summary\":\"Import OpenPGP v4 ASCII armor, public certificate and optional secret ring\",\"target\":\"new_key_entry\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[],\"path\":[\"keys\",\"edit\"],\"secret_fields\":[\"password\"],\"subcommand_required\":false,\"summary\":\"Rename a key entry or edit its comment and purpose note\",\"target\":\"key_entry\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[],\"path\":[\"keys\",\"delete\"],\"secret_fields\":[\"password\"],\"subcommand_required\":false,\"summary\":\"Delete a key entry; text already exported to a file stays there\",\"target\":\"key_entry\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"tree\"],\"path\":[\"library\"],\"secret_fields\":[\"password\"],\"subcommand_required\":false,\"summary\":\"Browse database categories and entry summaries after unlocking\",\"target\":\"vault\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"mkdir\"],\"path\":[\"category\"],\"secret_fields\":[\"password\"],\"subcommand_required\":false,\"summary\":\"Create a native MDBX category; optionally nest it under a category ID\",\"target\":\"new_category\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"mv\"],\"path\":[\"move\"],\"secret_fields\":[\"password\"],\"subcommand_required\":false,\"summary\":\"Move an entry or category into another category by ID\",\"target\":\"entry_or_category_id\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"rm\",\"del\"],\"path\":[\"delete\"],\"secret_fields\":[\"password\"],\"subcommand_required\":false,\"summary\":\"Delete a connection or entry by its handle or ID; confirm by typing the target\",\"target\":\"connection_or_entry_id\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"rmdir\"],\"path\":[\"delete-category\"],\"secret_fields\":[\"password\"],\"subcommand_required\":false,\"summary\":\"Remove an empty native category by ID; contents are never deleted with it\",\"target\":\"category_id\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"lang\"],\"path\":[\"language\"],\"secret_fields\":[],\"subcommand_required\":false,\"summary\":\"Show or save the language preference without creating or unlocking a vault\",\"target\":\"language_preference\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"cmds\"],\"path\":[\"commands\"],\"secret_fields\":[],\"subcommand_required\":false,\"summary\":\"Discover commands, aliases and arguments; --json also describes secret input requirements\",\"target\":\"command\",\"trust_boundary\":\"public_local_inspection\"},{\"aliases\":[\"ui\"],\"path\":[\"tui\"],\"secret_fields\":[],\"subcommand_required\":false,\"summary\":\"Open the Vim-style terminal manager (the default without a subcommand)\",\"target\":\"vault\",\"trust_boundary\":\"human_terminal\"},{\"aliases\":[\"a\"],\"path\":[\"add\"],\"secret_fields\":[\"password\",\"token\"],\"subcommand_required\":false,\"summary\":\"Create a connection and scoped AI grant; create a vault on first use\",\"target\":\"connection_and_same_named_grant\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"list\",\"ls\",\"l\"],\"path\":[\"connections\"],\"secret_fields\":[],\"subcommand_required\":false,\"summary\":\"List connection names, services and AI-visible notes\",\"target\":\"vault\",\"trust_boundary\":\"public_local_inspection\"},{\"aliases\":[\"info\"],\"path\":[\"show\"],\"secret_fields\":[],\"subcommand_required\":false,\"summary\":\"Show one exact connection name, its public note and grants\",\"target\":\"connection\",\"trust_boundary\":\"public_local_inspection\"},{\"aliases\":[\"e\",\"edit\"],\"path\":[\"note\"],\"secret_fields\":[\"password\"],\"subcommand_required\":false,\"summary\":\"Edit a connection's public purpose note; requires the master password\",\"target\":\"connection\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"o\"],\"path\":[\"open\"],\"secret_fields\":[\"password\"],\"subcommand_required\":false,\"summary\":\"Open a managed copy of an MDBX; preserve the source and reset grants\",\"target\":\"vault_file\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"dav\"],\"path\":[\"webdav\"],\"secret_fields\":[],\"subcommand_required\":true,\"summary\":\"WebDAV sign-in, browsing and encrypted vault sync\",\"target\":\"subcommand\",\"trust_boundary\":\"command_group\"},{\"aliases\":[\"in\"],\"path\":[\"webdav\",\"login\"],\"secret_fields\":[\"webdav_password\"],\"subcommand_required\":false,\"summary\":\"Verify login and save the URL and username; a typed password is kept on this computer only\",\"target\":\"webdav_profile\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"ls\"],\"path\":[\"webdav\",\"list\"],\"secret_fields\":[\"webdav_password\"],\"subcommand_required\":false,\"summary\":\"List one folder relative to the saved WebDAV URL\",\"target\":\"remote_path\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"st\"],\"path\":[\"webdav\",\"status\"],\"secret_fields\":[],\"subcommand_required\":false,\"summary\":\"Show the saved WebDAV profile and sync binding without logging in\",\"target\":\"webdav_profile\",\"trust_boundary\":\"public_local_inspection\"},{\"aliases\":[\"forget\"],\"path\":[\"webdav\",\"forget-password\"],\"secret_fields\":[],\"subcommand_required\":false,\"summary\":\"Delete the saved WebDAV password from this computer's credential manager\",\"target\":\"webdav_profile\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"o\"],\"path\":[\"webdav\",\"open\"],\"secret_fields\":[\"password\",\"webdav_password\"],\"subcommand_required\":false,\"summary\":\"Download and open an MDBX; preserve the previous local vault and clear old grants\",\"target\":\"remote_vault_path\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"p\",\"push\"],\"path\":[\"webdav\",\"publish\"],\"secret_fields\":[\"password\",\"webdav_password\"],\"subcommand_required\":false,\"summary\":\"Publish the encrypted vault under a new remote filename and connect sync\",\"target\":\"new_remote_path\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"s\"],\"path\":[\"webdav\",\"sync\"],\"secret_fields\":[\"password\",\"webdav_password\"],\"subcommand_required\":false,\"summary\":\"Compare and sync local and remote copies; preserve both on conflict\",\"target\":\"sync_binding\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"settings\",\"m\"],\"path\":[\"mcp-config\"],\"secret_fields\":[],\"subcommand_required\":false,\"summary\":\"Print and save MCP settings for an existing grant, selected by name\",\"target\":\"grant\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"ck\",\"p\"],\"path\":[\"check\"],\"secret_fields\":[],\"subcommand_required\":false,\"summary\":\"Check authenticated MCP discovery using a grant name or --client file\",\"target\":\"grant_or_client_file\",\"trust_boundary\":\"grant_scoped_broker\"},{\"aliases\":[\"n\"],\"path\":[\"init\"],\"secret_fields\":[\"password\"],\"subcommand_required\":false,\"summary\":\"Create an encrypted MDBX3 vault; requires a new master password\",\"target\":\"database\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"c\"],\"path\":[\"connect\"],\"secret_fields\":[\"password\",\"token\"],\"subcommand_required\":false,\"summary\":\"Save a service connection; password and token use secure input\",\"target\":\"connection\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"g\"],\"path\":[\"grant\"],\"secret_fields\":[\"password\"],\"subcommand_required\":false,\"summary\":\"Authorize exact repositories and operations; requires the vault password\",\"target\":\"grant\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"refresh\",\"rf\"],\"path\":[\"renew\"],\"secret_fields\":[\"password\"],\"subcommand_required\":false,\"summary\":\"Re-authorize a grant with a fresh capability; the old one stops working\",\"target\":\"grant\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[],\"path\":[\"call\"],\"secret_fields\":[],\"subcommand_required\":false,\"summary\":\"Execute a public ToolCall JSON file through an unlocked authorized broker\",\"target\":\"grant\",\"trust_boundary\":\"grant_scoped_broker\"},{\"aliases\":[\"rv\",\"x\"],\"path\":[\"revoke\"],\"secret_fields\":[],\"subcommand_required\":false,\"summary\":\"Revoke a grant so subsequent calls are denied\",\"target\":\"grant\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"s\",\"u\",\"unlock\"],\"path\":[\"serve\"],\"secret_fields\":[\"password\"],\"subcommand_required\":false,\"summary\":\"Unlock and run until Ctrl+C, lock, or five-minute session expiry\",\"target\":\"broker\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"lk\",\"L\"],\"path\":[\"lock\"],\"secret_fields\":[],\"subcommand_required\":false,\"summary\":\"Lock the running gateway and clear its vault session\",\"target\":\"broker\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[\"st\"],\"path\":[\"status\"],\"secret_fields\":[],\"subcommand_required\":false,\"summary\":\"Show connection and grant metadata\",\"target\":\"vault\",\"trust_boundary\":\"public_local_inspection\"},{\"aliases\":[],\"path\":[\"next\"],\"secret_fields\":[],\"subcommand_required\":false,\"summary\":\"Show which setup step is still missing and the command for it; reads only public metadata\",\"target\":\"grant\",\"trust_boundary\":\"public_local_inspection\"},{\"aliases\":[],\"path\":[\"audit\"],\"secret_fields\":[],\"subcommand_required\":false,\"summary\":\"Read the local gateway audit trail: which grant ran which operation, and how it ended\",\"target\":\"grant\",\"trust_boundary\":\"public_local_inspection\"},{\"aliases\":[],\"path\":[\"tiga\"],\"secret_fields\":[],\"subcommand_required\":true,\"summary\":\"Read or change the security profile this vault runs on\",\"target\":\"subcommand\",\"trust_boundary\":\"command_group\"},{\"aliases\":[],\"path\":[\"tiga\",\"show\"],\"secret_fields\":[\"password\"],\"subcommand_required\":false,\"summary\":\"Show the stored profile, the one actually in force, and what each costs you\",\"target\":\"vault\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[],\"path\":[\"tiga\",\"set\"],\"secret_fields\":[\"password\"],\"subcommand_required\":false,\"summary\":\"Move the vault to another profile. Lowering it records a reason in the vault\",\"target\":\"vault_profile\",\"trust_boundary\":\"trusted_local_management\"},{\"aliases\":[],\"path\":[\"mdbx\"],\"secret_fields\":[],\"subcommand_required\":true,\"summary\":\"Inspect the database file itself: its format, its parts, its size. Never unlocks or writes\",\"target\":\"subcommand\",\"trust_boundary\":\"command_group\"},{\"aliases\":[],\"path\":[\"mdbx\",\"check\"],\"secret_fields\":[],\"subcommand_required\":false,\"summary\":\"Read the format header of a vault file and how much disk it takes\",\"target\":\"vault_file\",\"trust_boundary\":\"public_local_inspection\"},{\"aliases\":[],\"path\":[\"mdbx\",\"files\"],\"secret_fields\":[],\"subcommand_required\":false,\"summary\":\"List the vault file and every file beside it, with the size of each\",\"target\":\"vault_file\",\"trust_boundary\":\"public_local_inspection\"},{\"aliases\":[],\"path\":[\"mcp\"],\"secret_fields\":[],\"subcommand_required\":false,\"summary\":\"Start the AI-facing MCP stdio bridge; never prompts for service credentials\",\"target\":\"client_file\",\"trust_boundary\":\"grant_scoped_broker\"}],\"detail\":\"monica commands <COMMAND> --json\",\"discovery_grants_authority\":false,\"format\":\"summary\",\"schema_version\":1},\"ok\":true}"
+    },
+    {
+     "cmd": "monica commands grant --json",
+     "note": "按需读取某条命令的语法与执行契约。",
+     "tested": true,
+     "capturedAt": "2026-09-28",
+     "out": "{\"command\":\"commands\",\"data\":{\"aliases\":[\"g\"],\"argument_groups\":[],\"arguments\":[{\"aliases\":[],\"choice_aliases\":[],\"choices\":[],\"conflicts_with\":[],\"defaults\":[],\"global\":false,\"help\":\"AI authorization name (GRANT), not a connection handle\",\"id\":\"name\",\"ignore_case\":false,\"long\":null,\"positional\":true,\"repeatable\":false,\"required\":true,\"role\":\"grant\",\"short\":null,\"takes_value\":true,\"value_names\":[\"GRANT\"]},{\"aliases\":[],\"choice_aliases\":[],\"choices\":[],\"conflicts_with\":[],\"defaults\":[],\"global\":false,\"help\":\"An existing connection name\",\"id\":\"connection\",\"ignore_case\":false,\"long\":\"connection\",\"positional\":false,\"repeatable\":false,\"required\":true,\"role\":\"connection\",\"short\":\"c\",\"takes_value\":true,\"value_names\":[\"CONNECTION\"]},{\"aliases\":[],\"choice_aliases\":[],\"choices\":[],\"conflicts_with\":[],\"defaults\":[],\"global\":false,\"help\":\"Exact repository path; service-wide API grants require --repo *\",\"id\":\"repositories\",\"ignore_case\":false,\"long\":\"repo\",\"positional\":false,\"repeatable\":true,\"required\":true,\"role\":\"repositories\",\"short\":\"r\",\"takes_value\":true,\"value_names\":[\"REPOSITORIES\"]},{\"aliases\":[\"op\"],\"choice_aliases\":[],\"choices\":[\"list-issues\",\"get-issue\",\"create-issue\",\"api-read\",\"api-write\"],\"conflicts_with\":[],\"defaults\":[\"list-issues\",\"get-issue\"],\"global\":false,\"help\":\"Issue tools by default; use api-read and api-write for service-wide API access\",\"id\":\"operations\",\"ignore_case\":false,\"long\":\"operation\",\"positional\":false,\"repeatable\":true,\"required\":false,\"role\":\"operations\",\"short\":null,\"takes_value\":true,\"value_names\":[\"OPERATIONS\"]},{\"aliases\":[\"ttl\"],\"choice_aliases\":[],\"choices\":[],\"conflicts_with\":[],\"defaults\":[\"240\"],\"global\":false,\"help\":\"Grant lifetime in minutes, 1–1440; omit for the default 240. No grant lasts forever\",\"id\":\"ttl_minutes\",\"ignore_case\":false,\"long\":\"ttl-minutes\",\"positional\":false,\"repeatable\":false,\"required\":false,\"role\":\"ttl_minutes\",\"short\":\"t\",\"takes_value\":true,\"value_names\":[\"TTL_MINUTES\"]},{\"aliases\":[\"rpm\"],\"choice_aliases\":[],\"choices\":[],\"conflicts_with\":[],\"defaults\":[\"60\"],\"global\":false,\"help\":\"Requests per minute, 1–600; default 60\",\"id\":\"requests_per_minute\",\"ignore_case\":false,\"long\":\"requests-per-minute\",\"positional\":false,\"repeatable\":false,\"required\":false,\"role\":\"requests_per_minute\",\"short\":null,\"takes_value\":true,\"value_names\":[\"REQUESTS_PER_MINUTE\"]},{\"aliases\":[],\"choice_aliases\":[],\"choices\":[],\"conflicts_with\":[],\"defaults\":[\"0\"],\"global\":false,\"help\":\"Upstream calls allowed before `monica renew` is required; 0 is uncapped\",\"id\":\"max_calls\",\"ignore_case\":false,\"long\":\"max-calls\",\"positional\":false,\"repeatable\":false,\"required\":false,\"role\":\"max_calls\",\"short\":null,\"takes_value\":true,\"value_names\":[\"MAX_CALLS\"]},{\"aliases\":[],\"choice_aliases\":[],\"choices\":[\"off\",\"write\",\"all\"],\"conflicts_with\":[],\"defaults\":[\"off\"],\"global\":false,\"help\":\"Ask a person to approve the call before it leaves this machine: off, write, or all\",\"id\":\"approval\",\"ignore_case\":false,\"long\":\"approval\",\"positional\":false,\"repeatable\":false,\"required\":false,\"role\":\"approval\",\"short\":null,\"takes_value\":true,\"value_names\":[\"APPROVAL\"]},{\"aliases\":[],\"choice_aliases\":[],\"choices\":[],\"conflicts_with\":[],\"defaults\":[],\"global\":false,\"help\":\"New client capability file; never overwrites an existing file\",\"id\":\"out\",\"ignore_case\":false,\"long\":\"out\",\"positional\":false,\"repeatable\":false,\"required\":false,\"role\":\"new_client_file\",\"short\":\"o\",\"takes_value\":true,\"value_names\":[\"NEW_CLIENT_FILE\"]},{\"aliases\":[],\"choice_aliases\":[],\"choices\":[],\"conflicts_with\":[],\"defaults\":[],\"global\":true,\"help\":\"Local configuration; defaults to portable data/ or the user's private MonicaPass state directory\",\"id\":\"config\",\"ignore_case\":false,\"long\":\"config\",\"positional\":false,\"repeatable\":false,\"required\":false,\"role\":null,\"short\":\"C\",\"takes_value\":true,\"value_names\":[\"FILE\"]},{\"aliases\":[],\"choice_aliases\":[\"en-US\",\"en_US\",\"zh\",\"zh_CN\"],\"choices\":[\"auto\",\"en\",\"zh-CN\"],\"conflicts_with\":[],\"defaults\":[],\"global\":true,\"help\":\"Language for this run: auto, zh-CN, en; use the language command to save a preference\",\"id\":\"lang\",\"ignore_case\":true,\"long\":\"lang\",\"positional\":false,\"repeatable\":false,\"required\":false,\"role\":null,\"short\":\"l\",\"takes_value\":true,\"value_names\":[\"LANG\"]},{\"aliases\":[],\"choice_aliases\":[],\"choices\":[],\"conflicts_with\":[],\"defaults\":[\"false\"],\"global\":true,\"help\":\"Stable JSON results and errors; never prompt (MCP and TUI use their own interfaces)\",\"id\":\"json\",\"ignore_case\":false,\"long\":\"json\",\"positional\":false,\"repeatable\":false,\"required\":false,\"role\":null,\"short\":\"j\",\"takes_value\":false,\"value_names\":[\"JSON\"]},{\"aliases\":[\"no-prompt\"],\"choice_aliases\":[],\"choices\":[],\"conflicts_with\":[],\"defaults\":[\"false\"],\"global\":true,\"help\":\"Fail immediately when secret input is missing; never open a prompt\",\"id\":\"non_interactive\",\"ignore_case\":false,\"long\":\"non-interactive\",\"positional\":false,\"repeatable\":false,\"required\":false,\"role\":null,\"short\":null,\"takes_value\":false,\"value_names\":[\"NON_INTERACTIVE\"]},{\"aliases\":[],\"choice_aliases\":[],\"choices\":[],\"conflicts_with\":[],\"defaults\":[\"false\"],\"global\":true,\"help\":\"Read secret fields as one UTF-8 JSON object from a trusted producer on stdin (max 16 KiB)\",\"id\":\"secrets_stdin\",\"ignore_case\":false,\"long\":\"secrets-stdin\",\"positional\":false,\"repeatable\":false,\"required\":false,\"role\":null,\"short\":null,\"takes_value\":false,\"value_names\":[\"SECRETS_STDIN\"]},{\"aliases\":[],\"choice_aliases\":[],\"choices\":[],\"conflicts_with\":[],\"defaults\":[],\"global\":false,\"help\":\"Print help\",\"id\":\"help\",\"ignore_case\":false,\"long\":\"help\",\"positional\":false,\"repeatable\":false,\"required\":false,\"role\":null,\"short\":\"h\",\"takes_value\":false,\"value_names\":[]}],\"commands\":[],\"execution_command\":\"grant\",\"json_supported\":true,\"long_running\":false,\"name\":\"grant\",\"path\":[\"grant\"],\"schema_version\":1,\"secret_input\":{\"flag\":\"--secrets-stdin\",\"max_bytes\":16384,\"required\":[\"password\"],\"transport\":\"stdin_json\"},\"semantics\":{\"discovery_grants_authority\":false,\"effects\":[{\"effect\":\"lock_broker\",\"when\":\"always\"},{\"effect\":\"create_grant\",\"when\":\"always\"},{\"effect\":\"write_capability_file\",\"when\":\"always\"},{\"effect\":\"print_mcp_snippet\",\"when\":\"always\"}],\"mcp_tool\":false,\"prerequisites\":[\"configured_vault\",\"existing_connection\",\"explicit_repository_scope\",\"new_grant\",\"secure_password_input\"],\"retry\":\"inspect_state_before_retry\",\"schema_version\":1,\"target\":\"grant\",\"trust_boundary\":\"trusted_local_management\"},\"subcommand_required\":false,\"summary\":\"Authorize exact repositories and operations; requires the vault password\"},\"ok\":true}"
     },
     {
      "cmd": "monica commands grant",
-     "note": "单个命令的长帮助，含默认值和可选值。",
+     "note": "供人阅读的完整帮助。",
      "tested": true,
-     "out": "Authorize exact repositories and operations; requires the vault password\n\nUsage: monica grant [OPTIONS] --connection <CONNECTION> --repo <REPOSITORIES> <NAME>\n\nArguments:\n  <NAME>\n          Connection or grant name\n\nOptions:\n  -c, --connection <CONNECTION>\n          An existing connection name\n…\n      --max-calls <MAX_CALLS>\n          Upstream calls allowed before `monica refresh` is required; 0 is uncapped\n          [default: 0]"
-    },
-    {
-     "cmd": "monica commands --json",
-     "note": "整棵树的机器可读语法：参数对象、secret_input.required、json_supported 都在里面。",
-     "tested": true,
-     "out": "{\"ok\":true,\"command\":\"commands\",\"data\":{\"commands\":[{\"aliases\":[\"a\"],\"arguments\":[{\"choices\":[\"github\",\"gitlab\"],\"global\":false,\"id\":\"provider\",\"long\":\"provider\",\"required\":false,\"short\":\"p\",\"takes_value\":true}],\"json_supported\":true,\"name\":\"add\",\"secret_input\":{\"flag\":\"--secrets-stdin\",\"max_bytes\":16384,\"required\":[\"password\",\"token\"],\"transport\":\"stdin_json\"},\"summary\":\"Create a connection and scoped AI grant; create a vault on first use\"}],\"schema_version\":1}}"
+     "capturedAt": "2026-09-28",
+     "out": "Authorize exact repositories and operations; requires the vault password\n\nUsage: monica grant [OPTIONS] --connection <CONNECTION> --repo <REPOSITORIES> <GRANT>\n\nArguments:\n  <GRANT>\n          AI authorization name (GRANT), not a connection handle\n\nOptions:\n  -c, --connection <CONNECTION>\n          An existing connection name\n\n  -C, --config <FILE>\n          Local configuration; defaults to portable data/ or the user's private MonicaPass state directory\n\n  -l, --lang <LANG>\n          Language for this run: auto, zh-CN, en; use the language command to save a preference\n          \n          [possible values: auto, en, zh-CN]\n\n  -r, --repo <REPOSITORIES>\n          Exact repository path; service-wide API grants require --repo *\n\n  -j, --json\n          Stable JSON results and errors; never prompt (MCP and TUI use their own interfaces)\n\n      --operation <OPERATIONS>\n          Issue tools by default; use api-read and api-write for service-wide API access\n          \n          [default: list-issues get-issue]\n          [alias: --op]\n          [possible values: list-issues, get-issue, create-issue, api-read, api-write]\n\n      --non-interactive\n          Fail immediately when secret input is missing; never open a prompt\n          \n          [alias: --no-prompt]\n\n  -t, --ttl-minutes <TTL_MINUTES>\n          Grant lifetime in minutes, 1–1440; omit for the default 240. No grant lasts forever\n          \n          [default: 240]\n          [alias: --ttl]\n\n      --requests-per-minute <REQUESTS_PER_MINUTE>\n          Requests per minute, 1–600; default 60\n          \n          [default: 60]\n          [alias: --rpm]\n\n      --secrets-stdin\n          Read secret fields as one UTF-8 JSON object from a trusted producer on stdin (max 16 KiB)\n\n      --max-calls <MAX_CALLS>\n          Upstream calls allowed before `monica renew` is required; 0 is uncapped\n          \n          [default: 0]\n\n      --approval <APPROVAL>\n          Ask a person to approve the call before it leaves this machine: off, write, or all\n\n          Possible values:\n          - off\n          - write: Only operations that change remote state\n          - all:   Every call, reads included\n          \n          [default: off]\n\n  -o, --out <NEW_CLIENT_FILE>\n          New client capability file; never overwrites an existing file\n\n  -h, --help\n          Print help (see a summary with '-h')"
     }
    ]
   },
@@ -1454,12 +1948,57 @@ window.MONICA_TEACH = {
    "name": "add",
    "parent": "",
    "summary": "Create a connection and scoped AI grant; create a vault on first use",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "create_vault",
+      "when": "vault_missing"
+     },
+     {
+      "effect": "write_vault",
+      "when": "always"
+     },
+     {
+      "effect": "create_grant",
+      "when": "always"
+     },
+     {
+      "effect": "write_capability_file",
+      "when": "always"
+     },
+     {
+      "effect": "write_mcp_snippet",
+      "when": "always"
+     },
+     {
+      "effect": "foreground_broker",
+      "when": "--serve"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "new_connection_and_grant",
+     "exact_repository_scope",
+     "secure_password_and_token_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "connection_and_same_named_grant",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "add",
    "aliases": [
     "a"
    ],
    "args": [
     {
      "id": "name",
+     "role": "connection_and_same_named_grant",
      "long": null,
      "short": null,
      "aliases": [],
@@ -1468,16 +2007,17 @@ window.MONICA_TEACH = {
      "repeatable": false,
      "takesValue": true,
      "valueNames": [
-      "NAME"
+      "CONNECTION"
      ],
      "choices": [],
      "choiceAliases": [],
      "ignoreCase": false,
      "defaults": [],
-     "help": "Connection or grant name"
+     "help": "Connection handle (CONNECTION); add also creates a grant with this name"
     },
     {
      "id": "title",
+     "role": "title",
      "long": "title",
      "short": null,
      "aliases": [],
@@ -1498,6 +2038,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "provider",
+     "role": "provider",
      "long": "provider",
      "short": "p",
      "aliases": [],
@@ -1521,6 +2062,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "api_base",
+     "role": "api_base",
      "long": "api-base",
      "short": "b",
      "aliases": [],
@@ -1539,6 +2081,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "note",
+     "role": "note",
      "long": "note",
      "short": "n",
      "aliases": [],
@@ -1559,6 +2102,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "repositories",
+     "role": "repositories",
      "long": "repo",
      "short": "r",
      "aliases": [],
@@ -1577,6 +2121,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "allow_write",
+     "role": null,
      "long": "allow-write",
      "short": "w",
      "aliases": [],
@@ -1597,6 +2142,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "ttl_minutes",
+     "role": "ttl_minutes",
      "long": "ttl-minutes",
      "short": "t",
      "aliases": [
@@ -1619,6 +2165,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "serve",
+     "role": null,
      "long": "serve",
      "short": "s",
      "aliases": [],
@@ -1639,6 +2186,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -1677,20 +2225,23 @@ window.MONICA_TEACH = {
      "cmd": "monica add work -r your-org/your-repo -n \"跟踪产品问题\"",
      "secrets": "{\"password\":\"<主密码>\",\"token\":\"ghp_<真实 Token>\"}",
      "tested": true,
-     "out": "{\n  \"mcpServers\": {\n    \"work\": {\n      \"args\": [\n        \"mcp\",\n        \"--client\",\n        \"%LOCALAPPDATA%\\\\MonicaPass\\\\clients\\\\work.client.json\"\n      ],\n      \"command\": \"<monica-pass>\"\n    }\n  }\n}\nCreated 'work': [\"your-org/your-repo\"]; read-only. AI can discover its name and public note. MCP settings saved to %LOCALAPPDATA%\\MonicaPass\\clients\\work.client.mcp.json.\nNext: run monica-pass serve, or open the TUI and press u. Use add --serve to do both together."
+     "out": "{\n  \"mcpServers\": {\n    \"work\": {\n      \"args\": [\n        \"mcp\",\n        \"--client\",\n        \"%LOCALAPPDATA%\\\\MonicaPass\\\\clients\\\\work.client.json\"\n      ],\n      \"command\": \"<monica-pass>\"\n    }\n  }\n}\nCreated 'work': [\"your-org/your-repo\"]; read-only. AI can discover its name and public note. MCP settings saved to %LOCALAPPDATA%\\MonicaPass\\clients\\work.client.mcp.json.\nNext: run monica-pass serve, or open the TUI and press u. Use add --serve to do both together.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica add gitlab-cn -p gitlab -b https://gitlab.example.com/api/v4/ -r your-org/other --allow-write --ttl-minutes 60 -n \"内部镜像仓库\"",
      "secrets": "{\"password\":\"<主密码>\",\"token\":\"glpat-<真实 Token>\"}",
      "tested": true,
-     "out": "Created 'v3': [\"your-org/v3\"]; Issue reading and creation authorized. AI can discover its name and public note. MCP settings saved to %LOCALAPPDATA%\\MonicaPass\\clients\\v3.client.mcp.json.\nNext: run monica-pass serve, or open the TUI and press u. Use add --serve to do both together."
+     "out": "Created 'v3': [\"your-org/v3\"]; Issue reading and creation authorized. AI can discover its name and public note. MCP settings saved to %LOCALAPPDATA%\\MonicaPass\\clients\\v3.client.mcp.json.\nNext: run monica-pass serve, or open the TUI and press u. Use add --serve to do both together.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica add work -r your-org/your-repo",
      "note": "自动化里用 --json 拿稳定结构。",
      "secrets": "{\"password\":\"<主密码>\",\"token\":\"ghp_<真实 Token>\"}",
      "tested": true,
-     "out": "{\"command\":\"add\",\"data\":{\"client_file\":\"%LOCALAPPDATA%\\\\MonicaPass\\\\clients\\\\v6.client.json\",\"created_vault\":false,\"mcp\":{\"mcpServers\":{\"v6\":{\"args\":[\"mcp\",\"--client\",\"%LOCALAPPDATA%\\\\MonicaPass\\\\clients\\\\v6.client.json\"],\"command\":\"<monica-pass>\"}}},\"name\":\"v6\",\"settings_file\":\"%LOCALAPPDATA%\\\\MonicaPass\\\\clients\\\\v6.client.mcp.json\"},\"ok\":true}"
+     "out": "{\"command\":\"add\",\"data\":{\"client_file\":\"%LOCALAPPDATA%\\\\MonicaPass\\\\clients\\\\v6.client.json\",\"created_vault\":false,\"mcp\":{\"mcpServers\":{\"v6\":{\"args\":[\"mcp\",\"--client\",\"%LOCALAPPDATA%\\\\MonicaPass\\\\clients\\\\v6.client.json\"],\"command\":\"<monica-pass>\"}}},\"name\":\"v6\",\"settings_file\":\"%LOCALAPPDATA%\\\\MonicaPass\\\\clients\\\\v6.client.mcp.json\"},\"ok\":true}",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -1702,12 +2253,41 @@ window.MONICA_TEACH = {
    "name": "connect",
    "parent": "",
    "summary": "Save a service connection; password and token use secure input",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "write_vault",
+      "when": "always"
+     },
+     {
+      "effect": "write_local_config",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "new_connection",
+     "secure_password_and_token_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "connection",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "connect",
    "aliases": [
     "c"
    ],
    "args": [
     {
      "id": "category",
+     "role": "category_id",
      "long": "category",
      "short": null,
      "aliases": [],
@@ -1716,7 +2296,7 @@ window.MONICA_TEACH = {
      "repeatable": false,
      "takesValue": true,
      "valueNames": [
-      "CATEGORY"
+      "CATEGORY_ID"
      ],
      "choices": [],
      "choiceAliases": [],
@@ -1726,6 +2306,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "name",
+     "role": "connection",
      "long": null,
      "short": null,
      "aliases": [],
@@ -1734,16 +2315,17 @@ window.MONICA_TEACH = {
      "repeatable": false,
      "takesValue": true,
      "valueNames": [
-      "NAME"
+      "CONNECTION"
      ],
      "choices": [],
      "choiceAliases": [],
      "ignoreCase": false,
      "defaults": [],
-     "help": "Connection or grant name"
+     "help": "Connection handle (CONNECTION); add also creates a grant with this name"
     },
     {
      "id": "title",
+     "role": "title",
      "long": "title",
      "short": null,
      "aliases": [],
@@ -1764,6 +2346,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "provider",
+     "role": "provider",
      "long": "provider",
      "short": "p",
      "aliases": [],
@@ -1787,6 +2370,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "api_base",
+     "role": "api_base",
      "long": "api-base",
      "short": "b",
      "aliases": [],
@@ -1805,6 +2389,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "note",
+     "role": "note",
      "long": "note",
      "short": "n",
      "aliases": [],
@@ -1825,6 +2410,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -1860,31 +2446,53 @@ window.MONICA_TEACH = {
      "cmd": "monica connect support --provider gitlab --note \"客服系统\"",
      "secrets": "{\"password\":\"<主密码>\",\"token\":\"glpat-<真实 Token>\"}",
      "tested": true,
-     "out": "Stored connection 'support' in the encrypted vault."
+     "out": "Stored connection 'support' in the encrypted vault.",
+     "capturedAt": "此前版本快照"
     },
     {
-     "cmd": "monica list",
+     "cmd": "monica connections",
      "note": "connect 之后 list 里能看到它，但还没有任何授权。",
      "tested": true,
-     "out": "Handle   Provider  Note\nsupport  gitlab    客服系统\nwork     github    跟踪产品问题"
+     "out": "Handle   Provider  Note\nsupport  gitlab    客服系统\nwork     github    跟踪产品问题",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
   {
-   "key": "list",
+   "key": "connections",
    "path": [
-    "list"
+    "connections"
    ],
-   "name": "list",
+   "name": "connections",
    "parent": "",
    "summary": "List connection names, services and AI-visible notes",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "read_public_metadata",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault"
+    ],
+    "retry": "repeatable_read",
+    "schema_version": 1,
+    "target": "vault",
+    "trust_boundary": "public_local_inspection"
+   },
+   "executionCommand": "list",
    "aliases": [
+    "list",
     "ls",
     "l"
    ],
    "args": [
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -1910,19 +2518,29 @@ window.MONICA_TEACH = {
    "whenToUse": "想知道有哪些句柄可拿去做参数。",
    "handAuthored": false,
    "pitfalls": [
-    "这里不显示授权，要看授权使用 monica show <句柄> 或 status。别名 ls / l。"
+    "这里不显示授权，要看授权使用 monica show <句柄> 或 status。别名 ls / l。",
+    "推荐 connections；旧 list / ls / l 仍可用，JSON command 仍为 list。"
    ],
    "examples": [
     {
-     "cmd": "monica list",
+     "cmd": "monica connections --json",
+     "note": "推荐命令名，JSON command 保持 list。",
      "tested": true,
-     "out": "Handle  Provider  Note\nwork    github    跟踪 your-org 的 issue；只读优先"
+     "capturedAt": "2026-09-28",
+     "out": "{\"command\":\"list\",\"data\":{\"connections\":[{\"api_base\":\"https://api.github.com/\",\"name\":\"work-github\",\"note\":\"\",\"provider\":\"github\"}]},\"ok\":true}"
     },
     {
-     "cmd": "monica list --json",
+     "cmd": "monica connections",
+     "tested": true,
+     "out": "Handle  Provider  Note\nwork    github    跟踪 your-org 的 issue；只读优先",
+     "capturedAt": "此前版本快照"
+    },
+    {
+     "cmd": "monica connections --json",
      "note": "同一份信息的机器契约。",
      "tested": true,
-     "out": "{\"command\":\"list\",\"data\":{\"connections\":[{\"api_base\":\"https://api.github.com/\",\"name\":\"work\",\"note\":\"跟踪 your-org 的 issue；只读优先\",\"provider\":\"github\"}]},\"ok\":true}"
+     "out": "{\"command\":\"list\",\"data\":{\"connections\":[{\"api_base\":\"https://api.github.com/\",\"name\":\"work\",\"note\":\"跟踪 your-org 的 issue；只读优先\",\"provider\":\"github\"}]},\"ok\":true}",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -1934,12 +2552,32 @@ window.MONICA_TEACH = {
    "name": "show",
    "parent": "",
    "summary": "Show one exact connection name, its public note and grants",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "read_public_metadata",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "existing_connection"
+    ],
+    "retry": "repeatable_read",
+    "schema_version": 1,
+    "target": "connection",
+    "trust_boundary": "public_local_inspection"
+   },
+   "executionCommand": "show",
    "aliases": [
     "info"
    ],
    "args": [
     {
      "id": "name",
+     "role": "connection",
      "long": null,
      "short": null,
      "aliases": [],
@@ -1948,16 +2586,17 @@ window.MONICA_TEACH = {
      "repeatable": false,
      "takesValue": true,
      "valueNames": [
-      "NAME"
+      "CONNECTION"
      ],
      "choices": [],
      "choiceAliases": [],
      "ignoreCase": false,
      "defaults": [],
-     "help": "Connection or grant name"
+     "help": "Connection handle (CONNECTION); add also creates a grant with this name"
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -1989,12 +2628,14 @@ window.MONICA_TEACH = {
     {
      "cmd": "monica show work",
      "tested": true,
-     "out": "Handle    work\nProvider  github\nAPI       https://api.github.com/\nNote      跟踪 your-org 的 issue；只读优先\n\nGrant  Scope           Operations              Expires           Calls\nwork2  your-org/other  list_issues             2026-09-23 10:17  1/5\nwork3  your-org/third  list_issues, get_issue  2026-09-23 09:51  unlimited"
+     "out": "Handle    work\nProvider  github\nAPI       https://api.github.com/\nNote      跟踪 your-org 的 issue；只读优先\n\nGrant  Scope           Operations              Expires           Calls\nwork2  your-org/other  list_issues             2026-09-23 10:17  1/5\nwork3  your-org/third  list_issues, get_issue  2026-09-23 09:51  unlimited",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica show nope",
      "tested": true,
-     "out": "monica-pass: The requested local configuration, connection or grant does not exist."
+     "out": "monica-pass: The requested local configuration, connection or grant does not exist.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -2006,6 +2647,30 @@ window.MONICA_TEACH = {
    "name": "note",
    "parent": "",
    "summary": "Edit a connection's public purpose note; requires the master password",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "write_public_metadata",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "existing_connection",
+     "secure_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "connection",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "note",
    "aliases": [
     "e",
     "edit"
@@ -2013,6 +2678,7 @@ window.MONICA_TEACH = {
    "args": [
     {
      "id": "name",
+     "role": "connection",
      "long": null,
      "short": null,
      "aliases": [],
@@ -2021,16 +2687,17 @@ window.MONICA_TEACH = {
      "repeatable": false,
      "takesValue": true,
      "valueNames": [
-      "NAME"
+      "CONNECTION"
      ],
      "choices": [],
      "choiceAliases": [],
      "ignoreCase": false,
      "defaults": [],
-     "help": "Connection or grant name"
+     "help": "Connection handle (CONNECTION); add also creates a grant with this name"
     },
     {
      "id": "note",
+     "role": "note",
      "long": null,
      "short": null,
      "aliases": [],
@@ -2049,6 +2716,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -2084,7 +2752,8 @@ window.MONICA_TEACH = {
      "cmd": "monica note work \"跟踪 your-org 的 issue；只读优先\"",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Updated the AI-visible note for 'work'. Credential and grant permissions are unchanged."
+     "out": "Updated the AI-visible note for 'work'. Credential and grant permissions are unchanged.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -2096,10 +2765,39 @@ window.MONICA_TEACH = {
    "name": "token",
    "parent": "",
    "summary": "Replace a stored Token through secure input; revoke its old AI grants",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "replace_token",
+      "when": "always"
+     },
+     {
+      "effect": "revoke_connection_grants",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "existing_connection",
+     "secure_password_and_token_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "connection",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "token",
    "aliases": [],
    "args": [
     {
      "id": "name",
+     "role": "connection",
      "long": null,
      "short": null,
      "aliases": [],
@@ -2108,16 +2806,17 @@ window.MONICA_TEACH = {
      "repeatable": false,
      "takesValue": true,
      "valueNames": [
-      "NAME"
+      "CONNECTION"
      ],
      "choices": [],
      "choiceAliases": [],
      "ignoreCase": false,
      "defaults": [],
-     "help": "Connection or grant name"
+     "help": "Connection handle (CONNECTION); add also creates a grant with this name"
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -2154,7 +2853,8 @@ window.MONICA_TEACH = {
      "cmd": "monica token work",
      "secrets": "{\"password\":\"<主密码>\",\"token\":\"ghp_<新 Token>\"}",
      "tested": true,
-     "out": "Token for 'work' replaced. Its earlier AI grants no longer work."
+     "out": "Token for 'work' replaced. Its earlier AI grants no longer work.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -2166,6 +2866,35 @@ window.MONICA_TEACH = {
    "name": "delete",
    "parent": "",
    "summary": "Delete a connection or entry by its handle or ID; confirm by typing the target",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "tombstone_entry",
+      "when": "always"
+     },
+     {
+      "effect": "revoke_connection_grants",
+      "when": "connection_target"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "compatible_adapter_for_entry",
+     "verified_target_and_confirmation_or_force",
+     "secure_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "connection_or_entry_id",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "delete",
    "aliases": [
     "rm",
     "del"
@@ -2173,6 +2902,7 @@ window.MONICA_TEACH = {
    "args": [
     {
      "id": "target",
+     "role": "connection_or_entry_id",
      "long": null,
      "short": null,
      "aliases": [],
@@ -2181,7 +2911,7 @@ window.MONICA_TEACH = {
      "repeatable": false,
      "takesValue": true,
      "valueNames": [
-      "TARGET"
+      "CONNECTION_OR_ENTRY_ID"
      ],
      "choices": [],
      "choiceAliases": [],
@@ -2191,6 +2921,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "force_delete",
+     "role": null,
      "long": "force",
      "short": null,
      "aliases": [],
@@ -2211,6 +2942,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -2239,20 +2971,23 @@ window.MONICA_TEACH = {
    "handAuthored": false,
    "pitfalls": [
     "非终端环境下不带 --force 只会得到上面那句提示，不会有任何删除。",
-    "加密字节仍留在库文件里，被删的是条目和它的可见性；要彻底干净得换库文件。别名 rm / del。"
+    "加密字节仍留在库文件里，被删的是条目和它的可见性；要彻底干净得换库文件。别名 rm / del。",
+    "未知类型或未来版本在写入层拒绝普通删除。请使用理解该类型的客户端；不要先转换成 login。"
    ],
    "examples": [
     {
      "cmd": "monica delete support",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "This command asks you to type the target back to confirm it, in a human terminal. Use --force only after verifying the target."
+     "out": "This command asks you to type the target back to confirm it, in a human terminal. Use --force only after verifying the target.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica delete support --force",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Deleted 'support'. A tombstone reaches your other devices at the next sync; the encrypted bytes stay in this vault file."
+     "out": "Deleted 'support'. A tombstone reaches your other devices at the next sync; the encrypted bytes stay in this vault file.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -2264,12 +2999,47 @@ window.MONICA_TEACH = {
    "name": "grant",
    "parent": "",
    "summary": "Authorize exact repositories and operations; requires the vault password",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "create_grant",
+      "when": "always"
+     },
+     {
+      "effect": "write_capability_file",
+      "when": "always"
+     },
+     {
+      "effect": "print_mcp_snippet",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "existing_connection",
+     "explicit_repository_scope",
+     "new_grant",
+     "secure_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "grant",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "grant",
    "aliases": [
     "g"
    ],
    "args": [
     {
      "id": "name",
+     "role": "grant",
      "long": null,
      "short": null,
      "aliases": [],
@@ -2278,16 +3048,17 @@ window.MONICA_TEACH = {
      "repeatable": false,
      "takesValue": true,
      "valueNames": [
-      "NAME"
+      "GRANT"
      ],
      "choices": [],
      "choiceAliases": [],
      "ignoreCase": false,
      "defaults": [],
-     "help": "Connection or grant name"
+     "help": "AI authorization name (GRANT), not a connection handle"
     },
     {
      "id": "connection",
+     "role": "connection",
      "long": "connection",
      "short": "c",
      "aliases": [],
@@ -2306,6 +3077,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "repositories",
+     "role": "repositories",
      "long": "repo",
      "short": "r",
      "aliases": [],
@@ -2324,6 +3096,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "operations",
+     "role": "operations",
      "long": "operation",
      "short": null,
      "aliases": [
@@ -2353,6 +3126,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "ttl_minutes",
+     "role": "ttl_minutes",
      "long": "ttl-minutes",
      "short": "t",
      "aliases": [
@@ -2375,6 +3149,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "requests_per_minute",
+     "role": "requests_per_minute",
      "long": "requests-per-minute",
      "short": null,
      "aliases": [
@@ -2397,6 +3172,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "max_calls",
+     "role": "max_calls",
      "long": "max-calls",
      "short": null,
      "aliases": [],
@@ -2413,10 +3189,11 @@ window.MONICA_TEACH = {
      "defaults": [
       "0"
      ],
-     "help": "Upstream calls allowed before `monica refresh` is required; 0 is uncapped"
+     "help": "Upstream calls allowed before `monica renew` is required; 0 is uncapped"
     },
     {
      "id": "approval",
+     "role": "approval",
      "long": "approval",
      "short": null,
      "aliases": [],
@@ -2441,6 +3218,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "out",
+     "role": "new_client_file",
      "long": "out",
      "short": "o",
      "aliases": [],
@@ -2459,6 +3237,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -2488,7 +3267,7 @@ window.MONICA_TEACH = {
    "pitfalls": [
     "-c 和 -r 都是必填；漏 -r 会得到「A required argument is missing」。",
     "--ttl-minutes 1–1440，默认 240；不存在永久授权。",
-    "--max-calls 0 表示不限次，用完就得 refresh。",
+    "--max-calls 0 表示不限次，用完就得 renew。",
     "--out 指向的文件已存在时会拒绝，绝不覆盖。别名 g。"
    ],
    "examples": [
@@ -2496,38 +3275,83 @@ window.MONICA_TEACH = {
      "cmd": "monica grant work2 -c work -r your-org/other --ttl-minutes 60 --max-calls 5 --operation list-issues",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "{\n  \"mcpServers\": {\n    \"work2\": {\n      \"args\": [\n        \"mcp\",\n        \"--client\",\n        \"%LOCALAPPDATA%\\\\MonicaPass\\\\clients\\\\work2.client.json\"\n      ],\n      \"command\": \"<monica-pass>\"\n    }\n  }\n}\nClient capability saved to %LOCALAPPDATA%\\MonicaPass\\clients\\work2.client.json. Add the JSON above to your MCP client."
+     "out": "{\n  \"mcpServers\": {\n    \"work2\": {\n      \"args\": [\n        \"mcp\",\n        \"--client\",\n        \"%LOCALAPPDATA%\\\\MonicaPass\\\\clients\\\\work2.client.json\"\n      ],\n      \"command\": \"<monica-pass>\"\n    }\n  }\n}\nClient capability saved to %LOCALAPPDATA%\\MonicaPass\\clients\\work2.client.json. Add the JSON above to your MCP client.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica grant work3 -c work -r your-org/third --approval write --ttl-minutes 30",
      "note": "--approval write：写操作要先在你终端里点同意。",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Client capability saved to %LOCALAPPDATA%\\MonicaPass\\clients\\work3.client.json. Add the JSON above to your MCP client."
+     "out": "Client capability saved to %LOCALAPPDATA%\\MonicaPass\\clients\\work3.client.json. Add the JSON above to your MCP client.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica grant api-ro -c work --repo '*' --operation api-read --ttl-minutes 30",
      "note": "服务级 API 只读：必须 --repo '*'，且不能和仓库类操作混在同一条。",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Grant  Handle  Scope  Operations  Expires           Calls      Gate\napi-ro  work    *      api_read    2026-09-23 09:57  unlimited  off"
+     "out": "Grant  Handle  Scope  Operations  Expires           Calls      Gate\napi-ro  work    *      api_read    2026-09-23 09:57  unlimited  off",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
   {
-   "key": "refresh",
+   "key": "renew",
    "path": [
-    "refresh"
+    "renew"
    ],
-   "name": "refresh",
+   "name": "renew",
    "parent": "",
    "summary": "Re-authorize a grant with a fresh capability; the old one stops working",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "rotate_capability",
+      "when": "always"
+     },
+     {
+      "effect": "reset_grant_window_and_budget",
+      "when": "always"
+     },
+     {
+      "effect": "write_capability_file",
+      "when": "always"
+     },
+     {
+      "effect": "print_mcp_snippet",
+      "when": "always"
+     },
+     {
+      "effect": "change_approval_policy",
+      "when": "--approval"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "existing_grant",
+     "secure_password_input"
+    ],
+    "retry": "not_idempotent_rotates_capability",
+    "schema_version": 1,
+    "target": "grant",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "refresh",
    "aliases": [
+    "refresh",
     "rf"
    ],
    "args": [
     {
      "id": "name",
+     "role": "grant",
      "long": null,
      "short": null,
      "aliases": [],
@@ -2536,16 +3360,17 @@ window.MONICA_TEACH = {
      "repeatable": false,
      "takesValue": true,
      "valueNames": [
-      "NAME"
+      "GRANT"
      ],
      "choices": [],
      "choiceAliases": [],
      "ignoreCase": false,
      "defaults": [],
-     "help": "Connection or grant name"
+     "help": "AI authorization name (GRANT), not a connection handle"
     },
     {
      "id": "window",
+     "role": "window",
      "long": "ttl-minutes",
      "short": "t",
      "aliases": [
@@ -2566,6 +3391,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "call_cap",
+     "role": "call_cap",
      "long": "max-calls",
      "short": null,
      "aliases": [],
@@ -2584,6 +3410,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "approval",
+     "role": "approval",
      "long": "approval",
      "short": null,
      "aliases": [],
@@ -2606,6 +3433,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -2634,19 +3462,30 @@ window.MONICA_TEACH = {
    "handAuthored": false,
    "pitfalls": [
     "客户端文件路径不变，值已换：常驻的 MCP 桥必须重启才读得到新值。",
-    "省略 --ttl-minutes / --max-calls 会沿用上一份的窗口和次数，不会悄悄放宽。别名 rf。"
+    "省略 --ttl-minutes / --max-calls 会沿用上一份的窗口和次数，不会悄悄放宽。别名 rf。",
+    "续期会停止代理并轮换 capability；请重启 MCP、重新 serve。JSON command 仍为 refresh。"
    ],
    "examples": [
     {
-     "cmd": "monica refresh work2",
+     "cmd": "monica renew review-agent --json --secrets-stdin",
+     "note": "只注入主密码，旧 capability 失效，服务 Token 不变。",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Re-authorized 'work2' with a new capability. Restart its MCP client to load it."
+     "capturedAt": "2026-09-28",
+     "out": "{\"command\":\"refresh\",\"data\":{\"client_file\":\"%TEMP%/MonicaGuide\\\\clients\\\\review-agent.client.json\",\"mcp\":{\"mcpServers\":{\"review-agent\":{\"args\":[\"mcp\",\"--client\",\"%TEMP%/MonicaGuide\\\\clients\\\\review-agent.client.json\"],\"command\":\"<monica-pass>\"}}},\"name\":\"review-agent\"},\"ok\":true}"
     },
     {
-     "cmd": "monica refresh nope",
+     "cmd": "monica renew work2",
+     "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "monica-pass: The requested local configuration, connection or grant does not exist."
+     "out": "Re-authorized 'work2' with a new capability. Restart its MCP client to load it.",
+     "capturedAt": "此前版本快照"
+    },
+    {
+     "cmd": "monica renew nope",
+     "tested": true,
+     "out": "monica-pass: The requested local configuration, connection or grant does not exist.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -2658,6 +3497,25 @@ window.MONICA_TEACH = {
    "name": "revoke",
    "parent": "",
    "summary": "Revoke a grant so subsequent calls are denied",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "revoke_grant",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "existing_grant"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "grant",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "revoke",
    "aliases": [
     "rv",
     "x"
@@ -2665,6 +3523,7 @@ window.MONICA_TEACH = {
    "args": [
     {
      "id": "name",
+     "role": "grant",
      "long": null,
      "short": null,
      "aliases": [],
@@ -2673,16 +3532,17 @@ window.MONICA_TEACH = {
      "repeatable": false,
      "takesValue": true,
      "valueNames": [
-      "NAME"
+      "GRANT"
      ],
      "choices": [],
      "choiceAliases": [],
      "ignoreCase": false,
      "defaults": [],
-     "help": "Connection or grant name"
+     "help": "AI authorization name (GRANT), not a connection handle"
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -2714,31 +3574,57 @@ window.MONICA_TEACH = {
     {
      "cmd": "monica revoke work3",
      "tested": true,
-     "out": "Revoked grant 'work3'. Its client capability no longer authorizes calls."
+     "out": "Revoked grant 'work3'. Its client capability no longer authorizes calls.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica revoke work3",
      "note": "再撤一次会说什么。",
      "tested": true,
-     "out": "monica-pass: The requested local configuration, connection or grant does not exist."
+     "out": "monica-pass: The requested local configuration, connection or grant does not exist.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
   {
-   "key": "settings",
+   "key": "mcp-config",
    "path": [
-    "settings"
+    "mcp-config"
    ],
-   "name": "settings",
+   "name": "mcp-config",
    "parent": "",
    "summary": "Print and save MCP settings for an existing grant, selected by name",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "write_mcp_snippet",
+      "when": "always"
+     },
+     {
+      "effect": "merge_client_config",
+      "when": "--install"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "existing_grant"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "grant",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "settings",
    "aliases": [
-    "m",
-    "mcp-config"
+    "settings",
+    "m"
    ],
    "args": [
     {
      "id": "name",
+     "role": "grant",
      "long": null,
      "short": null,
      "aliases": [],
@@ -2747,16 +3633,17 @@ window.MONICA_TEACH = {
      "repeatable": false,
      "takesValue": true,
      "valueNames": [
-      "NAME"
+      "GRANT"
      ],
      "choices": [],
      "choiceAliases": [],
      "ignoreCase": false,
      "defaults": [],
-     "help": "Connection or grant name"
+     "help": "AI authorization name (GRANT), not a connection handle"
     },
     {
      "id": "install",
+     "role": "client",
      "long": "install",
      "short": null,
      "aliases": [],
@@ -2780,6 +3667,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -2807,40 +3695,53 @@ window.MONICA_TEACH = {
    "pitfalls": [
     "写进客户端配置的只有可执行文件路径和 mcp --client <文件>；Token、主密码、capability 都不进。",
     "Claude Desktop 不在 --install 列表里：它的应用数据目录随平台不同，仍然手工粘贴。",
-    "授权名不存在时先报错，不会去动客户端文件。别名 m / mcp-config。"
+    "授权名不存在时先报错，不会去动客户端文件。兼容别名 settings / m。",
+    "参数是 GRANT：它保存 MCP 片段，带 --install 才写客户端配置；JSON command 仍为 settings。"
    ],
    "examples": [
     {
-     "cmd": "monica settings work",
+     "cmd": "monica mcp-config review-agent --install codex --json",
+     "note": "合并安装到一次性测试目录中的 Codex 配置。",
      "tested": true,
-     "out": "{\n  \"mcpServers\": {\n    \"work\": {\n      \"args\": [\n        \"mcp\",\n        \"--client\",\n        \"%LOCALAPPDATA%\\\\MonicaPass\\\\clients\\\\work.client.json\"\n      ],\n      \"command\": \"<monica-pass>\"\n    }\n  }\n}\nMCP settings saved to %LOCALAPPDATA%\\MonicaPass\\clients\\work.client.mcp.json"
+     "capturedAt": "2026-09-28",
+     "out": "{\"command\":\"settings\",\"data\":{\"client_file\":\"%TEMP%/MonicaGuide\\\\clients\\\\review-agent.client.json\",\"install\":{\"backup\":null,\"changed\":true,\"client\":\"codex\",\"file\":\"%TEMP%/MonicaGuide\\\\.codex\\\\config.toml\"},\"mcp\":{\"mcpServers\":{\"review-agent\":{\"args\":[\"mcp\",\"--client\",\"%TEMP%/MonicaGuide\\\\clients\\\\review-agent.client.json\"],\"command\":\"<monica-pass>\"}}},\"name\":\"review-agent\",\"settings_file\":\"%TEMP%/MonicaGuide\\\\clients\\\\review-agent.client.mcp.json\"},\"ok\":true}"
     },
     {
-     "cmd": "monica settings work2 --install claude",
+     "cmd": "monica mcp-config work",
+     "tested": true,
+     "out": "{\n  \"mcpServers\": {\n    \"work\": {\n      \"args\": [\n        \"mcp\",\n        \"--client\",\n        \"%LOCALAPPDATA%\\\\MonicaPass\\\\clients\\\\work.client.json\"\n      ],\n      \"command\": \"<monica-pass>\"\n    }\n  }\n}\nMCP settings saved to %LOCALAPPDATA%\\MonicaPass\\clients\\work.client.mcp.json",
+     "capturedAt": "此前版本快照"
+    },
+    {
+     "cmd": "monica mcp-config work2 --install claude",
      "note": "JSON 走标准输出，三行说明走标准错误；原文件先备份。",
      "tested": true,
-     "out": "MCP settings saved to %LOCALAPPDATA%\\MonicaPass\\clients\\work2.client.mcp.json\nWritten into the claude configuration at ~/home\\.claude.json"
+     "out": "MCP settings saved to %LOCALAPPDATA%\\MonicaPass\\clients\\work2.client.mcp.json\nWritten into the claude configuration at ~/home\\.claude.json",
+     "capturedAt": "此前版本快照"
     },
     {
-     "cmd": "monica settings work2 --install claude",
-     "note": "同一条命令再跑一次：不写盘、不产生新备份。",
+     "cmd": "monica mcp-config work2 --install claude",
+     "note": "同一条命令再跑一次：AI 客户端文件保持不变，不产生新备份；Monica 配置片段仍会保存。",
      "tested": true,
-     "out": "MCP settings saved to %LOCALAPPDATA%\\MonicaPass\\clients\\work2.client.mcp.json\nclaude already carried exactly this entry, so its file was left alone"
+     "out": "MCP settings saved to %LOCALAPPDATA%\\MonicaPass\\clients\\work2.client.mcp.json\nclaude already carried exactly this entry, so its file was left alone",
+     "capturedAt": "此前版本快照"
     },
     {
-     "cmd": "monica settings work --install codex --lang zh-CN",
+     "cmd": "monica mcp-config work --install codex --lang zh-CN",
      "note": "Codex 写的是 TOML 的 [mcp_servers.<授权名>]。",
      "tested": true,
-     "out": "MCP 配置已保存到 %LOCALAPPDATA%\\MonicaPass\\clients\\work.client.mcp.json\n已写入 codex 配置：~/home\\.codex\\config.toml\n原文件已备份至 ~/home\\.codex\\config.toml.monica-1790107899-0"
+     "out": "MCP 配置已保存到 %LOCALAPPDATA%\\MonicaPass\\clients\\work.client.mcp.json\n已写入 codex 配置：~/home\\.codex\\config.toml\n原文件已备份至 ~/home\\.codex\\config.toml.monica-1790107899-0",
+     "capturedAt": "此前版本快照"
     },
     {
-     "cmd": "monica settings work --install cursor",
+     "cmd": "monica mcp-config work --install cursor",
      "note": "客户端文件读不回来时原样退回，一个字节都不碰。",
      "tested": true,
-     "out": "monica-pass: The AI client's own configuration file is missing its expected shape, oversized or unreadable, so nothing was written to it. Add the printed MCP entry to that file by hand instead."
+     "out": "monica-pass: The AI client's own configuration file is missing its expected shape, oversized or unreadable, so nothing was written to it. Add the printed MCP entry to that file by hand instead.",
+     "capturedAt": "此前版本快照"
     },
     {
-     "cmd": "monica settings work --install vscode",
+     "cmd": "monica mcp-config work --install vscode",
      "tested": false,
      "reason": "写法是 ~/.vscode/mcp.json 的 servers 键，本机没有验证过合并结果。"
     }
@@ -2854,6 +3755,30 @@ window.MONICA_TEACH = {
    "name": "check",
    "parent": "",
    "summary": "Check authenticated MCP discovery using a grant name or --client file",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "authenticated_discovery",
+      "when": "always"
+     },
+     {
+      "effect": "consume_rate_limit",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "existing_grant_or_client_file",
+     "unlocked_broker",
+     "usable_grant"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "grant_or_client_file",
+    "trust_boundary": "grant_scoped_broker"
+   },
+   "executionCommand": "check",
    "aliases": [
     "ck",
     "p"
@@ -2861,6 +3786,7 @@ window.MONICA_TEACH = {
    "args": [
     {
      "id": "name",
+     "role": "grant_or_client_file",
      "long": null,
      "short": null,
      "aliases": [],
@@ -2869,16 +3795,17 @@ window.MONICA_TEACH = {
      "repeatable": false,
      "takesValue": true,
      "valueNames": [
-      "NAME"
+      "GRANT"
      ],
      "choices": [],
      "choiceAliases": [],
      "ignoreCase": false,
      "defaults": [],
-     "help": "Connection or grant name"
+     "help": "AI authorization name (GRANT), not a connection handle"
     },
     {
      "id": "client",
+     "role": "client_file",
      "long": "client",
      "short": "c",
      "aliases": [],
@@ -2897,6 +3824,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -2938,18 +3866,21 @@ window.MONICA_TEACH = {
      "cmd": "monica check work2",
      "note": "需要网关在跑。",
      "tested": true,
-     "out": "{\n  \"ok\": true,\n  \"tools\": [\n    {\n      \"annotations\": {\"destructiveHint\": false, \"idempotentHint\": true, \"openWorldHint\": true, \"readOnlyHint\": true},\n      \"description\": \"List issues in an authorized repository. Pull requests are excluded.\",\n      \"inputSchema\": {\"properties\": {\"connection\": {\"enum\": [\"work\"], \"type\": \"string\"}, \"repository\": {\"enum\": [\"your-org/other\"], \"type\": \"string\"}, \"page\": {\"default\": 1}, \"per_page\": {\"default\": 20}}, \"title\": \"ListIssuesArgs\"},\n      \"name\": \"github_list_issues\"\n    },\n    { \"name\": \"monica_list_connections\", \"description\": \"List the connection available to this client: …\" }\n  ]\n}"
+     "out": "{\n  \"ok\": true,\n  \"tools\": [\n    {\n      \"annotations\": {\"destructiveHint\": false, \"idempotentHint\": true, \"openWorldHint\": true, \"readOnlyHint\": true},\n      \"description\": \"List issues in an authorized repository. Pull requests are excluded.\",\n      \"inputSchema\": {\"properties\": {\"connection\": {\"enum\": [\"work\"], \"type\": \"string\"}, \"repository\": {\"enum\": [\"your-org/other\"], \"type\": \"string\"}, \"page\": {\"default\": 1}, \"per_page\": {\"default\": 20}}, \"title\": \"ListIssuesArgs\"},\n      \"name\": \"github_list_issues\"\n    },\n    { \"name\": \"monica_list_connections\", \"description\": \"List the connection available to this client: …\" }\n  ]\n}",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica check --client %LOCALAPPDATA%\\MonicaPass\\clients\\work.client.json",
      "note": "网关没跑时的答案。",
      "tested": true,
-     "out": "monica-pass: Start and unlock the broker in the TUI or a trusted local CLI process."
+     "out": "monica-pass: Start and unlock the broker in the TUI or a trusted local CLI process.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica check nope",
      "tested": true,
-     "out": "{\"command\":\"check\",\"error\":{\"code\":\"not_found\",\"message\":\"The requested local configuration, connection or grant does not exist.\"},\"ok\":false}"
+     "out": "{\"command\":\"check\",\"error\":{\"code\":\"not_found\",\"message\":\"The requested local configuration, connection or grant does not exist.\"},\"ok\":false}",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -2961,10 +3892,49 @@ window.MONICA_TEACH = {
    "name": "call",
    "parent": "",
    "summary": "Execute a public ToolCall JSON file through an unlocked authorized broker",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "consume_rate_limit",
+      "when": "always"
+     },
+     {
+      "effect": "consume_call_budget",
+      "when": "upstream_operation"
+     },
+     {
+      "effect": "upstream_request",
+      "when": "upstream_operation"
+     },
+     {
+      "effect": "upstream_write",
+      "when": "write_operation"
+     },
+     {
+      "effect": "write_receipt",
+      "when": "write_operation"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "existing_grant",
+     "public_tool_call_file",
+     "unlocked_broker",
+     "usable_grant",
+     "allowed_operation_and_scope"
+    ],
+    "retry": "same_request_id_for_same_write_inspect_unknown_outcome",
+    "schema_version": 1,
+    "target": "grant",
+    "trust_boundary": "grant_scoped_broker"
+   },
+   "executionCommand": "call",
    "aliases": [],
    "args": [
     {
      "id": "name",
+     "role": "grant",
      "long": null,
      "short": null,
      "aliases": [],
@@ -2973,16 +3943,17 @@ window.MONICA_TEACH = {
      "repeatable": false,
      "takesValue": true,
      "valueNames": [
-      "NAME"
+      "GRANT"
      ],
      "choices": [],
      "choiceAliases": [],
      "ignoreCase": false,
      "defaults": [],
-     "help": "Connection or grant name"
+     "help": "AI authorization name (GRANT), not a connection handle"
     },
     {
      "id": "request",
+     "role": "json_file",
      "long": "request",
      "short": null,
      "aliases": [],
@@ -3001,6 +3972,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -3035,13 +4007,15 @@ window.MONICA_TEACH = {
      "cmd": "monica call work2 --request req.json",
      "note": "req.json 里是公开的 ToolCall：{\"tool\":\"github_list_issues\",\"arguments\":{\"repository\":\"your-org/other\"}}，没有凭据。",
      "tested": true,
-     "out": "monica-pass: The upstream service rejected the request. Check the account permissions."
+     "out": "monica-pass: The upstream service rejected the request. Check the account permissions.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica call work2 --request bad.json",
      "note": "工具名写错（list_issues 而不是 github_list_issues）。",
      "tested": true,
-     "out": "monica-pass: This operation or repository is not permitted by the grant."
+     "out": "monica-pass: This operation or repository is not permitted by the grant.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -3053,10 +4027,29 @@ window.MONICA_TEACH = {
    "name": "audit",
    "parent": "",
    "summary": "Read the local gateway audit trail: which grant ran which operation, and how it ended",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "read_audit_trail",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault"
+    ],
+    "retry": "repeatable_read",
+    "schema_version": 1,
+    "target": "grant",
+    "trust_boundary": "public_local_inspection"
+   },
+   "executionCommand": "audit",
    "aliases": [],
    "args": [
     {
      "id": "grant",
+     "role": "grant",
      "long": "grant",
      "short": null,
      "aliases": [],
@@ -3071,10 +4064,11 @@ window.MONICA_TEACH = {
      "choiceAliases": [],
      "ignoreCase": false,
      "defaults": [],
-     "help": "Restrict the trail to one grant name"
+     "help": "AI authorization name (GRANT), not a connection handle"
     },
     {
      "id": "limit",
+     "role": "limit",
      "long": "limit",
      "short": null,
      "aliases": [],
@@ -3095,6 +4089,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -3127,18 +4122,21 @@ window.MONICA_TEACH = {
     {
      "cmd": "monica audit",
      "tested": true,
-     "out": "Time            Grant  Operation    Scope           Stage       Result\n09-23 09:20:24  work2  —            —               finished    permission_denied\n09-23 09:20:23  work2  list_issues  your-org/other  finished    upstream_rejected\n09-23 09:20:23  work2  list_issues  your-org/other  authorized  pending\n09-23 09:18:49  work2  —            —               finished    permission_denied"
+     "out": "Time            Grant  Operation    Scope           Stage       Result\n09-23 09:20:24  work2  —            —               finished    permission_denied\n09-23 09:20:23  work2  list_issues  your-org/other  finished    upstream_rejected\n09-23 09:20:23  work2  list_issues  your-org/other  authorized  pending\n09-23 09:18:49  work2  —            —               finished    permission_denied",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica audit",
      "note": "还没有任何调用时。",
      "tested": true,
-     "out": "No gateway audit events yet. The trail starts once an AI request is served.\n%LOCALAPPDATA%\\MonicaPass\\gateway.audit.jsonl"
+     "out": "No gateway audit events yet. The trail starts once an AI request is served.\n%LOCALAPPDATA%\\MonicaPass\\gateway.audit.jsonl",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica audit --grant work2 --limit 3",
      "tested": true,
-     "out": "Time            Grant  Operation    Scope           Stage       Result\n09-23 09:20:24  work2  —            —               finished    permission_denied\n09-23 09:20:23  work2  list_issues  your-org/other  finished    upstream_rejected\n09-23 09:20:23  work2  list_issues  your-org/other  authorized  pending\nOlder events not shown: 1."
+     "out": "Time            Grant  Operation    Scope           Stage       Result\n09-23 09:20:24  work2  —            —               finished    permission_denied\n09-23 09:20:23  work2  list_issues  your-org/other  finished    upstream_rejected\n09-23 09:20:23  work2  list_issues  your-org/other  authorized  pending\nOlder events not shown: 1.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -3150,10 +4148,35 @@ window.MONICA_TEACH = {
    "name": "mcp",
    "parent": "",
    "summary": "Start the AI-facing MCP stdio bridge; never prompts for service credentials",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "mcp_stdio",
+      "when": "always"
+     },
+     {
+      "effect": "scoped_broker_operation",
+      "when": "authorized_tool_call"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "readable_client_file",
+     "unlocked_broker_for_calls",
+     "usable_grant_for_calls"
+    ],
+    "retry": "same_request_id_for_same_write_inspect_unknown_outcome",
+    "schema_version": 1,
+    "target": "client_file",
+    "trust_boundary": "grant_scoped_broker"
+   },
+   "executionCommand": "mcp",
    "aliases": [],
    "args": [
     {
      "id": "client",
+     "role": "client_file",
      "long": "client",
      "short": "c",
      "aliases": [],
@@ -3172,6 +4195,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -3199,14 +4223,15 @@ window.MONICA_TEACH = {
    "pitfalls": [
     "它没有 --json：MCP 有自己的协议，stdout 只能放 JSON-RPC。",
     "桥只认一个客户端文件，也就只绑一份授权；要多个连接就是多个条目。",
-    "每次 refresh 之后要重启这个桥进程。"
+    "每次 renew 之后要重启这个桥进程。"
    ],
    "examples": [
     {
      "cmd": "monica mcp --client %LOCALAPPDATA%\\MonicaPass\\clients\\work2.client.json",
      "note": "stdin 收 initialize，stdout 回一条 JSON-RPC（这里只留首行的骨架）。",
      "tested": true,
-     "out": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"monica-pass\",\"version\":\"0.5.0\"},\"instructions\":\"Use monica_list_connections to learn the authorized connection name, public purpose note and available tools. … Reuse request_id after any interrupted write; an unknown outcome needs manual inspection. Every authorization is time-boxed and may be capped in calls, so it is never a permanent permission: on reauthorization_required, stop and ask a person to run `monica refresh <grant>` locally and restart this bridge; do not retry or attempt to widen the grant.\"}}"
+     "out": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"monica-pass\",\"version\":\"0.5.0\"},\"instructions\":\"Use monica_list_connections to learn the authorized connection name, public purpose note and available tools. … Reuse request_id after any interrupted write; an unknown outcome needs manual inspection. Every authorization is time-boxed and may be capped in calls, so it is never a permanent permission: on reauthorization_required, stop and ask a person to run `monica refresh <grant>` locally and restart this bridge; do not retry or attempt to widen the grant.\"}}",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -3218,12 +4243,40 @@ window.MONICA_TEACH = {
    "name": "library",
    "parent": "",
    "summary": "Browse database categories and entry summaries after unlocking",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "read_vault_metadata",
+      "when": "always"
+     },
+     {
+      "effect": "restore_android_root",
+      "when": "android_root_missing"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "secure_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "vault",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "library",
    "aliases": [
     "tree"
    ],
    "args": [
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -3251,14 +4304,16 @@ window.MONICA_TEACH = {
    "whenToUse": "要找 category / move / delete 用的 ID。",
    "handAuthored": false,
    "pitfalls": [
-    "要密码：它读的是加密库内部。别名 tree。"
+    "要密码：它读的是加密库内部。别名 tree。",
+    "列表保留未知类型和未来版本的原生身份。本人在 TUI 按 Enter 验证主密码后查看完整字段，默认隐藏；JSON 列表和 MCP 不提供通用 payload。"
    ],
    "examples": [
     {
      "cmd": "monica library",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Item                       ID                                    Type\nMonica                     d6e718ab-9dc6-3001-a530-b83780a390c2\nMonica Credential Gateway  d8b441b6-3d97-4a67-9b3f-9c82be798562\n    GitHub 工作跟踪        8922353f-150b-47a7-9a75-d440c1152218  api-token\n    support                9e299c1a-8a44-41f6-b066-78f8d3001102  api-token\nMonica Keys                e47dc871-b1e0-4ca5-bb66-93fe8c099039\n工作项归档                 9f81cdb0-02bf-494d-8f96-2f8e96e38621\n    备用密钥               1006f125-52ed-3101-a9db-6696d9e547a7  login"
+     "out": "Item                       ID                                    Type\nMonica                     d6e718ab-9dc6-3001-a530-b83780a390c2\nMonica Credential Gateway  d8b441b6-3d97-4a67-9b3f-9c82be798562\n    GitHub 工作跟踪        8922353f-150b-47a7-9a75-d440c1152218  api-token\n    support                9e299c1a-8a44-41f6-b066-78f8d3001102  api-token\nMonica Keys                e47dc871-b1e0-4ca5-bb66-93fe8c099039\n工作项归档                 9f81cdb0-02bf-494d-8f96-2f8e96e38621\n    备用密钥               1006f125-52ed-3101-a9db-6696d9e547a7  login",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -3270,12 +4325,36 @@ window.MONICA_TEACH = {
    "name": "category",
    "parent": "",
    "summary": "Create a native MDBX category; optionally nest it under a category ID",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "write_vault",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "secure_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "new_category",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "category",
    "aliases": [
     "mkdir"
    ],
    "args": [
     {
      "id": "title",
+     "role": "title",
      "long": null,
      "short": null,
      "aliases": [],
@@ -3294,6 +4373,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "parent",
+     "role": "category_id",
      "long": "parent",
      "short": null,
      "aliases": [],
@@ -3302,7 +4382,7 @@ window.MONICA_TEACH = {
      "repeatable": false,
      "takesValue": true,
      "valueNames": [
-      "PARENT"
+      "CATEGORY_ID"
      ],
      "choices": [],
      "choiceAliases": [],
@@ -3312,6 +4392,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -3346,19 +4427,22 @@ window.MONICA_TEACH = {
      "cmd": "monica category 工作项归档",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Created category '工作项归档' · 9f81cdb0-02bf-494d-8f96-2f8e96e38621."
+     "out": "Created category '工作项归档' · 9f81cdb0-02bf-494d-8f96-2f8e96e38621.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica category 子分类 --parent 9f81cdb0-02bf-494d-8f96-2f8e96e38621",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Created category '子分类' · 0d844b31-78f6-4437-bfd0-49afeb53b3de."
+     "out": "Created category '子分类' · 0d844b31-78f6-4437-bfd0-49afeb53b3de.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica category 待删 --json",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "{\"command\":\"category\",\"data\":{\"id\":\"bc099392-d9f4-4581-b267-cd92b070f461\",\"parent\":null,\"title\":\"待删\"},\"ok\":true}"
+     "out": "{\"command\":\"category\",\"data\":{\"id\":\"bc099392-d9f4-4581-b267-cd92b070f461\",\"parent\":null,\"title\":\"待删\"},\"ok\":true}",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -3370,10 +4454,35 @@ window.MONICA_TEACH = {
    "name": "rename-category",
    "parent": "",
    "summary": "Rename a native MDBX category by its stable ID",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "write_vault",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "existing_category",
+     "secure_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "category_id",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "rename-category",
    "aliases": [],
    "args": [
     {
      "id": "id",
+     "role": "category_id",
      "long": null,
      "short": null,
      "aliases": [],
@@ -3382,7 +4491,7 @@ window.MONICA_TEACH = {
      "repeatable": false,
      "takesValue": true,
      "valueNames": [
-      "ID"
+      "CATEGORY_ID"
      ],
      "choices": [],
      "choiceAliases": [],
@@ -3392,6 +4501,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "title",
+     "role": "title",
      "long": null,
      "short": null,
      "aliases": [],
@@ -3410,6 +4520,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -3444,7 +4555,8 @@ window.MONICA_TEACH = {
      "cmd": "monica rename-category 9f81cdb0-02bf-494d-8f96-2f8e96e38621 工作项归档",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Category 9f81cdb0-02bf-494d-8f96-2f8e96e38621 is now titled '工作项归档'."
+     "out": "Category 9f81cdb0-02bf-494d-8f96-2f8e96e38621 is now titled '工作项归档'.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -3456,10 +4568,35 @@ window.MONICA_TEACH = {
    "name": "rename-entry",
    "parent": "",
    "summary": "Rename an entry's display title by its connection handle; Chinese is allowed",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "write_public_metadata",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "existing_connection",
+     "secure_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "connection",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "rename-entry",
    "aliases": [],
    "args": [
     {
      "id": "name",
+     "role": "connection",
      "long": null,
      "short": null,
      "aliases": [],
@@ -3468,16 +4605,17 @@ window.MONICA_TEACH = {
      "repeatable": false,
      "takesValue": true,
      "valueNames": [
-      "NAME"
+      "CONNECTION"
      ],
      "choices": [],
      "choiceAliases": [],
      "ignoreCase": false,
      "defaults": [],
-     "help": "Connection or grant name"
+     "help": "Connection handle (CONNECTION); add also creates a grant with this name"
     },
     {
      "id": "title",
+     "role": "title",
      "long": null,
      "short": null,
      "aliases": [],
@@ -3496,6 +4634,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -3530,7 +4669,8 @@ window.MONICA_TEACH = {
      "cmd": "monica rename-entry work \"GitHub 工作跟踪\"",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Entry 'work' is now titled 'GitHub 工作跟踪'."
+     "out": "Entry 'work' is now titled 'GitHub 工作跟踪'.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -3542,12 +4682,39 @@ window.MONICA_TEACH = {
    "name": "move",
    "parent": "",
    "summary": "Move an entry or category into another category by ID",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "write_vault",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "existing_source_and_target_category",
+     "unprotected_source",
+     "compatible_adapter_for_entry",
+     "secure_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "entry_or_category_id",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "move",
    "aliases": [
     "mv"
    ],
    "args": [
     {
      "id": "id",
+     "role": "entry_or_category_id",
      "long": null,
      "short": null,
      "aliases": [],
@@ -3556,7 +4723,7 @@ window.MONICA_TEACH = {
      "repeatable": false,
      "takesValue": true,
      "valueNames": [
-      "ID"
+      "ENTRY_OR_CATEGORY_ID"
      ],
      "choices": [],
      "choiceAliases": [],
@@ -3566,6 +4733,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "target",
+     "role": "category_id",
      "long": null,
      "short": null,
      "aliases": [],
@@ -3574,16 +4742,17 @@ window.MONICA_TEACH = {
      "repeatable": false,
      "takesValue": true,
      "valueNames": [
-      "TARGET"
+      "CATEGORY_ID"
      ],
      "choices": [],
      "choiceAliases": [],
      "ignoreCase": false,
      "defaults": [],
-     "help": "Connection name, or the entry ID shown by monica-pass library"
+     "help": "Destination category ID from library"
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -3611,7 +4780,8 @@ window.MONICA_TEACH = {
    "whenToUse": "重建目录结构。",
    "handAuthored": false,
    "pitfalls": [
-    "Token 类型和条目身份会随条目一起保留，不会搬一次就变成另一种凭据。别名 mv。"
+    "Token 类型和条目身份会随条目一起保留，不会搬一次就变成另一种凭据。别名 mv。",
+    "普通项目移动只接受已知且受支持版本的 Adapter；未知类型或未来版本返回 object_read_only，保持原样。"
    ],
    "examples": [
     {
@@ -3619,7 +4789,8 @@ window.MONICA_TEACH = {
      "note": "两个 ID 都来自 library。",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Moved '1006f125-52ed-3101-a9db-6696d9e547a7' into category 9f81cdb0-02bf-494d-8f96-2f8e96e38621."
+     "out": "Moved '1006f125-52ed-3101-a9db-6696d9e547a7' into category 9f81cdb0-02bf-494d-8f96-2f8e96e38621.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -3631,12 +4802,38 @@ window.MONICA_TEACH = {
    "name": "delete-category",
    "parent": "",
    "summary": "Remove an empty native category by ID; contents are never deleted with it",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "delete_category",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "empty_unprotected_category",
+     "verified_target_and_confirmation_or_force",
+     "secure_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "category_id",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "delete-category",
    "aliases": [
     "rmdir"
    ],
    "args": [
     {
      "id": "category_id",
+     "role": "category_id",
      "long": null,
      "short": null,
      "aliases": [],
@@ -3645,7 +4842,7 @@ window.MONICA_TEACH = {
      "repeatable": false,
      "takesValue": true,
      "valueNames": [
-      "category_id"
+      "CATEGORY_ID"
      ],
      "choices": [],
      "choiceAliases": [],
@@ -3655,6 +4852,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "force_delete",
+     "role": null,
      "long": "force",
      "short": null,
      "aliases": [],
@@ -3675,6 +4873,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -3710,14 +4909,16 @@ window.MONICA_TEACH = {
      "note": "里面还有子分类。",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "'二级父' still holds 0 entry(s) and 1 subcategory(s). Move them out first; nothing was deleted.\nmonica-pass: The request is invalid or contains unsupported fields."
+     "out": "'二级父' still holds 0 entry(s) and 1 subcategory(s). Move them out first; nothing was deleted.\nmonica-pass: The request is invalid or contains unsupported fields.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica delete-category bc099392-d9f4-4581-b267-cd92b070f461 --force",
      "note": "空的那个。",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Deleted 'bc099392-d9f4-4581-b267-cd92b070f461'. A tombstone reaches your other devices at the next sync; the encrypted bytes stay in this vault file."
+     "out": "Deleted 'bc099392-d9f4-4581-b267-cd92b070f461'. A tombstone reaches your other devices at the next sync; the encrypted bytes stay in this vault file.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -3729,12 +4930,40 @@ window.MONICA_TEACH = {
    "name": "keys",
    "parent": "",
    "summary": "Manage SSH and GPG key entries; bare keys lists them",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "read_vault_metadata",
+      "when": "always"
+     },
+     {
+      "effect": "restore_android_root",
+      "when": "android_root_missing"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "secure_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "vault",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "keys",
    "aliases": [
     "k"
    ],
    "args": [
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -3769,12 +4998,14 @@ window.MONICA_TEACH = {
      "cmd": "monica keys",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "No key entries yet."
+     "out": "No key entries yet.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica keys",
      "tested": true,
-     "out": "Key        Type  Algorithm    Fingerprint                                         Private\nboth-keys  GPG   EDDSA        854DDA2F9D15D151F5385347A2E0F46642EEA348            yes\nteach-gpg  GPG   EDDSA        854DDA2F9D15D151F5385347A2E0F46642EEA348            no\n备用密钥   SSH   ED25519 256  SHA256:CFM+xkhSeImJEplW+LgQR6DTPBjpoKXqNMHdspcZzIo  yes"
+     "out": "Key        Type  Algorithm    Fingerprint                                         Private\nboth-keys  GPG   EDDSA        854DDA2F9D15D151F5385347A2E0F46642EEA348            yes\nteach-gpg  GPG   EDDSA        854DDA2F9D15D151F5385347A2E0F46642EEA348            no\n备用密钥   SSH   ED25519 256  SHA256:CFM+xkhSeImJEplW+LgQR6DTPBjpoKXqNMHdspcZzIo  yes",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -3787,10 +5018,35 @@ window.MONICA_TEACH = {
    "name": "ssh",
    "parent": "keys",
    "summary": "Generate an OpenSSH key or import a private PEM file",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "write_vault",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "supported_key_material",
+     "secure_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "new_key_entry",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "keys ssh",
    "aliases": [],
    "args": [
     {
      "id": "key_name",
+     "role": "name",
      "long": null,
      "short": null,
      "aliases": [],
@@ -3809,6 +5065,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "generate",
+     "role": "generate",
      "long": "generate",
      "short": null,
      "aliases": [],
@@ -3827,6 +5084,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "private_key",
+     "role": "file",
      "long": "private-key",
      "short": null,
      "aliases": [],
@@ -3845,6 +5103,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "comment",
+     "role": "comment",
      "long": "comment",
      "short": null,
      "aliases": [],
@@ -3863,6 +5122,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "category",
+     "role": "category",
      "long": "category",
      "short": null,
      "aliases": [],
@@ -3881,6 +5141,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "purpose",
+     "role": "purpose",
      "long": "note",
      "short": "n",
      "aliases": [],
@@ -3901,6 +5162,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -3943,14 +5205,16 @@ window.MONICA_TEACH = {
      "cmd": "monica keys ssh demo-key --generate ed25519",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Saved key 'demo-key' · SHA256:CFM+xkhSeImJEplW+LgQR6DTPBjpoKXqNMHdspcZzIo. The key material stays in the encrypted vault and is never disclosed to AI."
+     "out": "Saved key 'demo-key' · SHA256:CFM+xkhSeImJEplW+LgQR6DTPBjpoKXqNMHdspcZzIo. The key material stays in the encrypted vault and is never disclosed to AI.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica keys ssh rsa-key --generate rsa",
      "note": "rsa 现在是 3072 位；要别的长度写 rsa2048 / rsa3072 / rsa4096。",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Saved key 'rsa-key' · SHA256:wvrMh4SOb51yh7a84xIjiY5imJmyt3MxRHxrLPp7y3A. The key material stays in the encrypted vault and is never disclosed to AI."
+     "out": "Saved key 'rsa-key' · SHA256:wvrMh4SOb51yh7a84xIjiY5imJmyt3MxRHxrLPp7y3A. The key material stays in the encrypted vault and is never disclosed to AI.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -3963,10 +5227,35 @@ window.MONICA_TEACH = {
    "name": "gpg",
    "parent": "keys",
    "summary": "Import OpenPGP v4 ASCII armor, public certificate and optional secret ring",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "write_vault",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "supported_key_material",
+     "secure_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "new_key_entry",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "keys gpg",
    "aliases": [],
    "args": [
     {
      "id": "key_name",
+     "role": "name",
      "long": null,
      "short": null,
      "aliases": [],
@@ -3985,6 +5274,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "public_key",
+     "role": "file",
      "long": "public-key",
      "short": null,
      "aliases": [],
@@ -4003,6 +5293,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "private_key",
+     "role": "file",
      "long": "private-key",
      "short": null,
      "aliases": [],
@@ -4021,6 +5312,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "category",
+     "role": "category",
      "long": "category",
      "short": null,
      "aliases": [],
@@ -4039,6 +5331,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "purpose",
+     "role": "purpose",
      "long": "note",
      "short": "n",
      "aliases": [],
@@ -4059,6 +5352,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -4101,13 +5395,15 @@ window.MONICA_TEACH = {
      "cmd": "monica keys gpg teach-gpg --public-key teach.asc",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Saved key 'teach-gpg' · 854DDA2F9D15D151F5385347A2E0F46642EEA348. The key material stays in the encrypted vault and is never disclosed to AI."
+     "out": "Saved key 'teach-gpg' · 854DDA2F9D15D151F5385347A2E0F46642EEA348. The key material stays in the encrypted vault and is never disclosed to AI.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica keys gpg both-keys --public-key teach.asc --private-key teach-sec.asc",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Saved key 'both-keys' · 854DDA2F9D15D151F5385347A2E0F46642EEA348. The key material stays in the encrypted vault and is never disclosed to AI."
+     "out": "Saved key 'both-keys' · 854DDA2F9D15D151F5385347A2E0F46642EEA348. The key material stays in the encrypted vault and is never disclosed to AI.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -4120,10 +5416,36 @@ window.MONICA_TEACH = {
    "name": "edit",
    "parent": "keys",
    "summary": "Rename a key entry or edit its comment and purpose note",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "write_vault",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "existing_key_entry",
+     "compatible_adapter_for_entry",
+     "secure_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "key_entry",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "keys edit",
    "aliases": [],
    "args": [
     {
      "id": "entry",
+     "role": "entry",
      "long": null,
      "short": null,
      "aliases": [],
@@ -4142,6 +5464,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "new_title",
+     "role": "new_title",
      "long": "title",
      "short": null,
      "aliases": [],
@@ -4160,6 +5483,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "purpose",
+     "role": "purpose",
      "long": "note",
      "short": "n",
      "aliases": [],
@@ -4178,6 +5502,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "comment",
+     "role": "comment",
      "long": "comment",
      "short": null,
      "aliases": [],
@@ -4196,6 +5521,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -4239,7 +5565,8 @@ window.MONICA_TEACH = {
      "cmd": "monica keys edit demo-key --title 备用密钥",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Updated key entry '备用密钥'."
+     "out": "Updated key entry '备用密钥'.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -4252,10 +5579,37 @@ window.MONICA_TEACH = {
    "name": "delete",
    "parent": "keys",
    "summary": "Delete a key entry; text already exported to a file stays there",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "tombstone_entry",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "existing_key_entry",
+     "compatible_adapter_for_entry",
+     "verified_target_and_confirmation_or_force",
+     "secure_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "key_entry",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "keys delete",
    "aliases": [],
    "args": [
     {
      "id": "entry",
+     "role": "entry",
      "long": null,
      "short": null,
      "aliases": [],
@@ -4274,6 +5628,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "force_delete",
+     "role": null,
      "long": "force",
      "short": null,
      "aliases": [],
@@ -4294,6 +5649,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -4328,13 +5684,15 @@ window.MONICA_TEACH = {
      "cmd": "monica keys delete rsa-key",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "This command asks you to type the target back to confirm it, in a human terminal. Use --force only after verifying the target."
+     "out": "This command asks you to type the target back to confirm it, in a human terminal. Use --force only after verifying the target.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica keys delete rsa-key --force",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Deleted 'rsa-key'. A tombstone reaches your other devices at the next sync; the encrypted bytes stay in this vault file."
+     "out": "Deleted 'rsa-key'. A tombstone reaches your other devices at the next sync; the encrypted bytes stay in this vault file.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -4347,6 +5705,8 @@ window.MONICA_TEACH = {
    "name": "export",
    "parent": "keys",
    "summary": "Write the public or private half to a file you choose; the only way out of the vault",
+   "semantics": null,
+   "executionCommand": null,
    "aliases": [],
    "args": [
     {
@@ -4430,20 +5790,23 @@ window.MONICA_TEACH = {
      "cmd": "monica keys export demo-key --output pub.txt",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Wrote the public half (81 bytes) to D:\\out\\pub.txt."
+     "out": "Wrote the public half (81 bytes) to D:\\out\\pub.txt.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica keys export demo-key --output pub.txt",
      "note": "目标文件已存在时不会覆盖。",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "monica-pass: The configuration, vault, connection, grant or output file already exists. Use a new name."
+     "out": "monica-pass: The configuration, vault, connection, grant or output file already exists. Use a new name.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica keys export demo-key --private --output priv.txt --force",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": true,
-     "out": "Wrote the private key (387 bytes) to D:\\out\\priv.txt. Protect that file as carefully as the vault password."
+     "out": "Wrote the private key (387 bytes) to D:\\out\\priv.txt. Protect that file as carefully as the vault password.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -4455,12 +5818,26 @@ window.MONICA_TEACH = {
    "name": "webdav",
    "parent": "",
    "summary": "WebDAV sign-in, browsing and encrypted vault sync",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [],
+    "mcp_tool": false,
+    "prerequisites": [
+     "subcommand_required"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "subcommand",
+    "trust_boundary": "command_group"
+   },
+   "executionCommand": "webdav",
    "aliases": [
     "dav"
    ],
    "args": [
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -4494,7 +5871,8 @@ window.MONICA_TEACH = {
      "note": "不带子命令只会得到一次参数错误。",
      "teachesError": true,
      "tested": true,
-     "out": "monica-pass: Could not parse arguments. Use --help for usage."
+     "out": "monica-pass: Could not parse arguments. Use --help for usage.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -4507,12 +5885,40 @@ window.MONICA_TEACH = {
    "name": "login",
    "parent": "webdav",
    "summary": "Verify login and save the URL and username; a typed password is kept on this computer only",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "webdav_request",
+      "when": "always"
+     },
+     {
+      "effect": "save_webdav_profile",
+      "when": "success"
+     },
+     {
+      "effect": "save_os_credential",
+      "when": "successful_typed_password"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "valid_https_webdav_url",
+     "secure_webdav_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "webdav_profile",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "webdav login",
    "aliases": [
     "in"
    ],
    "args": [
     {
      "id": "url",
+     "role": "url",
      "long": "url",
      "short": "u",
      "aliases": [],
@@ -4531,6 +5937,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "username",
+     "role": "username",
      "long": "username",
      "short": "n",
      "aliases": [],
@@ -4549,6 +5956,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -4591,7 +5999,8 @@ window.MONICA_TEACH = {
      "note": "载荷里多给了一个不属于它的字段时的严格拒绝。",
      "secrets": "{\"password\":\"<主密码>\",\"webdav_password\":\"<应用密码>\"}",
      "tested": true,
-     "out": "monica-pass: Secret input must be one UTF-8 JSON object of at most 16384 bytes with exactly the required string fields. Values are never echoed."
+     "out": "monica-pass: Secret input must be one UTF-8 JSON object of at most 16384 bytes with exactly the required string fields. Values are never echoed.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -4604,12 +6013,36 @@ window.MONICA_TEACH = {
    "name": "list",
    "parent": "webdav",
    "summary": "List one folder relative to the saved WebDAV URL",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "webdav_request",
+      "when": "always"
+     },
+     {
+      "effect": "save_os_credential",
+      "when": "successful_typed_password"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "webdav_profile",
+     "secure_webdav_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "remote_path",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "webdav list",
    "aliases": [
     "ls"
    ],
    "args": [
     {
      "id": "path",
+     "role": "path",
      "long": null,
      "short": null,
      "aliases": [],
@@ -4630,6 +6063,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -4657,28 +6091,31 @@ window.MONICA_TEACH = {
    "whenToUse": "publish/sync 之前先看清远端有什么。",
    "handAuthored": false,
    "pitfalls": [
-    "别名 ls，和 monica list（列连接）不同。"
+    "别名 ls，和 monica connections（列连接）不同。"
    ],
    "examples": [
     {
      "cmd": "monica webdav list",
      "note": "还没配置 profile 时。",
      "tested": true,
-     "out": "monica-pass: The WebDAV address or path is invalid. Use HTTPS and a path inside the configured folder."
+     "out": "monica-pass: The WebDAV address or path is invalid. Use HTTPS and a path inside the configured folder.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica webdav list backups --secrets-stdin",
      "note": "列远端某一层要先喂密码：stdin 里只有一个字段 webdav_password。字段齐了才会去校验地址。",
      "secrets": "{\"webdav_password\":\"<应用密码>\"}",
      "tested": true,
-     "out": "monica-pass: The WebDAV address or path is invalid. Use HTTPS and a path inside the configured folder."
+     "out": "monica-pass: The WebDAV address or path is invalid. Use HTTPS and a path inside the configured folder.",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica webdav list --secrets-stdin",
      "note": "空对象少字段，先报凭据缺失，不会去连服务器。",
      "secrets": "{}",
      "tested": true,
-     "out": "monica-pass: Secret input is required. Use --secrets-stdin with a trusted producer; commands --json documents the required fields."
+     "out": "monica-pass: Secret input is required. Use --secrets-stdin with a trusted producer; commands --json documents the required fields.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -4691,12 +6128,29 @@ window.MONICA_TEACH = {
    "name": "status",
    "parent": "webdav",
    "summary": "Show the saved WebDAV profile and sync binding without logging in",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "read_public_metadata",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [],
+    "retry": "repeatable_read",
+    "schema_version": 1,
+    "target": "webdav_profile",
+    "trust_boundary": "public_local_inspection"
+   },
+   "executionCommand": "webdav status",
    "aliases": [
     "st"
    ],
    "args": [
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -4728,12 +6182,14 @@ window.MONICA_TEACH = {
     {
      "cmd": "monica webdav status",
      "tested": true,
-     "out": "WebDAV  off"
+     "out": "WebDAV  off",
+     "capturedAt": "此前版本快照"
     },
     {
      "cmd": "monica webdav status --json",
      "tested": true,
-     "out": "{\"command\":\"webdav status\",\"data\":{\"password_saved\":false,\"profile\":null,\"safe_remote_replace\":null,\"segments\":null,\"sync\":null},\"ok\":true}"
+     "out": "{\"command\":\"webdav status\",\"data\":{\"password_saved\":false,\"profile\":null,\"safe_remote_replace\":null,\"segments\":null,\"sync\":null},\"ok\":true}",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -4746,12 +6202,31 @@ window.MONICA_TEACH = {
    "name": "forget-password",
    "parent": "webdav",
    "summary": "Delete the saved WebDAV password from this computer's credential manager",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "delete_os_credential",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "webdav_profile"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "webdav_profile",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "webdav forget-password",
    "aliases": [
     "forget"
    ],
    "args": [
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -4784,7 +6259,8 @@ window.MONICA_TEACH = {
      "cmd": "monica webdav forget-password",
      "note": "还没配置过 WebDAV 时的样子。",
      "tested": true,
-     "out": "monica-pass: The WebDAV address or path is invalid. Use HTTPS and a path inside the configured folder."
+     "out": "monica-pass: The WebDAV address or path is invalid. Use HTTPS and a path inside the configured folder.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -4797,12 +6273,53 @@ window.MONICA_TEACH = {
    "name": "open",
    "parent": "webdav",
    "summary": "Download and open an MDBX; preserve the previous local vault and clear old grants",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "webdav_request",
+      "when": "always"
+     },
+     {
+      "effect": "create_managed_copy",
+      "when": "always"
+     },
+     {
+      "effect": "switch_vault",
+      "when": "always"
+     },
+     {
+      "effect": "reset_grants",
+      "when": "always"
+     },
+     {
+      "effect": "save_os_credential",
+      "when": "successful_typed_password"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "webdav_profile",
+     "remote_mdbx_vault",
+     "secure_password_and_webdav_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "remote_vault_path",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "webdav open",
    "aliases": [
     "o"
    ],
    "args": [
     {
      "id": "path",
+     "role": "path",
      "long": null,
      "short": null,
      "aliases": [],
@@ -4821,6 +6338,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -4849,14 +6367,16 @@ window.MONICA_TEACH = {
    "whenToUse": "从手机端把库拉回电脑继续管。",
    "handAuthored": false,
    "pitfalls": [
-    "这条需要两个秘密字段：远端密码 + 该库的主密码。成功路径未在无账号条件下采集。别名 o。"
+    "这条需要两个秘密字段：远端密码 + 该库的主密码。成功路径未在无账号条件下采集。别名 o。",
+    "远端存在 .sync 时读取不可变分段和配套 Blob；目录探测错误不会回退到整库覆盖。"
    ],
    "examples": [
     {
      "cmd": "monica webdav open monica.mdbx",
      "secrets": "{\"password\":\"<库主密码>\",\"webdav_password\":\"<应用密码>\"}",
      "tested": true,
-     "out": "monica-pass: The WebDAV address or path is invalid. Use HTTPS and a path inside the configured folder."
+     "out": "monica-pass: The WebDAV address or path is invalid. Use HTTPS and a path inside the configured folder.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -4869,6 +6389,39 @@ window.MONICA_TEACH = {
    "name": "publish",
    "parent": "webdav",
    "summary": "Publish the encrypted vault under a new remote filename and connect sync",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "webdav_write",
+      "when": "always"
+     },
+     {
+      "effect": "save_sync_binding",
+      "when": "success"
+     },
+     {
+      "effect": "save_os_credential",
+      "when": "successful_typed_password"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "webdav_profile",
+     "new_remote_path",
+     "secure_password_and_webdav_input"
+    ],
+    "retry": "compare_revisions_before_retry",
+    "schema_version": 1,
+    "target": "new_remote_path",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "webdav publish",
    "aliases": [
     "p",
     "push"
@@ -4876,6 +6429,7 @@ window.MONICA_TEACH = {
    "args": [
     {
      "id": "path",
+     "role": "path",
      "long": null,
      "short": null,
      "aliases": [],
@@ -4894,6 +6448,7 @@ window.MONICA_TEACH = {
     },
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -4922,14 +6477,16 @@ window.MONICA_TEACH = {
    "whenToUse": "第一次把这个库供到远端。",
    "handAuthored": false,
    "pitfalls": [
-    "发布用新文件名，不会顶掉远端已有的一份。别名 p / push。"
+    "发布用新文件名，不会顶掉远端已有的一份。别名 p / push。",
+    "有外置 Blob 时发布 Android 兼容分段目录；每个附件密文块使用摘要路径并校验确认。"
    ],
    "examples": [
     {
      "cmd": "monica webdav publish monica.mdbx",
      "secrets": "{\"password\":\"<库主密码>\",\"webdav_password\":\"<应用密码>\"}",
      "tested": true,
-     "out": "monica-pass: The WebDAV address or path is invalid. Use HTTPS and a path inside the configured folder."
+     "out": "monica-pass: The WebDAV address or path is invalid. Use HTTPS and a path inside the configured folder.",
+     "capturedAt": "此前版本快照"
     }
    ]
   },
@@ -4942,12 +6499,58 @@ window.MONICA_TEACH = {
    "name": "sync",
    "parent": "webdav",
    "summary": "Compare and sync local and remote copies; preserve both on conflict",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "webdav_request",
+      "when": "always"
+     },
+     {
+      "effect": "webdav_write",
+      "when": "local_changes"
+     },
+     {
+      "effect": "write_vault",
+      "when": "remote_changes"
+     },
+     {
+      "effect": "retain_matching_grants_only",
+      "when": "remote_changes"
+     },
+     {
+      "effect": "save_sync_binding",
+      "when": "success"
+     },
+     {
+      "effect": "save_os_credential",
+      "when": "successful_typed_password"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "webdav_sync_binding",
+     "nonconflicting_revisions",
+     "secure_password_and_webdav_input"
+    ],
+    "retry": "compare_revisions_before_retry",
+    "schema_version": 1,
+    "target": "sync_binding",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "webdav sync",
    "aliases": [
     "s"
    ],
    "args": [
     {
      "id": "help",
+     "role": null,
      "long": "help",
      "short": "h",
      "aliases": [],
@@ -4976,14 +6579,16 @@ window.MONICA_TEACH = {
    "whenToUse": "在电脑上改完了，要推回远端给手机。",
    "handAuthored": false,
    "pitfalls": [
-    "没绑定过就直接拒。分段同步的进度与中断规则见 docs/segment-sync.md。别名 s。"
+    "没绑定过就直接拒。分段同步的进度与中断规则见 docs/segment-sync.md。别名 s。",
+    "分段和引用 Blob 都确认后才推进游标；缺附件可在恢复后重试。429/503 最多尝试 3 次，等待预算 30 秒，取消立即传播。"
    ],
    "examples": [
     {
      "cmd": "monica webdav sync",
      "secrets": "{\"password\":\"<库主密码>\",\"webdav_password\":\"<应用密码>\"}",
      "tested": true,
-     "out": "monica-pass: No WebDAV vault is connected. Open a remote MDBX file or publish the local vault first."
+     "out": "monica-pass: No WebDAV vault is connected. Open a remote MDBX file or publish the local vault first.",
+     "capturedAt": "此前版本快照"
     }
    ]
   }
@@ -5021,14 +6626,14 @@ window.MONICA_TEACH = {
      "--allow-write"
     ]
    },
-   "answer": "monica add work -r your-org/your-repo -n \"跟踪产品问题\"",
+   "answer": "monica add work --repo your-org/your-repo --note \"跟踪产品问题\"",
    "why": "-r 精确到仓库、默认只读；--allow-write 才是写开关。这条还会顺手把 MCP 条目打印出来。"
   },
   {
    "id": "scoped-grant",
    "key": "grant",
    "title": "为第二个仓库单独开一份限时授权",
-   "prompt": "在已有连接 work 上，给 your-org/other 开一份只能列 issue 的授权，60 分钟、最多 5 次调用，授权名 work2。",
+   "prompt": "在已有连接 work-github 上，为 your-org/other 创建只能列 issue 的授权 review-agent，60 分钟、最多 5 次调用。",
    "expect": {
     "key": "grant",
     "flags": [
@@ -5040,8 +6645,8 @@ window.MONICA_TEACH = {
     ],
     "positionals": 1
    },
-   "answer": "monica grant work2 -c work -r your-org/other --ttl-minutes 60 --max-calls 5 --operation list-issues",
-   "why": "-c 指向已有连接，-r 是这个授权自己的范围；--max-calls 用尽后 AI 会停下来要人 refresh，而不是偷偷续。"
+   "answer": "monica grant review-agent --connection work-github --repo your-org/other --ttl-minutes 60 --max-calls 5 --operation list-issues",
+   "why": "CONNECTION work-github 提供凭据；GRANT review-agent 限定访问。授权到期或次数用尽由人 renew，不会修改服务 Token。"
   },
   {
    "id": "api-wide",
@@ -5060,7 +6665,7 @@ window.MONICA_TEACH = {
      "--operation": "api-read"
     }
    },
-   "answer": "monica grant api-ro -c work --repo '*' --operation api-read --ttl-minutes 30",
+   "answer": "monica grant api-ro --connection work --repo '*' --operation api-read --ttl-minutes 30",
    "why": "api-read/api-write 只能配 --repo '*'，而且不能和 list-issues 之类混在同一条授权里。"
   },
   {
@@ -5081,16 +6686,16 @@ window.MONICA_TEACH = {
      "--approval": "write"
     }
    },
-   "answer": "monica grant work3 -c work -r your-org/third --approval write --ttl-minutes 30",
+   "answer": "monica grant work3 --connection work --repo your-org/third --approval write --ttl-minutes 30",
    "why": "--approval 只有 off / write / all 三档；write 就是「只拦会改东西的调用」。AI 无法自己回答这个提示。"
   },
   {
    "id": "install-claude",
-   "key": "settings",
+   "key": "mcp-config",
    "title": "把授权接进 Claude Code",
-   "prompt": "让 work2 的 MCP 条目直接合并进 Claude Code 的用户级配置，不手写文件。",
+   "prompt": "代理启动前，把授权 review-agent 的 MCP 条目合并进 Claude Code 的用户级配置。",
    "expect": {
-    "key": "settings",
+    "key": "mcp-config",
     "flags": [
      "--install"
     ],
@@ -5099,20 +6704,20 @@ window.MONICA_TEACH = {
      "--install": "claude"
     }
    },
-   "answer": "monica settings work2 --install claude",
+   "answer": "monica mcp-config review-agent --install claude",
    "why": "它只合并那一条，改前先备份；读不回来的文件会整份退回，不写一个字节。"
   },
   {
    "id": "rotate",
-   "key": "refresh",
+   "key": "renew",
    "title": "授权用完了，续一次",
-   "prompt": "work2 的次数用尽。换发新的 capability，保持同样的窗口与次数。",
+   "prompt": "授权 review-agent 的次数用尽。由本人换发 capability，保持原窗口与次数预算。",
    "expect": {
-    "key": "refresh",
+    "key": "renew",
     "flags": [],
     "positionals": 1
    },
-   "answer": "monica refresh work2",
+   "answer": "monica renew review-agent",
    "why": "省略 --ttl-minutes / --max-calls 才是不改动预算；新的值会就地覆写同一个客户端文件，所以桥进程要重启。"
   },
   {
@@ -5132,13 +6737,13 @@ window.MONICA_TEACH = {
    "id": "check-what-ai-sees",
    "key": "check",
    "title": "AI 到底看到了什么",
-   "prompt": "在网关已经运行的前提下，检查 work2 这份授权会暴露哪些工具。",
+   "prompt": "代理已经运行。在另一个终端检查授权 review-agent 的可用工具。",
    "expect": {
     "key": "check",
     "flags": [],
     "positionals": 1
    },
-   "answer": "monica check work2",
+   "answer": "monica check review-agent",
    "why": "check 走的就是客户端握手同一条发现路径，看到的就是 AI 看到的。"
   },
   {
@@ -5205,7 +6810,7 @@ window.MONICA_TEACH = {
     ],
     "positionals": 1
    },
-   "answer": "monica add gitlab-cn -p gitlab -b https://gitlab.example.com/api/v4/ -r your-org/other --allow-write --ttl-minutes 60 -n \"内部镜像仓库\"",
+   "answer": "monica add gitlab-cn -p gitlab -b https://gitlab.example.com/api/v4/ --repo your-org/other --allow-write --ttl-minutes 60 --note \"内部镜像仓库\"",
    "why": "API 前缀必须是 /api/v4/，结尾斜杠不能少；少了会得到 invalid_config，那句提示说的是「配置」，其实是你给的地址。"
   },
   {
@@ -5225,7 +6830,7 @@ window.MONICA_TEACH = {
    "id": "unlock",
    "key": "serve",
    "title": "把代理叫醒",
-   "prompt": "连接和授权都开好了，可 AI 还是调不通：代理没在运行。把它解锁跑起来。",
+   "prompt": "连接、授权和 AI 客户端都已配置。启动代理并保持当前终端打开，之后在另一个终端用 check 验证。",
    "expect": {
     "key": "serve",
     "flags": [],
@@ -5315,7 +6920,7 @@ window.MONICA_TEACH = {
     ],
     "positionals": 0
    },
-   "answer": "monica webdav login -u https://dav.example.com/dav/Monica/ -n alice",
+   "answer": "monica webdav login --url https://dav.example.com/dav/Monica/ --username alice",
    "why": "密码不能写在命令行上，它通过隐藏输入或 --secrets-stdin 提供；登录成功后才会存进这台电脑的凭据管理器。"
   },
   {
@@ -5334,10 +6939,10 @@ window.MONICA_TEACH = {
  ],
  "notes": {
   "boundary": "这是一份会读语法的练习本，不是终端：练习模式按 `monica commands --json` 的真实语法逐字检查你敲的每个参数，接受和拒绝都与二进制一致——命令别名（`ck`）、全局参数放在命令名之前（`monica -j list`）、值连着写（`-cwork`）、短选项堆叠（`-ws`）、`--flag=value`、`--` 之后一律算值、帮助短路（`keys gpg n -h`、`keys help`、`monica -V` 都只打印帮助或版本）。它不会执行任何命令，也碰不到任何凭据。",
-  "grammarLimits": "三处已知边界，说清楚比藏着好：① 取值只在校验过候选列表的参数上检查（如 `--provider`、`language`，含 `zh`／`zh_CN` 这类别名和大小写），数字范围（如 `--ttl` 超出 16 位就报错）不在语法元数据里，练习本不拦；② `monica tui --json` 这类「解析得过、但 CLI 自己拒绝运行」的组合，练习本在解析层就给出 `no_json`，真二进制在运行层拒绝——两边都拒绝，只是拦下的层次不同；③ `help` 后面再接 `--json`（`monica help -j`）同样两边都拒绝：真 CLI 由应用层回 `invalid_request`，练习本按「`help` 之后只能接命令名」拒绝。",
-  "fixture": "所有「已实测」输出都来自 0.5.0 的 release 二进制，跑在系统临时目录里的一次性保险库上，凭据是合成的假值；没有连接过任何真实账号。",
-  "normalised": "输出里的绝对路径做了两处机械替换，方便阅读：临时保险库目录写成 %LOCALAPPDATA%\\MonicaPass，可执行文件写成 <monica-pass>。文字内容、表格对齐、报错原文都保持采集时的样子。",
+  "grammarLimits": "三处已知边界，说清楚比藏着好：① 取值只在校验过候选列表的参数上检查（如 `--provider`、`language`，含 `zh`／`zh_CN` 这类别名和大小写），数字范围（如 `--ttl-minutes` 须处于允许范围）不在语法元数据里，练习本不拦；② `monica tui --json` 这类「解析得过、但 CLI 自己拒绝运行」的组合，练习本在解析层就给出 `no_json`，真二进制在运行层拒绝——两边都拒绝，只是拦下的层次不同；③ `help` 后面再接 `--json`（`monica help -j`）同样两边都拒绝：真 CLI 由应用层回 `invalid_request`，练习本按「`help` 之后只能接命令名」拒绝。",
+  "fixture": "输出均采自临时保险库与合成凭据，未连接真实账号。标有日期的是本轮重新采集；标为「此前版本快照」的保留原始输出，新增提示或字段可能不同。命令语法与执行契约始终由当前二进制生成。",
+  "normalised": "示例中的临时目录已替换为 %TEMP%/MonicaGuide 或 %LOCALAPPDATA%\\MonicaPass，可执行文件替换为 <monica-pass>；其余输出保留采集时的内容。",
   "secretInput": "需要密码或 Token 的命令，在真实终端里会隐式提示输入；示例里的「stdin 载荷」是给自动化（--secrets-stdin）看的字段形状，值都是假的。"
  },
- "generatedAt": "2026-09-27"
+ "generatedAt": "2026-09-28"
 };

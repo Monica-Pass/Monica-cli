@@ -10,6 +10,12 @@
 
 ---
 
+新增命令习惯：连接用 `connections` / `show CONNECTION`，授权用 `mcp-config GRANT` / `renew GRANT`。旧 `list` / `settings` / `refresh` 保持兼容。TUI 的重载动作叫 `:reload`（兼容 `:refresh`），与授权续期分开。
+
+卡住时先运行 `monica next`；多份授权用 `monica next --grant review-agent`。它根据公开状态给出建议，不读取客户端配置，也不把未知的接入状态算作已完成。`serve` 占用当前终端，安装配置应在它之前完成，验证命令在另一终端执行。
+
+MDBX 通用项目：在 TUI 项目列表按 Enter，解锁后可逐字段查看，所有值默认隐藏，60 秒或失焦后清除。未知类型/未来版本只读，普通编辑、移动和删除会拒绝；已支持类型编辑保留未来字段。外置附件随托管副本和 WebDAV 分段保留，详情见 [MDBX 跨端兼容](mdbx-compatibility.md)。
+
 ## 1. 先分清两件事：保险库凭据与 AI 授权
 
 整套设计里最容易混淆的就是这两层，它们的规则完全不同：
@@ -19,13 +25,13 @@
 | 是什么 | 你在 GitHub / GitLab 上的访问令牌 | 允许某个 AI 客户端在一定范围内代替你使用那份凭据的本地凭证 |
 | 存在哪 | MDBX3 加密保险库内，只有解锁后才可解密使用 | 摘要记在配置文件里；令牌值在 `clients/<授权名>.client.json` |
 | 会到期吗 | **不会**。模型里根本没有到期字段 | **一定会**。默认 240 分钟，可指定 1–1440 分钟，另可加调用次数预算 |
-| 怎么变更 | 只能由人执行 `monica token <连接名>` 重新录入 | 到期或次数用尽后由人执行 `monica refresh <授权名>` 换发 |
+| 怎么变更 | 只能由人执行 `monica token <连接名>` 重新录入 | 到期或次数用尽后由人执行 `monica renew <授权名>` 换发 |
 | 谁能看到 | 只有 Monica 进程；AI 永远拿不到 | 拿到那个客户端文件就等于拿到这份授权，要当密钥保管 |
 | 撤销方式 | 更换 Token → 该连接原有授权全部作废 | `revoke`、更换 Token、换数据库、窗口或次数用尽 |
 
 一句话记忆：**凭据永久，授权必到期。**
 
-还有一层不要混进来：代理（broker）解锁会话只有 **300 秒**，且每次管理操作前都会被主动停掉。会话到期只意味着"本地代理需要重新解锁"，跟授权窗口无关；`monica u` 重新解锁即可，不需要 `refresh`。反过来，授权到期了，就算代理正在运行，AI 也调不动。
+还有一层不要混进来：代理（broker）解锁会话只有 **300 秒**，且每次管理操作前都会被主动停掉。会话到期只意味着"本地代理需要重新解锁"，跟授权窗口无关；`monica serve` 重新解锁即可，不需要 `renew`。反过来，授权到期了，就算代理正在运行，AI 也调不动。
 
 这三层关系的权威说明在 [SECURITY.md](../SECURITY.md#会话与撤销)。
 
@@ -54,7 +60,7 @@ Windows 安装步骤见 [README 的快速开始](../README.md#快速开始)，�
 | `gateway.json` | 连接、授权、监听地址等本地配置 |
 | `gateway.mdbx` | 默认保险库。**文件名固定为 `gateway.mdbx`**，不跟随自定义配置名；用 `init -v` 可另指定 |
 | `clients/<授权名>.client.json` | AI 侧的 capability 文件，等同访问凭证 |
-| `clients/<授权名>.client.mcp.json` | `m` 产出的 MCP 配置片段，仅指向上一行那个文件 |
+| `clients/<授权名>.client.mcp.json` | `mcp-config` 产出的 MCP 配置片段，仅指向上一行那个文件 |
 | `gateway.usage.json` | 各授权已消耗的调用次数。**落盘保存**，代理重启不会清零 |
 | `gateway.operations.json` | 写操作幂等记录，用于 `request_id` 回放 |
 | `gateway.audit.jsonl` | 本地审计日志，用 `monica audit` 读（见 5.4） |
@@ -102,10 +108,10 @@ monica -C %CFG% add work --repo your-org/your-repo --note "跟踪产品问题与
 
 卡住时看：[本地管理命令被拒](#本地管理命令被拒)。
 
-### 第 2 步　取出 MCP 配置
+### 第 2 步　取出并安装 MCP 配置
 
 ```sh
-monica -C %CFG% m work
+monica -C %CFG% mcp-config work
 ```
 
 实测输出（路径按你的环境而异）：
@@ -125,12 +131,18 @@ monica -C %CFG% m work
 }
 ```
 
-同时会落盘一份 `clients/work.client.mcp.json`，提示行会给出路径。
+同时会落盘一份 `clients/work.client.mcp.json`，提示行会给出路径。继续启动代理之前，先安装客户端配置：
+
+```sh
+monica -C %CFG% mcp-config work --install codex
+```
+
+也可选 claude / cursor / vscode，或手动合并上面的片段。
 
 ### 第 3 步　解锁并运行代理
 
 ```sh
-monica -C %CFG% u
+monica -C %CFG% serve
 ```
 
 输入主密码后代理开始监听配置里的 loopback 地址，并提示会话时长。这个终端要保持开着——它就是"人在本地批准"的那个动作。JSON 模式下会先输出一行：
@@ -146,10 +158,10 @@ monica -C %CFG% u
 ### 第 4 步　本地验证 MCP 能发现哪些工具
 
 ```sh
-monica -C %CFG% ck work
+monica -C %CFG% check work
 ```
 
-这一步走的是与 AI 完全相同的鉴权与发现路径，因此它能证明"客户端文件 + 授权 + 代理"三者是通的。返回工具数组，每个工具带完整的 `inputSchema`。默认只读授权会看到 `github_list_issues`、`github_get_issue` 和 `monica_list_connections`。
+在另一个终端执行这一步，并沿用相同的配置路径。它走的是与 AI 完全相同的鉴权与发现路径，因此它能证明"客户端文件 + 授权 + 代理"三者是通的。返回工具数组，每个工具带完整的 `inputSchema`。默认只读授权会看到 `github_list_issues`、`github_get_issue` 和 `monica_list_connections`。
 
 ### 第 5 步　看 AI 眼中的目录
 
@@ -200,7 +212,7 @@ monica -C %CFG% call work --request issues.json --json
 ### 第 7 步　查看当前状态
 
 ```sh
-monica -C %CFG% st --json
+monica -C %CFG% status --json
 ```
 
 实测（窗口仍开放时；下面是完整 `--json` 报文里的 `grants` 那一段，外层还有 `{"command":"status","data":…,"ok":true}` 信封与连接列表）：
@@ -222,7 +234,7 @@ monica -C %CFG% st --json
 省略 `--json` 时是一给人看的表（0.5.0 实测，路径已缩写）：
 
 ```text
-monica -C %CFG% st
+monica -C %CFG% status
 
 Config   C:\...\mcap\gateway.json
 Vault    C:\...\mcap\vault.mdbx
@@ -251,7 +263,7 @@ gated  work    joyins/example-repo  create_issue            2026-09-23 03:26  un
 由人在本地终端续期，**只需要主密码，不需要 Token**：
 
 ```sh
-monica -C %CFG% rf work
+monica -C %CFG% renew work
 ```
 
 省略参数会沿用上次那份授权的窗口与次数预算，不会悄悄放宽。可加 `--ttl-minutes` / `--max-calls` 显式改动。
@@ -271,7 +283,7 @@ monica -C %CFG% rf work
 
 ### 4.1 让它自己写进去
 
-常见的四种客户端有一个共性配置概念，`settings --install` 就是往它们的用户级配置文件里合并这一条：
+常见的四种客户端有一个共性配置概念，`mcp-config --install` 就是往它们的用户级配置文件里合并这一条：
 
 | `--install` 取值 | 被写的文件 | 条目所在的键 |
 | --- | --- | --- |
@@ -283,7 +295,7 @@ monica -C %CFG% rf work
 实测（临时目录里造了一份只放了示例内容的 `~/.claude.json`，`HOME` / `USERPROFILE` 指过去后运行；下面的输出用的就是 `target/release/monica-pass.exe`，所以条目里的 `command` 也就是那个路径，你自己跑时会是你的可执行文件）：
 
 ```console
-$ monica settings work --install claude
+$ monica mcp-config work --install claude
 {
   "mcpServers": {
     "work": {
@@ -304,7 +316,7 @@ Previous file kept at C:/Users/joyins/AppData/Local/Temp/monica-install-rel/home
 那段 JSON 走标准输出，三行说明走标准错误。被写入的文件里原来那个 `example-other` 条目和 `theme` 键都还在，只是键序被 JSON 规范化重排了。再执行一次同一条命令，只有说明行不同：
 
 ```console
-$ monica settings work --install claude
+$ monica mcp-config work --install claude
 MCP settings saved to C:\Users\joyins\AppData\Local\Temp\monica-install-rel\home\AppData\Local\MonicaPass\clients\work.client.mcp.json
 claude already carried exactly this entry, so its file was left alone
 ```
@@ -312,7 +324,7 @@ claude already carried exactly this entry, so its file was left alone
 Codex 是同一条命令换一种落盘格式（中文提示，且原文件里已有的 `model` 与 `other` 条目都保留，新条目追加在末尾）：
 
 ```console
-$ monica settings work --install codex --lang zh-CN
+$ monica mcp-config work --install codex --lang zh-CN
 MCP 配置已保存到 C:\Users\joyins\AppData\Local\Temp\monica-install-rel\home\AppData\Local\MonicaPass\clients\work.client.mcp.json
 已写入 codex 配置：C:/Users/joyins/AppData/Local/Temp/monica-install-rel/home\.codex\config.toml
 原文件已备份至 C:/Users/joyins/AppData/Local/Temp/monica-install-rel/home\.codex\config.toml.monica-1790107899-0
@@ -321,7 +333,7 @@ MCP 配置已保存到 C:\Users\joyins\AppData\Local\Temp\monica-install-rel\hom
 而一份它读不懂的客户端文件会被原样退回，不写盘也不留备份：
 
 ```console
-$ monica settings work --install cursor
+$ monica mcp-config work --install cursor
 monica-pass: The AI client's own configuration file is missing its expected shape, oversized or unreadable, so nothing was written to it. Add the printed MCP entry to that file by hand instead.
 $ echo $?
 1
@@ -349,7 +361,7 @@ $ echo $?
 
 规则：
 
-1. **一份授权 = 一个 MCP 服务器条目**。条目名直接用授权名，方便和 `monica st` 对得上。
+1. **一份授权 = 一个 MCP 服务器条目**。条目名直接用授权名，方便和 `monica status` 对得上。
 2. **多个连接就是多个条目**。同一份授权只绑一个连接，不要指望一个条目看到所有服务。
 3. 客户端文件等同访问凭证，不要提交进仓库、不要贴进对话。
 4. **每次 `rf` 续期后都要重启对应的 MCP 入口**，否则桥还在用旧 capability。
@@ -361,7 +373,7 @@ $ echo $?
 
 | 目的 | 完整命令 | 缩写 | 需要先停代理吗 | 需要的凭据 |
 | --- | --- | --- | --- | --- |
-| 列出连接 | `list` | `ls` | 否 | 无 |
+| 列出连接 | `connections` | `ls` | 否 | 无 |
 | 查看一个连接与其授权 | `show <连接名>` | `info` | 否 | 无 |
 | 查看全局状态 | `status` | `st` | 否 | 无 |
 | 查看 AI 调用审计 | `audit [--grant <授权名>] [--limit <条数>]` | — | 否 | 无 |
@@ -380,7 +392,7 @@ $ echo $?
 | 删除空分类 | `delete-category <分类ID>` | `rmdir` | 是 | 主密码 + 键回名称，或 `--force` |
 | 删除密钥条目 | `keys delete <名称>` | — | 是 | 主密码 + 键回名称，或 `--force` |
 | 创建授权 | `grant [--approval off\|write\|all]` | `g` | 是 | 主密码 |
-| 续期授权 | `refresh [--approval <档位>]` | `rf` | 是（会等待在途请求排空） | 主密码 |
+| 续期授权 | `renew [--approval <档位>]` | `rf` | 是（会等待在途请求排空） | 主密码 |
 | 撤销授权 | `revoke` | `rv` / `x` | 否 | 无 |
 | 打开另一个 MDBX | `open` | `o` | 是 | 主密码 |
 | 切换已记录数据库 | `use` | — | 是 | 该库主密码 |
@@ -389,7 +401,7 @@ $ echo $?
 | 看数据库文件本身的格式与占用 | `mdbx check [<文件>]` | — | 否 | 无 |
 | 列出数据库文件及其旁边的文件 | `mdbx files [<文件>]` | — | 否 | 无 |
 | 浏览分类树 | `library` | `tree` | 是 | 主密码 |
-| 生成 MCP 配置（可顺带写进客户端自己的文件） | `settings [--install claude\|cursor\|codex\|vscode]` | `m` / `mcp-config` | 否 | 无 |
+| 生成 MCP 配置（可顺带写进客户端自己的文件） | `mcp-config [--install claude\|cursor\|codex\|vscode]` | `settings` / `m` | 否 | 无 |
 | 验证工具发现 | `check` | `ck` / `p` | 否（需代理在跑） | 无 |
 | 本地执行一次调用 | `call <授权名> --request <文件>` | — | 否（需代理在跑） | 无 |
 | 查询命令与参数 | `commands` | `cmds` | 否 | 无 |
@@ -401,12 +413,12 @@ $ echo $?
 
 要点：
 
-- **会先停代理的操作**：任何需要读写保险库的动作（`init` / `connect` / `add` / `grant` / `refresh` / `note` / `token` / `open` / `use` / `library` / `category` / `move` / `rename-category` / `rename-entry` / `keys` / `tiga` / WebDAV 同步）。它们会等待在途请求结束，完成后**保持锁定**，要继续用 MCP 就得重新 `u`。
+- **会先停代理的操作**：任何需要读写保险库的动作（`init` / `connect` / `add` / `grant` / `renew` / `note` / `token` / `open` / `use` / `library` / `category` / `move` / `rename-category` / `rename-entry` / `keys` / `tiga` / WebDAV 同步）。它们会等待在途请求结束，完成后**保持锁定**，要继续用 MCP 就得重新 `u`。
 - **不停代理的操作**：`ls` / `show` / `st` / `m` / `ck` / `call` / `cmds` / `rv` / `mdbx check` / `mdbx files`。后两条是实测过的：网关跑着时照跑，跑完 `status` 仍是 `running`（见 [5.6](#56-这个数据库文件到底是什么monica-mdbx)）。
 - 授权的 `operations` 里出现 `api_read` / `api_write` 意味着这份授权拥有该 Token 的完整 API 能力，范围必须是 `*`。给出这种授权前请把它当成"把 Token 交出去"来评估。
 - `rv` 不需要停代理，也**不会删除 `clients/` 下的 capability 文件**——它只把授权从配置里移除，文件留在原地。想让那份文件彻底消失要自己删。
 - 撤销后两侧的报文不同：已经启动的 MCP 桥带旧 capability 来调，得到 `unauthorized`（实测走 401）；本地 `monica call <授权名>` 先按名字找不到授权，得到 `not_found`。
-- `rv` 后连接本身仍然存在，`monica ls` 照旧列出来，只是不再有可用授权。
+- `rv` 后连接本身仍然存在，`monica connections` 照旧列出来，只是不再有可用授权。
 
 ### 5.1 删除写的是墓碑
 
@@ -456,7 +468,7 @@ Monica Credential Gateway  f5d63e56-c6de-4563-a7b5-c2c95e00ea9a
 
 - 不带 `--json` 时，`databases` / `library` / `webdav list` 给的是对齐表格，每一行都带着下一步要用的 ID；表头随 `--lang` 翻译。
 - 写完只回一行确认：`category`、`rename-category`、`rename-entry`、`move`、`token`、`use`、`delete`、`delete-category` 都不再打印整段 JSON。
-- **`--json` 的结构一字未改**。上面这些都是人看的那一面，脚本照旧只认 `--json`。
+- `--json` 的既有执行标识保持兼容；命令发现新增执行契约，`next` 新增状态和操作字段，CLI 错误新增 `error.recovery`。脚本按字段读取并允许新增字段。
 - 当前数据库那一行的 ID 就是字符串 `current`，它**不能**直接喂给 `use`（`use` 只认 UUID）；要切换请用另一行的 ID，正在用的这个本来也不需要切。
 - 每条命令重新输入主密码没有变：程序不缓存解锁状态，这是安全边界（见第 1 节），不是疏漏。
 
@@ -558,7 +570,7 @@ This vault does run its power policy; what falls short is how it is unlocked. po
 - **power 是单行道**：CLI 能把库升到 power、能读它，但**调不回来**。被拒时得到的是引擎自己的话：`The vault's own security policy refused this profile change. The profile you are leaving requires more assurance than a password-unlocked terminal can give, so raise or lower it in Monica for Android.`
 - 以 power 建好的库一建好就带「需要整改」标记：power 要的解锁方式是**密码 + 安全密钥的组合**且不留纯密码路径，而命令行建库只有密码这一项。CLI 没有管理解锁方式的命令，所以这个标记在命令行这边消不掉。
 - **代价**：Argon2id 的参数是按档位存在库里的，每次解锁都要重算一遍。power 是 256 MiB / 10 轮 / 4 并发，multi 是 64 MiB / 3 轮 / 2 并发，sky 是 8 MiB / 1 轮 / 1 并发。实测同一份 power 库：release 解锁一次约 1.4 秒，debug 构建 31 秒。
-- `tiga` 只在本地命令面：MCP 的工具列表里没有它（`monica cmds` 能看到它的语法，但两条命令都要主密码）。改等级只能由人在终端里做。
+- `tiga` 只在本地命令面：MCP 的工具列表里没有它（`monica commands` 能看到它的语法，但两条命令都要主密码）。改等级只能由人在终端里做。
 
 还没实测到的两件事，别当成已知：改等级对**已经发出去的授权**有什么影响（采集用的一次性库里没有授权可试）；以及在真实 Android 端把一份 power 库调回来的完整路径。
 
@@ -607,7 +619,7 @@ The write-ahead log beside the vault is empty. Any connection to a WAL database 
 - 一个只被创建、从未初始化过的文件（里面还没有保险库文件头）不算读不出来，也不算空库：`initialized` 为假，`format_version` 与两个兼容下限都是 `null`，`--json` 里看得最直接。**这条来自针对真实引擎建出的这种文件跑的单元测试，不是命令行采集的**——命令行这边没有只建库不写东西的入口，所以整张表长什么样没实测过。
 - **它什么都不修**。名字里的 check 指的是文件头，不是 `mdbx_check`；不校验一致性、不回收页、不动 schema。`Upgrade yes` 只是预告下一个以写入方式打开它的客户端会做什么。
 
-`check` 与网关并存是实测过的：在 `127.0.0.1:47899` 上一个跑着的网关上跑这两条，都正常返回，跑完 `monica st` 仍是 `running`。
+`check` 与网关并存是实测过的：在 `127.0.0.1:47899` 上一个跑着的网关上跑这两条，都正常返回，跑完 `monica status` 仍是 `running`。
 
 目前拿不到的信息，是因为引擎没给只读的口子：`vault_id`、条目与分类的条数、附件树的真实字节。要这些得 `monica status` / `monica library`（那些要主密码、会停代理）。工作区根目录的 `mdbx-readonly-diagnostics-handoff.md` 把这几项连同上面那条「`check` 会建出 WAL 对」一起写成了给 mdbx 引擎侧的交接需求。
 
@@ -646,7 +658,7 @@ monica grant gitlab-api --connection work-gitlab --repo "*" --operation api-read
 | 日常协作 | 默认 240 分钟 + `--rpm 30`，需要时再加 `create-issue` | 一个工作时段，到期自然收口 |
 | 批量写入 | 拆成短窗口 + 明确 `--max-calls` 预算，跑完就 `rv` | 次数预算是唯一能限制"跑飞的循环"的手段 |
 
-参数边界：`--ttl-minutes` 1–1440（实测 `add` 与 `grant` 填 `0` 会被接受，含义是"用默认 240 分钟"，**不表示永久**；`refresh --ttl-minutes` 则拒绝 0，只收 1–1440）；`--rpm` 1–600，仅 `grant` 可设；`--max-calls` 0–100000，0 表示不设次数预算。超过 1440 一律 `invalid_request`。
+参数边界：`--ttl-minutes` 1–1440（实测 `add` 与 `grant` 填 `0` 会被接受，含义是"用默认 240 分钟"，**不表示永久**；`renew --ttl-minutes` 则拒绝 0，只收 1–1440）；`--rpm` 1–600，仅 `grant` 可设；`--max-calls` 0–100000，0 表示不设次数预算。超过 1440 一律 `invalid_request`。
 
 两处不对等要知道：
 
@@ -667,7 +679,7 @@ monica grant gitlab-api --connection work-gitlab --repo "*" --operation api-read
 
 ```sh
 monica grant gated --connection work --repo your-org/your-repo --operation create-issue --approval write
-monica rf gated --approval all      # 只改门槛，窗口与预算不动
+monica renew gated --approval all      # 改门槛并续期：沿用时长与预算上限，重新计时计数
 ```
 
 `add` 这条快速路径**没有** `--approval`，它签出的授权一律是 `off`；要门槛就用 `grant` 建，或事后 `rf --approval` 补设。终端管理器里 `:grant` 表单倒数第二项「人工批准」填同样的三个词。设置结果在状态表最后一列看得见，实测（0.5.0）：
@@ -695,7 +707,7 @@ gated  work    joyins/example-repo  create_issue            2026-09-23 03:26  un
 
 对话框里只有这份授权本来就让 AI 可见的字段，加上它准备发出去的参数（超过一行会截断，正文可到 32 KiB）。
 
-**2　`monica serve` / `monica u` 所在的那个终端**。同一次询问以一行提示打印出来，输入 `y`/`yes`/`n`/`no` 后回车：
+**2　`monica serve` 所在的那个终端**。同一次询问以一行提示打印出来，输入 `y`/`yes`/`n`/`no` 后回车：
 
 ```
 批准这次调用吗？[y/n]
@@ -742,7 +754,7 @@ This broker has no terminal to ask in, so a call that needs approval will wait a
 
 ### 6.6 在 TUI 里核对预算
 
-主页树里始终有一行 **AI 授权**（锁定状态也在），行尾直接给出当前生效的授权数量，回车即进授权页。生效状态与 `monica st --json` 的 `refresh_required` 同源，不会各算一套：
+主页树里始终有一行 **AI 授权**（锁定状态也在），行尾直接给出当前生效的授权数量，回车即进授权页。生效状态与 `monica status --json` 的 `refresh_required` 同源，不会各算一套：
 
 - 授权列表：仍在窗口内且预算未用尽才显示范围（只读 / 读写）并高亮；否则显示 **尚未生效**、**已过期** 或 **调用已用完**，并以暗色绘制。
 - 选中一行的预览面板：`调用` 一栏显示 `已用/上限`（如 `3/20`），未设预算时显示 **不限**。
@@ -765,17 +777,17 @@ monica webdav sync
 monica webdav forget-password          # 删除本机记住的 WebDAV 密码
 ```
 
-- WebDAV 密码只问一次：人工输入并在某次请求中用成功后，它存进**本机凭据存储**（Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service，三处用同一个目标名 `Monica CLI/webdav/<主机>/<用户>`；后两者通过 `security` 与 `secret-tool` 完成，密码只走子进程 stdin，不出现在参数里），之后 `list` / `open` / `publish` / `sync` 只要保险库主密码；地址与用户名照旧保存。
+- WebDAV 密码只问一次：人工输入并在某次请求中用成功后，它存进**本机凭据存储**（Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service，三处用同一个目标名 `Monica CLI/webdav/<主机>/<用户>`；后两者通过 `security` 与 `secret-tool` 完成，密码只走子进程 stdin，不出现在参数里），之后 `webdav list` 不再问密码，`webdav open` / `webdav publish` / `webdav sync` 只问保险库主密码；地址与用户名照旧保存。
 - 走 `--secrets-stdin` 注入的密码**只活在那个进程里**，不写本机；可信执行器的调用契约不变，每次仍要提供 `webdav_password`。
 - 输错的密码不会被记住（只在请求成功后才写），`webdav status` 的「已存密码」一行说明当前状态（`仅本机` / `未保存`）。
 - `webdav status --json` 不联网即可查看已存档案、同步绑定与分段游标（`segments`）。
 - `webdav status` 的「远端占用」一行是**上一次分段同步**在网盘上量到的分段字节合计与个数（含本机自己上传的流），用来判断 `.sync` 树长到多大了。它不联网、不实时刷新，只含分段载荷不含网盘自身开销，服务器没报大小的文件会让合计变成下限（那种行会附「合计为下限」）；从没走过分段同步时整行不出现。
 - **整文件模式覆盖远端需要强 ETag**。部分服务（本次实测的坚果云）不返回强 ETag，此时 `safe_remote_replace: false`，只能新建上传、读取和下载；有本地改动就 `publish` 成一个新文件名。程序不会强制覆盖。
 - **远端有同名加 `.sync` 的文件夹时，自动改用分段流合并**。那种库里 `.mdbx` 只是一次性发布的初始副本——比较它会误报「已是最新」，覆盖它会让其他设备失去基准——新版本以内容寻址的分段保存在 `.sync/streams/<设备>/<代>/segments/` 下。CLI 只往自己设备名下的流追加不可变分段，每个分段写完都读回核对摘要，收到的提交不会回推；合并由引擎按提交完成，不需要强 ETag，也不用你手工挑一边。
-- 第一次连接要重放对端的全部分段：`open` / `sync` / `publish` 每处理完一个分段就在 stderr 出一行（`--json` 下静默，机器契约仍只有结尾那一个 report）。中途按 `Ctrl+C` 会在**分段边界**停下——游标已经落盘，下一次 `webdav sync` 从原位继续，不重传也不丢；再按一次立即退出。被中断的那次绝不报成「已是最新」（`--json` 里是 `cancelled: true`）。
+- 第一次连接要重放对端的全部分段：`open` / `sync` / `publish` 每处理完一个分段就在 stderr 出一行（`--json` 下静默，机器契约仍只有结尾那一个 report）。中途按 `Ctrl+C` 能中断网络请求及退避等待；引擎同步事务保持原子性，只有分段与引用 Blob 都确认后才推进游标。下一次 `webdav sync` 幂等续传；再按一次立即退出。中断返回 `sync_cancelled`，或在分段边界返回 `cancelled: true`，不会报成「已是最新」。
 - 分段模式**与手机 Monica 的真机互通尚未实测**，目前验证到的是两台 CLI 设备在服务器上的双向收敛。细节与偏差见 [docs/segment-sync.md](segment-sync.md) 第 12 节。
 - 整文件模式下双方都有改动时报 `sync_conflict`，**两份都会保留**，需要你核对后再处理。
-- 只支持自包含、不超过 64 MiB 的 MDBX；带外置附件 `.blobs` 的库返回 `external_blobs_unsupported`。
+- 数据库与单个加密 Blob 上限各为 64 MiB，一次 Blob 处理最多 4 GiB；外置 `.blobs` 随托管副本和分段传输，缺块时明确失败。
 - 打开另一份保险库会保留原本地文件，但**清除现有全部 AI 授权**。
 
 细节边界见 [SECURITY.md 的 WebDAV 边界](../SECURITY.md#webdav-边界)。
@@ -850,9 +862,9 @@ monica keys export 工作机 -o id_ed25519.pub          # 只出公钥
 
 **AI 会不会看到我的 Token？** 不会。Monica 校验授权后才注入凭据并转发请求；响应还会过一次凭据外泄检查，命中即 `response_blocked`。
 
-**为什么 AI 说它"没有权限"，可我明明给了授权？** 先跑 `monica st --json` 看 `expired` / `refresh_required`，再看 `broker_running`。两者都为真而 AI 仍失败，通常是 MCP 桥没重启、还在用旧 capability。
+**为什么 AI 说它"没有权限"，可我明明给了授权？** 先跑 `monica status --json` 看 `expired` / `refresh_required`，再看 `broker_running`。两者都为真而 AI 仍失败，通常是 MCP 桥没重启、还在用旧 capability。
 
-**代理锁了会怎样？** AI 侧收到 `unlock_required` 或 `broker_unavailable`，不会自动解锁，必须有人 `monica u`。
+**代理锁了会怎样？** AI 侧收到 `unlock_required` 或 `broker_unavailable`，不会自动解锁，必须有人 `monica serve`。
 
 **手机 Monica 为什么能翻这份库却不能新增？** 因为写入要找一条按数据库 ID 派生的根分类记录，旧版 CLI 从不创建它。用 0.4.0 解锁一次该库即自动补写，不必重建也不必重新同步，见 [5.2](#52-与手机-monica-共用一份数据库)。
 
@@ -866,9 +878,9 @@ monica keys export 工作机 -o id_ed25519.pub          # 只出公钥
 
 | 现象（你看到什么） | 错误码 | 为什么会这样 | 你该做什么 |
 | --- | --- | --- | --- |
-| AI 说授权到期，客户端里工具全部变灰 | `reauthorization_required` | 时间窗口用尽（401）或调用次数预算用尽（200 信封） | 本地执行 `monica rf <授权名>`，然后重启该 MCP 入口 |
-| AI 完全连不上，报鉴权失败 | `unauthorized` | capability 无效：被 `rv` 撤销、被换 Token 作废，或客户端文件是旧的 | `monica m <授权名>` 重新取配置，确认 AI 用的是那个文件 |
-| 代理没在跑 | `unlock_required` | 保险库需要一次新的解锁 | 在本地终端 `monica u` 输入主密码 |
+| AI 说授权到期，客户端里工具全部变灰 | `reauthorization_required` | 时间窗口用尽（401）或调用次数预算用尽（200 信封） | 本地执行 `monica renew <授权名>`，然后重启该 MCP 入口 |
+| AI 完全连不上，报鉴权失败 | `unauthorized` | capability 无效：被 `rv` 撤销、被换 Token 作废，或客户端文件是旧的 | `monica mcp-config <授权名>` 重新取配置，确认 AI 用的是那个文件 |
+| 代理没在跑 | `unlock_required` | 保险库需要一次新的解锁 | 在本地终端 `monica serve` 输入主密码 |
 | MCP 客户端报"服务器启动但调用失败" | `broker_unavailable` | 桥起来了，但 loopback 代理没在跑、或回包读不懂（桥会在 2 秒连不上、25 秒总超时后这样报） | 保持第 3 步那个终端开着；写类工具同样情形报的是 `write_outcome_unknown` |
 | 换个仓库就报权限 | `permission_denied` | 该操作或仓库不在这份授权里；**未知工具名也回这个码** | `monica show <连接名>` 核对范围与操作，或 `grant` 一份新的 |
 | 多仓库授权下 AI 漏填仓库 | `repository_required` | 没有 `default_repository` 可推断 | 让 AI 显式传 `repository`，不要为此扩大授权 |
@@ -882,15 +894,15 @@ monica keys export 工作机 -o id_ed25519.pub          # 只出公钥
 | 现象 | 错误码 | 为什么会这样 | 你该做什么 |
 | --- | --- | --- | --- |
 | 脚本里执行需要密码的命令直接失败 | `secret_input_required` | 非交互环境没有安全输入通道 | 交互终端手工执行，或按[自动化协议](automation.md#凭据输入协议)用 `--secrets-stdin` |
-| 给了 `--secrets-stdin` 仍失败 | `invalid_secret_input` | stdin 的 JSON 多了或少了字段、超长、非 UTF-8。字段集合必须**恰好等于**该命令所需 | `monica cmds <命令> --json` 查必填字段，只送那几个 |
+| 给了 `--secrets-stdin` 仍失败 | `invalid_secret_input` | stdin 的 JSON 多了或少了字段、超长、非 UTF-8。字段集合必须**恰好等于**该命令所需 | `monica commands <命令> --json` 查必填字段，只送那几个 |
 | 在管道/CI 里想隐藏输入 | `human_terminal_required` | 该命令要求人工终端隐藏输入 | 用可信本地启动器供凭据，不要改用明文参数 |
 | 删除命令在有凭据输入的情况下仍被拒 | `confirmation_required` | 该删除需要有人把目标名称键回一遍，而 `--secrets-stdin` 的调用方身后没有可问的人。沉默不会被当作同意 | 先在交互终端核对 `library` / `keys` 的目标，确认后显式加 `--force`；不要把它接进自动脚本 |
 | 管理操作报库忙 | `broker_already_running` | 代理持有着保险库 | 先 `monica lk`，等终端退出后重试 |
 | 两次密码不一致 / 新密码为空白 | `password_requirements` | 建库时对密码的要求 | 重新输入；不要用纯空格 |
-| 名字已被占用 | `already_exists` | 连接、授权、保险库或输出文件已存在 | 换个名称；`monica ls` 看现有条目 |
-| 命令说找不到 | `not_found` | 该连接/授权/配置不存在，或已被撤销删除 | `monica ls`、`monica st --json` 确认名称 |
+| 名字已被占用 | `already_exists` | 连接、授权、保险库或输出文件已存在 | 换个名称；`monica connections` 看现有条目 |
+| 命令说找不到 | `not_found` | 该连接/授权/配置不存在，或已被撤销删除 | `monica connections`、`monica status --json` 确认名称 |
 | 配置或 API 地址不合法 | `invalid_config` | HTTPS 要求、路径前缀不符（GitHub 只允许 `/` 或 `/api/v3/`，GitLab 必须 `/api/v4/`）、名称含非法字符 | 按[范围与写法](#62-仓库写法)核对；自托管地址要带正确的 API 前缀 |
-| 起代理说端口不可用 | `listen_unavailable` | 端口被占用，通常已有另一个代理在跑 | `monica st --json` 看 `broker_running`；或 `init -p` 换端口 |
+| 起代理说端口不可用 | `listen_unavailable` | 端口被占用，通常已有另一个代理在跑 | `monica status --json` 看 `broker_running`；或 `init -p` 换端口 |
 | 参数被拒 | `invalid_request` | 范围与操作组合不合法（api 类未用 `*`、与 Issue 混列）、TTL 越界、请求文件里有未知字段；删除时还可能是键回的名称与目标不符、条目正被连接绑定、或分类非空 | 见 [6.1](#61-范围与操作的互斥规则)；删除的几种拒绝见 [5.1](#51-删除写的是墓碑) |
 | 删不掉或挪不走一个分类 | `protected_collection` | 它是手机 Monica 存新条目的根分类，没了它这份库在手机侧就变回只读 | 别动它；条目要挪就往别的分类挪，或把根分类改名（改名允许）。见 [5.2](#52-与手机-monica-共用一份数据库) |
 | 备注保存失败 | `invalid_note` | 超 1024 UTF-8 字节（中文约 340 字）或含控制/双向覆盖字符 | 精简备注，去掉特殊符号 |
@@ -935,7 +947,7 @@ monica keys export 工作机 -o id_ed25519.pub          # 只出公钥
 | 下载的文件不是可用库 | `invalid_vault` | 确认是 MDBX 文件且完整；换原始副本重试 |
 | 旧 Android 库打不开 | `vault_schema_unsupported` | `MDBX-1` 与本机不兼容，保留原文件，改用原生 MDBX3 库；改扩展名无效 |
 | 手机 Monica 里这份库能看不能加 | 不报错（0.3.0 及更早的 CLI 建的库） | 手机写入要找的根分类那一行旧版从不创建；用 0.4.0 解锁一次这份库（`monica library` 就够）即自动补写，不必重建也不必重新同步，见 [5.2](#52-与手机-monica-共用一份数据库) |
-| 库带外置附件 | `external_blobs_unsupported` | 整文件与分段两种模式都不搬运 `.blobs`，带附件的库不要走 WebDAV |
+| 附件缺失或损坏 | `blob_unavailable` | 补齐有效密文块后重试；不要删除引用或重置游标 |
 | 库里连接记录过多或歧义 | `vault_connections_invalid` | 先在 Monica 客户端里把重复的连接条目整理干净再导入 |
 | 还没绑定远端库 | `remote_not_configured` | 先 `webdav open` 或 `webdav publish` |
 
@@ -962,7 +974,7 @@ monica keys export 工作机 -o id_ed25519.pub          # 只出公钥
 
 ## 13. 让 AI 帮你做管理
 
-这条路存在，但权限很窄：AI 可以用 `monica cmds --json` 发现命令、用 `ls` / `show` / `st` / `audit` / `m` / `ck` 做只读查询；任何需要凭据的管理命令都必须由**可信本地启动器**通过 `--secrets-stdin` 供入，凭据不经过模型。`audit` 能给 AI 看到自己已经做过哪些调用，但记录里只有授权名、操作、范围、阶段和错误码，看不到请求正文与响应正文。协议、字段表和退出码见 [CLI 自动化](automation.md)。
+人在明确授权本地查询后，AI 可以先用 `monica commands --summary --json` 找到命令，再按需读取完整说明；`connections` / `show` / `status` / `audit` 查询公开元数据，`check` 验证授权通道并消耗速率额度。`mcp-config` 会保存配置片段，带 `--install` 还会合并客户端文件，属于需人授权的管理操作。需要凭据的管理命令由**可信本地启动器**通过 `--secrets-stdin` 供入，凭据不经过模型。`audit` 只有授权名、操作、范围、阶段和错误码，不含请求或响应正文。协议、执行契约和退出码见 [CLI 自动化](automation.md)。
 
 不要为了"省事"把主密码写进脚本参数、环境变量或请求文件。
 

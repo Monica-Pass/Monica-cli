@@ -22,7 +22,7 @@ crossterm = "0.29"
 futures-util = { version = "0.3", features = ["sink"] }
 hex = "0.4"
 mdbx-core = { path = "../mdbx/crates/mdbx-core" }
-mdbx-storage = { path = "../mdbx/crates/mdbx-storage", default-features = false, features = ["core"] }
+mdbx-storage = { path = "../mdbx/crates/mdbx-storage", default-features = false, features = ["core", "filesystem-blob-store"] }
 mdbx-sync = { path = "../mdbx/crates/mdbx-sync" }
 md-5 = "0.10.6"
 rand = "0.8"
@@ -35,7 +35,7 @@ rpassword = "7.4"
 rsa = "=0.9.10"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["arbitrary_precision", "raw_value"] }
 sha1 = "0.10.6"
 sha2 = "0.10"
 ssh-key = { version = "=0.6.7", default-features = false, features = ["alloc", "ed25519", "rsa", "getrandom", "std"] }
@@ -44,7 +44,7 @@ tempfile = "3"
 thiserror = "2"
 toml_edit = "0.22"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "io-std", "io-util", "time", "sync", "fs"] }
-tokio-util = { version = "0.7", features = ["codec", "io"] }
+tokio-util = { version = "0.7", features = ["codec", "io", "rt"] }
 unicode-width = "0.2"
 url = { version = "2", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }

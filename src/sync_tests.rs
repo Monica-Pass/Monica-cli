@@ -47,6 +47,129 @@ fn get_requests(remote: &FakeWebDav) -> usize {
         .count()
 }
 
+fn attach_external(store: &ConfigStore, name: &str, bytes: &[u8]) -> String {
+    use mdbx_storage::repo::attachment::{AttachmentCreateRequest, AttachmentWriteOptions};
+    use mdbx_storage::repo::{AttachmentRepo, CommitContext};
+    let vault = crate::vault::Vault::open(&store.load().unwrap().vault, PASSWORD).unwrap();
+    let object = vault.library().unwrap().entries[0].clone();
+    let conn = vault.runtime.read().unwrap();
+    let ctx = CommitContext::new("attachment-fixture".into());
+    let attachment = AttachmentRepo::add_with_request(
+        &conn,
+        &ctx,
+        AttachmentCreateRequest {
+            project_id: &object.category,
+            entry_id: Some(&object.id),
+            file_name: name,
+            media_type: Some("application/octet-stream"),
+            content_hash: "",
+            original_size: bytes.len() as u64,
+        },
+    )
+    .unwrap();
+    AttachmentRepo::write_external_content_from_reader_with_options(
+        &conn,
+        &ctx,
+        &attachment.attachment_id,
+        &mut std::io::Cursor::new(bytes),
+        AttachmentWriteOptions::exact(256, bytes.len() as u64),
+        &conn.external_blob_store().unwrap(),
+    )
+    .unwrap();
+    attachment.attachment_id
+}
+
+fn read_attachment(store: &ConfigStore, id: &str) -> Vec<u8> {
+    let vault = crate::vault::Vault::open(&store.load().unwrap().vault, PASSWORD).unwrap();
+    let conn = vault.runtime.read().unwrap();
+    mdbx_storage::repo::AttachmentRepo::read_content_with_blob_store(
+        &conn,
+        id,
+        &conn.external_blob_store().unwrap(),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn external_attachments_survive_local_copy_remote_bootstrap_and_incremental_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let writer = initialized(directory.path(), "writer");
+    let bytes = b"synthetic encrypted attachment \0 unicode is in the file name".repeat(12);
+    let attachment = attach_external(&writer, "附件.dat", &bytes);
+    let local = ConfigStore::new(directory.path().join("local/gateway.json"));
+    sync::open_local(&local, &writer.load().unwrap().vault, PASSWORD).unwrap();
+    assert_eq!(read_attachment(&local, &attachment), bytes);
+    let remote = FakeWebDav::new(Default::default()).await;
+    sync::publish(&writer, &remote.client, "vault.mdbx", PASSWORD)
+        .await
+        .unwrap();
+    assert!(
+        remote
+            .files
+            .lock()
+            .unwrap()
+            .keys()
+            .any(|path| path.starts_with("/dav/vault.mdbx.sync/blobs/"))
+    );
+    let original_bootstrap = remote.files.lock().unwrap()["/dav/vault.mdbx"].clone();
+    let reader = ConfigStore::new(directory.path().join("reader/gateway.json"));
+    sync::open_remote(&reader, &remote.client, "vault.mdbx", PASSWORD)
+        .await
+        .unwrap();
+    assert_eq!(read_attachment(&reader, &attachment), bytes);
+    let more = b"new attachment after the peer opened".repeat(15);
+    let second = attach_external(&writer, "later.bin", &more);
+    sync::synchronize(&writer, &remote.client, PASSWORD)
+        .await
+        .unwrap();
+    sync::synchronize(&reader, &remote.client, PASSWORD)
+        .await
+        .unwrap();
+    assert_eq!(read_attachment(&reader, &second), more);
+    assert_eq!(read_attachment(&reader, &attachment), bytes);
+    assert_eq!(
+        remote.files.lock().unwrap()["/dav/vault.mdbx"],
+        original_bootstrap
+    );
+
+    let prior_paths: std::collections::BTreeSet<_> =
+        remote.files.lock().unwrap().keys().cloned().collect();
+    let third_bytes = b"attachment withheld by a disconnected remote".repeat(4);
+    let third = attach_external(&writer, "delayed.bin", &third_bytes);
+    sync::synchronize(&writer, &remote.client, PASSWORD)
+        .await
+        .unwrap();
+    let missing = {
+        let mut files = remote.files.lock().unwrap();
+        let path = files
+            .keys()
+            .find(|path| path.contains("/blobs/") && !prior_paths.contains(*path))
+            .unwrap()
+            .clone();
+        let bytes = files.remove(&path).unwrap();
+        (path, bytes)
+    };
+    let before = reader.load().unwrap().webdav.unwrap().last_sync;
+    assert!(matches!(
+        sync::synchronize(&reader, &remote.client, PASSWORD).await,
+        Err(GatewayError::RemoteNotFound)
+    ));
+    assert_eq!(
+        reader.load().unwrap().webdav.unwrap().last_sync,
+        before,
+        "missing Blob must not acknowledge the sync"
+    );
+    remote.files.lock().unwrap().insert(missing.0, missing.1);
+    sync::synchronize(&reader, &remote.client, PASSWORD)
+        .await
+        .unwrap();
+    assert_eq!(read_attachment(&reader, &third), third_bytes);
+    assert_eq!(
+        remote.files.lock().unwrap()["/dav/vault.mdbx"],
+        original_bootstrap
+    );
+}
+
 #[tokio::test]
 async fn sync_real_mdbx_roundtrip_preserves_old_copies_and_detects_divergence() {
     let directory = tempfile::tempdir().unwrap();

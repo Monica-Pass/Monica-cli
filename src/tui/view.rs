@@ -215,6 +215,10 @@ pub(super) fn path_line(frame: &mut Frame<'_>, area: Rect, text: &str) {
 }
 
 pub(super) fn render(frame: &mut Frame<'_>, app: &mut App) {
+    if let Some(viewer) = &mut app.inspection {
+        viewer.render(frame, app.language);
+        return;
+    }
     let lang = app.language;
     let area = frame.area();
     frame.render_widget(Block::default().style(Style::default().bg(BG).fg(FG)), area);

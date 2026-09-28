@@ -414,12 +414,17 @@ impl Vault {
         if self.is_android_root(id) {
             return Err(GatewayError::ProtectedCollection);
         }
-        let command = if let Some(entry) = inventory.entries.iter().find(|e| e.id == id) {
-            WriteCommand::MoveEntry {
-                entry_id: id.to_owned(),
-                project_id: entry.category.clone(),
-                target_project_id: target.to_owned(),
-            }
+        let command = if inventory.entries.iter().any(|e| e.id == id) {
+            let original = self.editable_object(id)?;
+            return self.write_object(
+                &original,
+                "library-move",
+                WriteCommand::MoveEntry {
+                    entry_id: id.to_owned(),
+                    project_id: original.collection_id.clone(),
+                    target_project_id: target.to_owned(),
+                },
+            );
         } else if inventory.categories.iter().any(|c| c.id == id) {
             let mut parent = Some(target);
             for _ in 0..=inventory.categories.len() {
@@ -452,17 +457,15 @@ impl Vault {
     /// to the other devices with the next segment; the encrypted bytes stay in the vault file
     /// until it gains a purge path, which neither the engine nor Android has yet.
     pub fn delete_entry(&self, id: &str) -> Result<()> {
-        let project_id = self
-            .library()?
-            .entries
-            .iter()
-            .find(|entry| entry.id == id)
-            .map(|entry| entry.category.clone())
-            .ok_or(GatewayError::NotFound)?;
-        self.library_write(WriteCommand::DeleteEntry {
-            entry_id: id.to_owned(),
-            project_id,
-        })
+        let original = self.editable_object(id)?;
+        self.write_object(
+            &original,
+            "library-delete",
+            WriteCommand::DeleteEntry {
+                entry_id: id.to_owned(),
+                project_id: original.collection_id.clone(),
+            },
+        )
     }
 
     /// Removes one category. Only an empty one: the engine refuses to orphan children, and a

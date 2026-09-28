@@ -5,6 +5,7 @@ mod browser;
 mod form;
 mod fuzzy;
 mod home;
+mod inspector;
 mod preview;
 mod view;
 
@@ -14,8 +15,8 @@ use std::time::{Duration, Instant};
 
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{
-    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers,
+    self, DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange,
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -203,7 +204,7 @@ const COMMANDS: &[CommandHelp] = &[
         cli: Message::CommandCheckCli,
     },
     CommandHelp {
-        command: "refresh",
+        command: "reload",
         key: "r",
         description: Message::CommandRefreshDescription,
         cli: Message::CommandRefreshCli,
@@ -262,6 +263,8 @@ enum Mode {
 }
 
 struct App {
+    inspection: Option<inspector::Viewer>,
+    inspection_requested: bool,
     databases: Vec<crate::databases::Database>,
     home: bool,
     home_rail_selected: usize,
@@ -308,6 +311,8 @@ impl App {
     fn new(store: ConfigStore, language: Language) -> Self {
         let lang = language;
         let mut app = Self {
+            inspection: None,
+            inspection_requested: false,
             databases: Vec::new(),
             home: true,
             home_rail_selected: 0,
@@ -503,7 +508,9 @@ impl App {
         if self.pending.is_some() {
             return;
         }
-        if action.pauses_broker() {
+        self.inspection = None;
+        self.inspection_requested = matches!(action, Action::Inspect { .. });
+        if action.pauses_broker() && !self.inspection_requested {
             if matches!(
                 action,
                 Action::Connect { .. }
@@ -603,7 +610,7 @@ impl App {
             Page::Dashboard => &["add", "open", "login", "grant", "unlock"],
             Page::Connections => &["add", "note", "grant", "connect", "unlock", "lock"],
             Page::Grants => &["grant", "mcp", "check", "revoke", "unlock", "lock"],
-            Page::WebDav => &["login", "publish", "sync", "refresh", "logout"],
+            Page::WebDav => &["login", "publish", "sync", "reload", "logout"],
             Page::Help => &["commands", "message", "icons"],
         };
         if !self.home {
@@ -791,7 +798,7 @@ impl App {
                 Ok((_, path)) => self.start(Action::Probe(path)),
                 Err(error) => self.error(error),
             },
-            "refresh" => {
+            "reload" | "refresh" => {
                 self.reload();
                 if self.page == Page::WebDav && self.webdav.is_some() {
                     self.start(Action::Browse(self.folder.clone()));
@@ -872,6 +879,10 @@ impl App {
 
     fn key(&mut self, key: KeyEvent) {
         if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            return;
+        }
+        if self.inspection.is_some() {
+            self.inspection_key(key);
             return;
         }
         if key.code == KeyCode::F(2) && key.modifiers.is_empty() {
@@ -1089,7 +1100,7 @@ impl App {
             KeyCode::Char(ch @ '1'..='5') => self.set_page(Page::ALL[ch as usize - '1' as usize]),
             KeyCode::Enter if self.focus != Focus::List => self.focus = Focus::List,
             KeyCode::Enter if self.pending.is_none() => self.enter(),
-            KeyCode::F(5) => self.invoke("refresh"),
+            KeyCode::F(5) => self.invoke("reload"),
             KeyCode::Char(ch) => {
                 if let Some(command) = COMMANDS
                     .iter()
@@ -1111,6 +1122,15 @@ impl App {
             Err(error) => self.error(error),
         }
         match outcome {
+            Outcome::Inspection(inspection) => {
+                if self.inspection_requested
+                    && !self.quitting
+                    && inspection.opened.elapsed() < Duration::from_secs(60)
+                {
+                    self.inspection = Some(inspector::Viewer::new(inspection));
+                }
+                self.inspection_requested = false;
+            }
             Outcome::Library {
                 library,
                 keys,
@@ -1240,6 +1260,13 @@ impl App {
 
     async fn poll(&mut self) {
         if self
+            .inspection
+            .as_ref()
+            .is_some_and(|viewer| viewer.expired())
+        {
+            self.inspection = None;
+        }
+        if self
             .library_loaded
             .is_some_and(|time| time.elapsed() >= Duration::from_secs(300))
         {
@@ -1281,6 +1308,8 @@ impl App {
     }
 
     async fn finish(&mut self) -> Result<()> {
+        self.inspection = None;
+        self.inspection_requested = false;
         if let Some(job) = self.pending.take()
             && let Ok(Ok(outcome)) = job.await
         {
@@ -1304,6 +1333,7 @@ impl ScreenGuard {
             std::io::stdout(),
             EnterAlternateScreen,
             EnableBracketedPaste,
+            EnableFocusChange,
             Hide
         )
         .map_err(|_| GatewayError::HumanTerminalRequired)?;
@@ -1315,6 +1345,7 @@ fn restore_screen() {
     let _ = execute!(
         std::io::stdout(),
         DisableBracketedPaste,
+        DisableFocusChange,
         Show,
         LeaveAlternateScreen
     );
@@ -1363,6 +1394,10 @@ async fn event_loop(
                 break;
             }
             match event::read().map_err(|_| GatewayError::HumanTerminalRequired)? {
+                Event::FocusLost => {
+                    app.inspection = None;
+                    app.inspection_requested = false;
+                }
                 Event::Key(key) => app.key(key),
                 Event::Paste(value) => {
                     let value = Zeroizing::new(value);

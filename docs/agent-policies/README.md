@@ -1,18 +1,18 @@
 # 接入 AI 客户端：两条命令
 
 这个目录里是可以直接投递给 AI 客户端的规则文件；配好 MCP 入口用的是
-`monica settings <grant 名> --install <客户端>`。
+`monica mcp-config <grant 名> --install <客户端>`。
 
 ## 最小接入
 
 ```console
 monica grant work-agent --connection work --repo example/project --approval write
-monica settings work-agent --install claude
+monica mcp-config work-agent --install claude
 ```
 
 第一条签发授权并打印一次性的 MCP 配置入口文件；第二条把同一条 MCP 条目写进
 Claude Code 自己的配置文件。之后重启该客户端的 MCP 入口即可。
-不加 `--install` 时 `settings` 只打印配置和落一份 `clients/<授权名>.client.mcp.json`，
+不加 `--install` 时 `mcp-config` 只打印配置和落一份 `clients/<授权名>.client.mcp.json`，
 适合项目级配置或本工具没写进过的那种客户端。
 
 ## 各客户端写到哪里

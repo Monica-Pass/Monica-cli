@@ -32,7 +32,7 @@
 
 </div>
 
-[实现与验证](docs/redesign-progress.md) · [克隆与构建依赖](docs/source-checkout.md) · [Token 与 Android 数据约定](docs/token-format.md)
+[实现与验证](docs/redesign-progress.md) · [克隆与构建依赖](docs/source-checkout.md) · [Token 与 Android 数据约定](docs/token-format.md) · [MDBX 跨端兼容](docs/mdbx-compatibility.md)
 
 Monica CLI 将服务 Token 保存在本地 MDBX3 加密保险库中。AI 通过 MCP 请求操作，Monica 校验授权、注入凭据并代为发送请求，再将业务结果返回给 AI。你负责管理凭据和权限，AI 通过连接名称和用途备注理解该使用哪个服务，无需直接持有原始 Token。
 
@@ -50,11 +50,11 @@ Monica CLI 将服务 Token 保存在本地 MDBX3 加密保险库中。AI 通过 
 
 - **它管的是"要交给 AI 去办事"的那批凭据**，例如 GitHub / GitLab 的 API Token，不是你全部的密码。
 - **它把 Token 挡在 AI 之外**：AI 只能提出"列出这个仓库的 Issue"这样的请求；校验授权、注入凭据、发送请求、检查响应是否回泄都由本地代理完成，原始 Token 从不出现在模型上下文里。
-- **它给权限上了时间**：每一份 AI 授权都会到期、可以设调用次数上限、只能由人在本地 `refresh` 续期，**不存在永久授权**；而存在保险库里的凭据本身不过期，也不会因为授权到期被删。
+- **它给权限上了时间**：每一份 AI 授权都会到期、可以设调用次数上限、只能由人在本地 `renew` 续期，**不存在永久授权**；而存在保险库里的凭据本身不过期，也不会因为授权到期被删。
 - **它可以让每次写入先问你一句**：授权设 `--approval write` 后写操作、设 `--approval all` 后每一次调用，都要等你本人在终端里按 `y` 才会发出，最多等 15 秒，没人应答就返回 `approval_timeout`。提示只出现在你自己的终端（TUI 弹窗或 `serve` 终端），AI 侧没有应答通道也读不到它，`monica approve` 这样的命令**故意不存在**；被拒的调用不消耗次数预算。
 - **它顺带能管理这份数据库**：内置 TUI 与命令行，是因为配授权、看状态、同步 WebDAV 不必为此打开手机。
 
-它和手机 Monica **读写同一份 MDBX3 数据库**，所以是同一个保险库的两个入口，不是两套互不相干的存储。它明确不做的部分：不生成 TOTP、不做自动填充、没有浏览器扩展、不导入 KeePass / Bitwarden、不处理外置附件（带 `.blobs` 的库会被直接拒绝，报 `external_blobs_unsupported`）。
+它和手机 Monica **读写同一份 MDBX3 数据库**，所以是同一个保险库的两个入口，不是两套互不相干的存储。它明确不做的部分：不生成 TOTP、不做自动填充、没有浏览器扩展、不导入 KeePass / Bitwarden、不提供附件明文导出；外置 `.blobs` 密文随托管副本与 WebDAV 分段保留。
 
 > 想要"一个 App 管我所有密码"——那是[主仓库](https://github.com/Monica-Pass/Monica)。想要"让 AI 帮我建 Issue、查 PR，但别想把我的 Token 拿走"——就是这个仓库。
 
@@ -99,7 +99,7 @@ flowchart LR
 
 ## 快速开始
 
-Windows 先按[从源码构建](#从源码构建)产出 `target/release/monica-pass.exe`，再运行 `./scripts/install.ps1 -InstallDir D:\Apps\MonicaCLI`。安装器默认取用该构建产物，也可用 `-Source` 指定其他可执行文件；`-InstallDir` 必须是绝对路径且不能是盘根目录，目标目录非空时必须已是一次 Monica 便携安装，更新前请先退出正在运行的 Monica。安装会写入 `monica-pass.exe` 以及 `monica`、`monicapass` 两个入口并加入用户 PATH，配置、保险库和日志保存在同目录的 `data/`。打开新终端后输入 `monica` 即可启动。安装副本不会随仓库更新；如果 `monica refresh` 之类的较新命令被报为未知命令，说明副本落后于源码，需要重新构建并安装。
+Windows 先按[从源码构建](#从源码构建)产出 `target/release/monica-pass.exe`，再运行 `./scripts/install.ps1 -InstallDir D:\Apps\MonicaCLI`。安装器默认取用该构建产物，也可用 `-Source` 指定其他可执行文件；`-InstallDir` 必须是绝对路径且不能是盘根目录，目标目录非空时必须已是一次 Monica 便携安装，更新前请先退出正在运行的 Monica。安装会写入 `monica-pass.exe` 以及 `monica`、`monicapass` 两个入口并加入用户 PATH，配置、保险库和日志保存在同目录的 `data/`。打开新终端后输入 `monica` 即可启动。安装副本不会随仓库更新；如果 `monica renew` 之类的较新命令被报为未知命令，说明副本落后于源码，需要重新构建并安装。
 
 默认主页按数据库、嵌套分类和条目组织内容：
 
@@ -131,9 +131,9 @@ Windows 先按[从源码构建](#从源码构建)产出 `target/release/monica-p
 
 编辑表单用 `Tab` 切换字段，`Ctrl+S` 进入独立的数据库密码步骤。在密码步骤按 `Esc` 返回草稿并清除密码。每次管理操作只在执行期间解锁数据库，条目摘要最多缓存五分钟；这与 AI 代理的五分钟解锁会话相互独立。
 
-设置中按 `c` 可引导式接入服务，按 `a` 单独配置授权。授权**一律会到期**，可随时撤销：有效期默认 240 分钟（命令行 `--ttl`，可指定 1–1440 分钟，留空不再表示永久），还可以用 `--max-calls` 限制该授权能发起的上游请求次数。窗口或次数用尽后，AI 侧只会收到 `reauthorization_required`，必须由人在本地执行 `monica refresh 授权名` 续期（暂仅在命令行提供，TUI 无对应按键），续期会换发新的 capability，需重启 MCP 客户端才会生效。任何授权仍需要代理处于解锁状态。更换 Token 后，该连接原有授权会被撤销。
+设置中按 `c` 可引导式接入服务，按 `a` 单独配置授权。授权**一律会到期**，可随时撤销：有效期默认 240 分钟（命令行 `--ttl`，可指定 1–1440 分钟，留空不再表示永久），还可以用 `--max-calls` 限制该授权能发起的上游请求次数。窗口或次数用尽后，AI 侧只会收到 `reauthorization_required`，必须由人在本地执行 `monica renew 授权名` 续期（暂仅在命令行提供，TUI 无对应按键），续期会换发新的 capability，需重启 MCP 客户端才会生效。任何授权仍需要代理处于解锁状态。更换 Token 后，该连接原有授权会被撤销。
 
-授权还可以设**人工门槛**：命令行 `monica grant … --approval write`（写操作先问你）或 `--approval all`（每次调用都问），续期用 `monica rf 授权名 --approval all` 补设，`off` 为默认即不询问；TUI 的授权表单里对应「人工批准」一栏。`add` 这条快速路径没有该参数，它签出的授权一律是 `off`，需要门槛就事后用 `grant`/`rf` 补设。`st` 的表格新增「门槛」一列（英文界面为 `Gate`）直接显示档位。详见 [docs/human-guide.md](docs/human-guide.md) 第 6.5 节。
+授权还可以设**人工门槛**：命令行 `monica grant … --approval write`（写操作先问你）或 `--approval all`（每次调用都问），续期用 `monica renew 授权名 --approval all` 补设，`off` 为默认即不询问；TUI 的授权表单里对应「人工批准」一栏。`add` 这条快速路径没有该参数，它签出的授权一律是 `off`，需要门槛就事后用 `grant`/`rf` 补设。`st` 的表格新增「门槛」一列（英文界面为 `Gate`）直接显示档位。详见 [docs/human-guide.md](docs/human-guide.md) 第 6.5 节。
 
 主页树里始终有一行 **AI 授权**（锁库时也在），行尾直接给出当前生效的授权数量，按 `Enter` 进入授权列表：仍在生效的行显示只读或读写，已过期与 **调用已用完** 的行转暗，选中行的预览给出 `已用/上限` 次数——不用打开详细数据库就能看清哪些代理还在服务。
 
@@ -162,20 +162,26 @@ monica-pass language auto
 
 ### 从命令行开始
 
-也可以用一条命令完成建库、添加连接、授权和解锁：
+命令行按以下顺序接入；add 创建连接与同名只读授权：
 
 ```sh
-monica-pass add work-github --repo your-org/your-repo --note "跟踪产品问题与功能建议" --serve
+monica-pass add work-github --repo your-org/your-repo --note "跟踪产品问题与功能建议"
+monica-pass mcp-config work-github --install codex
+monica-pass serve
+# 在另一个终端运行：
+monica-pass check work-github
 ```
 
 程序会隐藏询问 Token 和主密码。`--serve` 表示保存后继续运行代理；省略它则完成配置后退出，需要使用时再运行 `monica-pass serve`。
 
-不确定下一步做什么时，运行 `monica-pass next`。它只读公开元数据，告诉你还差哪一步（建库、存连接、开授权、启动代理、接入 AI 客户端）以及该敲的命令。`monica-pass --help` 按用途把命令分成 7 组，开头是三步快速上手；命令敲错时会提示最接近的正式命令名。
+不确定下一步做什么时，运行 `monica-pass next`。它只读公开元数据，告诉你还差哪一步（建库、存连接、开授权、接入 AI 客户端、启动代理）以及该敲的命令。`monica-pass --help` 按用途把命令分成 7 组，开头是四步快速上手；命令敲错时会提示最接近的正式命令名。
+
+`next --grant review-agent` 显式选择授权；多份授权时不会自动挑选。它不读取 AI 客户端配置，接入状态保持“未验证”；`check` 只验证代理通道。所有步骤使用同一 `--config`。
 
 GitLab 示例：
 
 ```sh
-monica-pass add work-gitlab --provider gitlab --repo your-group/your-project --note "处理团队项目的 Issue" --serve
+monica-pass add work-gitlab --provider gitlab --repo your-group/your-project --note "处理团队项目的 Issue"
 ```
 
 需要多个仓库时重复指定 `--repo`。需要允许创建 Issue 时，显式添加 `--allow-write`，或在 TUI 用 `a` 为已有连接创建相应授权。
@@ -183,7 +189,7 @@ monica-pass add work-gitlab --provider gitlab --repo your-group/your-project --n
 常用管理命令：
 
 ```sh
-monica-pass list
+monica-pass connections
 monica-pass note work-github "跟踪文档仓库的 Issue"
 monica-pass serve
 monica-pass lock
@@ -207,23 +213,23 @@ monica-pass keys delete 工作机 --force
 完整命令与缩写等价，常用参数也支持短写：
 
 ```sh
-monica-pass a work-github -r your-org/your-repo -n "跟踪产品问题" -s
-monica-pass ls
+monica-pass add work-github --repo your-org/your-repo --note "跟踪产品问题" -s
+monica-pass connections
 monica-pass show work-github
 monica-pass e work-github "跟踪文档仓库的问题"
-monica-pass m work-github
-monica-pass ck work-github
+monica-pass mcp-config work-github
+monica-pass check work-github
 ```
 
 | 操作 | 完整命令 | 缩写 |
 | --- | --- | --- |
 | 快速添加 / 仅保存连接 | `add` / `connect` | `a` / `c` |
-| 列出连接 / 编辑用途 | `list` / `note` | `ls` / `e` |
+| 列出连接 / 编辑用途 | `connections` / `note` | `ls` / `e` |
 | 建库 / 打开本地库 | `init` / `open` | `n` / `o` |
-| 创建授权 / 续期 / 撤销授权 | `grant` / `refresh` / `revoke` | `g` / `rf` / `rv` |
-| 给授权设人工门槛 | `grant --approval off\|write\|all` / `refresh --approval <档位>` | 授权表单「人工批准」栏 |
+| 创建授权 / 续期 / 撤销授权 | `grant` / `renew` / `revoke` | `g` / `rf` / `rv` |
+| 给授权设人工门槛 | `grant --approval off\|write\|all` / `renew --approval <档位>` | 授权表单「人工批准」栏 |
 | 解锁并运行 / 锁定 | `serve` / `lock` | `u` / `lk` |
-| MCP 配置 / 检查工具 | `settings` / `check` | `m` / `ck` |
+| MCP 配置 / 检查工具 | `mcp-config` / `check` | `m` / `ck` |
 | 状态 / WebDAV / 命令查询 | `status` / `webdav` / `commands` | `st` / `dav` / `cmds` |
 | 删除连接或条目 / 删除空分类 | `delete` / `delete-category` | `rm`、`del` / `rmdir` |
 | 查看 / 调整本库安全等级 | `tiga show` / `tiga set <sky\|multi\|power>` | 无 |
@@ -239,16 +245,18 @@ monica-pass ck work-github
 
 `show` 按连接名称显示用途和相关授权；`m`、`ck` 按授权名称操作，快速添加时二者名称相同。需要访问保险库的管理或同步会先停止代理并等待在途请求结束，完成后保持锁定；需要继续使用 MCP 时运行 `u`，或在 TUI 按 `u`。查询元数据和撤销授权无需停止代理。
 
+推荐正式名称 `connections`、`mcp-config`、`renew`；旧 `list`、`settings`、`refresh` 与缩写继续可用。为兼容脚本，执行 JSON 的 `command` 仍为 `list`、`settings`、`refresh`。TUI 刷新列表用 `:reload`，旧 `:refresh` 仍兼容。
+
 ### AI 通过 CLI 管理
 
-TUI 中的建库、打开库、添加连接、编辑用途、授权、撤权、WebDAV 和代理管理都有 CLI 入口。AI 可以先查询命令，再按名称操作：
+TUI 中的建库、打开库、添加连接、编辑用途、授权、撤权、WebDAV 和代理管理都有 CLI 入口。AI 可以查询命令；执行本地管理仍需人的授权与受信执行器。发现命令不授予管理权限：
 
 ```sh
-monica-pass cmds --json
-monica-pass cmds add --json
-monica-pass ls --json
+monica-pass commands --summary --json
+monica-pass commands add --json
+monica-pass connections --json
 monica-pass show work-github --json
-monica-pass m work-github --json
+monica-pass commands mcp-config --json
 ```
 
 `--json`（`-j`）统一输出 `ok`、`command`、`data` 或固定错误码，并禁用交互提示；结果不随界面语言变化。`--non-interactive` 也可单独用于禁止提示。无子命令时，普通模式打开 TUI，JSON / 非交互模式查询状态。
@@ -258,14 +266,14 @@ monica-pass m work-github --json
 需要凭据的操作使用 `--secrets-stdin`。例如，AI 可以发起以下命令，由**可信本地启动器**把 `password` 和 `token` 两个字段直接送入该进程的标准输入：
 
 ```sh
-monica-pass a work-github -r your-org/your-repo -n "跟踪产品问题" --json --secrets-stdin
+monica-pass add work-github --repo your-org/your-repo --note "跟踪产品问题" --json --secrets-stdin
 ```
 
 密码和 Token 不需要经过模型，也不放进命令参数、环境变量或输出。缺少安全输入时返回 `secret_input_required` 和所需字段。管道接入示例、输入格式和完整操作对应表见 [CLI 自动化说明](docs/automation.md)。
 
 ## 接入 AI
 
-Monica 提供 **MCP stdio** 服务。优先使用程序生成的 MCP 配置：快速创建后会显示并保存配置，也可在授权页选中授权后按 `m`，或执行 `monica-pass m <授权名称>` 获取。
+Monica 提供 **MCP stdio** 服务。优先使用程序生成的 MCP 配置：快速创建后会显示并保存配置，也可在授权页选中授权后按 `m`，或执行 `monica-pass mcp-config <授权名称>` 获取。
 
 下面是常见的 JSON 配置形式。两个路径都是示例，请以 Monica 实际生成的路径为准；使用 TOML 等格式的客户端，填写相同的 `command` 和 `args` 即可。
 
@@ -289,7 +297,7 @@ Monica 提供 **MCP stdio** 服务。优先使用程序生成的 MCP 配置：�
 不想手工粘贴时，一条命令可以把这一条合并进客户端自己的配置文件——先备份、只动这一个条目、结构读不回来的文件直接不碰：
 
 ```sh
-monica-pass settings <授权名> --install claude   # 或 cursor / codex / vscode
+monica-pass mcp-config <授权名> --install claude   # 或 cursor / codex / vscode
 ```
 
 Claude Desktop 与项目级配置文件仍走上面的手工粘贴。行为边界与被写文件的位置见 [人工手册](docs/human-guide.md)第 4 节。
@@ -345,7 +353,7 @@ monica-pass webdav forget-password
 
 命令行人工输入密码时同样走本机凭据管理器；`--secrets-stdin` 注入的密码**只在该进程内使用，一律不落盘**。`monica-pass dav st` 不联网即可查看连接信息和「已存密码」状态。整文件同步比较本地与远端版本，双方都有变化时报告冲突；可将本地版本发布到新文件名后再处理。打开另一份保险库会保留原本地文件，并清除现有 AI 授权。
 
-支持通过密码解锁、**不超过 64 MiB 的自包含 MDBX 文件**，不支持外置附件 `.blobs`。远端有两种形态：目录里只有单个 `.mdbx` 文件时按整文件同步，覆盖远端需要服务器支持强 ETag 与条件写入，不支持时仍可读取；存在同名加 `.sync` 的文件夹（Monica Android 的写法）时自动改用分段流合并，双方都有变化由引擎按提交合并，每台设备只写自己名下的不可变分段，一次性发布的初始副本永不覆盖，该模式也不依赖强 ETag——每个分段写完都会读回核对摘要。重放时每个分段出一行进度，`Ctrl+C` 在分段边界停下（游标已落盘，下次从原位继续），再按一次立即退出。
+支持通过密码解锁、**不超过 64 MiB 的 MDBX 文件**，以及配套 `.blobs` 密文附件；单个加密块上限 64 MiB，总处理量上限 4 GiB。远端有两种形态：目录里只有单个 `.mdbx` 文件时按整文件同步，覆盖远端需要服务器支持强 ETag 与条件写入，不支持时仍可读取；存在同名加 `.sync` 的文件夹（Monica Android 的写法）时自动改用分段流合并，双方都有变化由引擎按提交合并，每台设备只写自己名下的不可变分段，一次性发布的初始副本永不覆盖，该模式也不依赖强 ETag——每个分段写完都会读回核对摘要。重放时每个分段出一行进度，`Ctrl+C` 可中断网络与退避等待；同步中的引擎事务仍保持原子性，分段及其 Blob 全部确认后才落盘游标。恢复后幂等续传，再按一次立即退出。
 
 整文件模式下，部分服务（如本次验证的坚果云）不返回强 ETag。此时可新建上传、读取和下载，但有本地改动后需按 `P` 或使用 `webdav publish NEW_NAME.mdbx` 保存为新的远端文件。`webdav status --json` 的 `safe_remote_replace: false` 和 TUI 预览会明确提示，程序不会强制覆盖。
 

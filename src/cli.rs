@@ -39,13 +39,27 @@ pub enum Command {
     #[command(visible_alias = "db")]
     Databases,
     /// Switch to a saved database ID. Requires its password; old grants stay revoked.
-    Use { id: String },
+    Use {
+        #[arg(value_name = "DATABASE_ID")]
+        id: String,
+    },
     /// Replace a stored Token through secure input; revoke its old AI grants.
-    Token { name: String },
+    Token {
+        #[arg(value_name = "CONNECTION")]
+        name: String,
+    },
     /// Rename a native MDBX category by its stable ID.
-    RenameCategory { id: String, title: String },
+    RenameCategory {
+        #[arg(value_name = "CATEGORY_ID")]
+        id: String,
+        title: String,
+    },
     /// Rename an entry's display title (Chinese allowed) by its connection handle.
-    RenameEntry { name: String, title: String },
+    RenameEntry {
+        #[arg(value_name = "CONNECTION")]
+        name: String,
+        title: String,
+    },
     /// Manage SSH and GPG key entries in the vault; bare keys lists them.
     #[command(visible_alias = "k", hide = true)]
     Keys {
@@ -59,16 +73,22 @@ pub enum Command {
     #[command(visible_alias = "mkdir")]
     Category {
         title: String,
-        #[arg(long)]
+        #[arg(long, value_name = "CATEGORY_ID")]
         parent: Option<String>,
     },
     /// Move an entry or category into another category by ID.
     #[command(visible_alias = "mv")]
-    Move { id: String, target: String },
+    Move {
+        #[arg(value_name = "ENTRY_OR_CATEGORY_ID")]
+        id: String,
+        #[arg(value_name = "CATEGORY_ID")]
+        target: String,
+    },
     /// Delete a connection or entry by handle or ID; confirm by typing the target.
     #[command(visible_aliases = ["rm", "del"])]
     Delete {
         /// Connection name, or the entry ID shown by monica-pass library.
+        #[arg(value_name = "CONNECTION_OR_ENTRY_ID")]
         target: String,
         /// Delete without the typed confirmation, after checking the target.
         #[arg(long = "force", id = "force_delete")]
@@ -78,7 +98,7 @@ pub enum Command {
     #[command(visible_alias = "rmdir")]
     DeleteCategory {
         /// Existing category ID, as listed by monica-pass library.
-        #[arg(id = "category_id")]
+        #[arg(id = "category_id", value_name = "CATEGORY_ID")]
         id: String,
         /// Delete without the typed confirmation, after checking the target.
         #[arg(long = "force", id = "force_delete")]
@@ -93,6 +113,9 @@ pub enum Command {
     /// Discover commands, aliases, parameters and required secret fields.
     #[command(visible_alias = "cmds")]
     Commands {
+        /// Return a compact index; inspect one command for its full grammar and effects.
+        #[arg(long)]
+        summary: bool,
         /// Optional command path, such as add or webdav open.
         #[arg(value_name = "COMMAND")]
         topic: Vec<String>,
@@ -110,14 +133,21 @@ pub enum Command {
         serve: bool,
     },
     /// List connection names, services and public notes; never reveal tokens.
-    #[command(visible_aliases = ["ls", "l"])]
+    #[command(name = "connections", visible_aliases = ["list", "ls", "l"])]
     List,
     /// Show one named connection and its grants; never reveal tokens.
     #[command(visible_alias = "info")]
-    Show { name: String },
+    Show {
+        #[arg(value_name = "CONNECTION")]
+        name: String,
+    },
     /// Edit a connection's public purpose note. Requires the vault password.
     #[command(visible_aliases = ["e", "edit"])]
-    Note { name: String, note: String },
+    Note {
+        #[arg(value_name = "CONNECTION")]
+        name: String,
+        note: String,
+    },
     /// Open an existing MDBX as a managed copy; preserve old vaults and reset grants.
     #[command(visible_alias = "o")]
     Open { vault: PathBuf },
@@ -128,8 +158,9 @@ pub enum Command {
         command: WebDavCommand,
     },
     /// Print and save MCP settings for an existing grant, selected by name.
-    #[command(visible_aliases = ["m", "mcp-config"])]
+    #[command(name = "mcp-config", visible_aliases = ["settings", "m"])]
     Settings {
+        #[arg(value_name = "GRANT")]
         name: String,
         /// Write the entry into this AI client's own MCP configuration file.
         #[arg(long, value_name = "CLIENT", value_enum)]
@@ -139,6 +170,7 @@ pub enum Command {
     #[command(visible_aliases = ["ck", "p"], group(clap::ArgGroup::new("target").required(true).args(["name", "client"])))]
     Check {
         /// Existing grant name, as shown by status.
+        #[arg(value_name = "GRANT")]
         name: Option<String>,
         #[arg(short = 'c', long, value_name = "CLIENT_FILE")]
         client: Option<PathBuf>,
@@ -161,8 +193,9 @@ pub enum Command {
     #[command(visible_alias = "c")]
     Connect {
         /// Native category ID; defaults to the connection collection.
-        #[arg(long)]
+        #[arg(long, value_name = "CATEGORY_ID")]
         category: Option<String>,
+        #[arg(value_name = "CONNECTION")]
         name: String,
         /// Optional human-facing display title (Chinese allowed). The name stays the AI handle.
         #[arg(long, default_value = "")]
@@ -180,18 +213,22 @@ pub enum Command {
     #[command(visible_alias = "g")]
     Grant(GrantOptions),
     /// Re-authorize an existing grant with a fresh capability; the old one stops working.
-    #[command(visible_alias = "rf")]
+    #[command(name = "renew", visible_aliases = ["refresh", "rf"])]
     Refresh(RefreshOptions),
     /// Execute a tool through an unlocked broker. Request file contains public ToolCall JSON.
     Call {
         /// Existing grant name.
+        #[arg(value_name = "GRANT")]
         name: String,
         #[arg(long, value_name = "JSON_FILE")]
         request: PathBuf,
     },
     /// Revoke a grant. Subsequent calls using its capability will fail.
     #[command(visible_aliases = ["rv", "x"])]
-    Revoke { name: String },
+    Revoke {
+        #[arg(value_name = "GRANT")]
+        name: String,
+    },
     /// Unlock and run until Ctrl+C, lock, or five-minute session expiry.
     #[command(visible_aliases = ["s", "u", "unlock"])]
     Serve,
@@ -202,7 +239,11 @@ pub enum Command {
     #[command(visible_alias = "st")]
     Status,
     /// Show which setup step is still missing and the command for it.
-    Next,
+    Next {
+        /// Select the grant to guide; required to choose among several grants.
+        #[arg(long, value_name = "GRANT")]
+        grant: Option<String>,
+    },
     /// Read the local gateway audit trail: which grant ran which operation, and how it ended.
     Audit {
         /// Restrict the trail to one grant name.
@@ -403,7 +444,7 @@ impl Command {
             Self::Serve => "serve",
             Self::Lock => "lock",
             Self::Status => "status",
-            Self::Next => "next",
+            Self::Next { .. } => "next",
             Self::Audit { .. } => "audit",
             Self::Tiga { command } => match command {
                 TigaCommand::Show => "tiga show",

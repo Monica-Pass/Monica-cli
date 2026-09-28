@@ -1,9 +1,11 @@
 mod cli;
+mod cli_contract;
 mod cli_discovery;
 mod cli_guide;
 mod cli_input;
 mod cli_language;
 mod cli_output;
+mod cli_recovery;
 mod cli_run;
 mod cli_table;
 
@@ -30,9 +32,11 @@ async fn main() -> std::process::ExitCode {
     match cli_run::run(cli, language).await {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
+            let (recovery, recovery_message) = cli_recovery::recovery(error, command);
             if json {
                 let mut value = error.response();
                 value["command"] = command.into();
+                value["error"]["recovery"] = recovery.clone();
                 if error == GatewayError::SecretInputRequired {
                     value["error"]["required"] = serde_json::json!(
                         cli_input::required_fields(command)
@@ -44,6 +48,12 @@ async fn main() -> std::process::ExitCode {
                 let _ = cli_output::print_json(&value, false);
             } else {
                 eprintln!("monica-pass: {}", language.error(error));
+                if !protocol {
+                    eprintln!(
+                        "{}",
+                        cli_recovery::render(&recovery, recovery_message, language)
+                    );
+                }
             }
             std::process::ExitCode::FAILURE
         }
@@ -58,6 +68,36 @@ mod tests {
     use monica_pass_cli::model::Operation;
     use monica_pass_cli::model::Provider;
     use std::path::Path;
+
+    #[test]
+    fn explicit_names_and_legacy_aliases_keep_execution_identifiers() {
+        for (names, tail, expected) in [
+            (vec!["connections", "list", "ls", "l"], vec![], "list"),
+            (
+                vec!["mcp-config", "settings", "m"],
+                vec!["review-agent"],
+                "settings",
+            ),
+            (
+                vec!["renew", "refresh", "rf"],
+                vec!["review-agent"],
+                "refresh",
+            ),
+        ] {
+            for name in names {
+                let mut args = vec!["monica", name];
+                args.extend(tail.iter().copied());
+                assert_eq!(
+                    Cli::try_parse_from(args).unwrap().command.unwrap().name(),
+                    expected
+                );
+            }
+        }
+        let cli = Cli::try_parse_from(["monica", "next", "--grant", "review-agent"]).unwrap();
+        assert!(
+            matches!(cli.command, Some(Command::Next { grant: Some(g) }) if g == "review-agent")
+        );
+    }
 
     #[test]
     fn cli_quick_add_is_read_only_by_default_with_explicit_write_opt_in() {

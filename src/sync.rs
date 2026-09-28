@@ -126,6 +126,7 @@ impl Snapshot {
         if info.file_size_bytes > MAX_VAULT_BYTES {
             return Err(GatewayError::ResponseTooLarge);
         }
+        crate::blobs::copy_all(source, &path)?;
         let sha256 = hash_file(&path)?;
         Ok(Self {
             directory,
@@ -134,7 +135,7 @@ impl Snapshot {
         })
     }
 
-    fn inspect(&self, password: &str) -> Result<GatewayInventory> {
+    fn validation_path(&self) -> Result<PathBuf> {
         let validation = self
             .directory
             .path()
@@ -143,10 +144,46 @@ impl Snapshot {
         BackupService::create_portable_copy_path(&self.path, &validation)
             .map_err(|_| GatewayError::InvalidVault)?;
         private_file(&validation)?;
+        crate::blobs::copy_all(&self.path, &validation)?;
+        Ok(validation)
+    }
+
+    fn inspect(&self, password: &str) -> Result<GatewayInventory> {
+        let validation = self.validation_path()?;
         let vault = Vault::open(&validation, password)?;
         let inventory = vault.gateway_inventory()?;
+        crate::blobs::verify(&vault)?;
         vault.lock()?;
         Ok(inventory)
+    }
+
+    async fn receive_blobs(
+        &self,
+        store: &ConfigStore,
+        client: &WebDavClient,
+        path: &str,
+        password: &str,
+    ) -> Result<()> {
+        let validation = self.validation_path()?;
+        let vault = Vault::open(&validation, password)?;
+        let result = crate::blobs::receive(&vault, store, client, &format!("{path}.sync")).await;
+        vault.lock()?;
+        result?;
+        crate::blobs::copy_all(&validation, &self.path)
+    }
+
+    async fn publish_blobs(
+        &self,
+        store: &ConfigStore,
+        client: &WebDavClient,
+        path: &str,
+        password: &str,
+    ) -> Result<()> {
+        let validation = self.validation_path()?;
+        let vault = Vault::open(&validation, password)?;
+        let result = crate::blobs::publish(&vault, store, client, &format!("{path}.sync")).await;
+        vault.lock()?;
+        result
     }
 
     fn install(&self, store: &ConfigStore) -> Result<(PathBuf, String)> {
@@ -158,6 +195,7 @@ impl Snapshot {
         BackupService::create_portable_copy_path(&self.path, &destination)
             .map_err(|_| GatewayError::StateUnavailable)?;
         private_file(&destination)?;
+        crate::blobs::copy_all(&self.path, &destination)?;
         // Compare exactly the representation that future source snapshots use.
         let baseline = Self::new(store, &destination)?.sha256;
         Ok((destination, baseline))
@@ -293,10 +331,15 @@ pub async fn open_remote_with_progress(
     progress: &mut crate::segment::Progress<'_>,
     cancel: &crate::segment::Cancel,
 ) -> Result<usize> {
+    let cancellable_client = client.with_cancel(cancel);
+    let client = &cancellable_client;
     let _guard = store.acquire_broker_lock()?;
     let mut download = download_file(store)?;
     let revision = client.download(path, &mut download.file).await?;
     let snapshot = Snapshot::new(store, download.path())?;
+    snapshot
+        .receive_blobs(store, client, path, password)
+        .await?;
     let inventory = snapshot.inspect(password)?;
     let (local, local_sha256) = snapshot.install(store)?;
     let mut binding = RemoteBinding {
@@ -308,7 +351,7 @@ pub async fn open_remote_with_progress(
         local_sha256,
         last_sync: chrono::Utc::now().timestamp(),
     };
-    let inventory = if segment_sync_managed(client, &binding.path).await {
+    let inventory = if segment_sync_managed(client, &binding.path).await? {
         // The bootstrap is written once, so on its own it is a stale snapshot: the
         // revisions that matter live in the `.sync` tree. Replay them into the
         // installed copy before the configuration starts using it. The replay
@@ -341,6 +384,9 @@ pub async fn publish(
     let config = store.load()?;
     let snapshot = Snapshot::new(store, &config.vault)?;
     let inventory = snapshot.inspect(password)?;
+    snapshot
+        .publish_blobs(store, client, path, password)
+        .await?;
     client
         .upload(path, &snapshot.path, WriteCondition::Create)
         .await?;
@@ -434,15 +480,15 @@ fn apply_remote_vault(
 /// later revision in a `<name>.mdbx.sync` folder. Replacing the bootstrap would
 /// strand each device tracking it, and comparing it reports a stale vault as
 /// up to date, so neither outcome is safe to compute from a single file.
-async fn segment_sync_managed(client: &WebDavClient, path: &str) -> bool {
+async fn segment_sync_managed(client: &WebDavClient, path: &str) -> Result<bool> {
     let marker = format!("{path}.sync");
     let nested = format!("{marker}/");
     let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
-    client.list(parent).await.is_ok_and(|entries| {
-        entries
-            .into_iter()
-            .any(|entry| entry.path == marker || entry.path.starts_with(&nested))
-    })
+    Ok(client
+        .list(parent)
+        .await?
+        .into_iter()
+        .any(|entry| entry.path == marker || entry.path.starts_with(&nested)))
 }
 
 pub async fn synchronize(
@@ -469,6 +515,8 @@ pub async fn synchronize_with_progress(
     progress: &mut crate::segment::Progress<'_>,
     cancel: &crate::segment::Cancel,
 ) -> Result<SyncOutcome> {
+    let cancellable_client = client.with_cancel(cancel);
+    let client = &cancellable_client;
     // This OS lock excludes broker startup, grants, connections and other syncs.
     // Revocation remains allowed; every final config update preserves it.
     let _guard = store.acquire_broker_lock()?;
@@ -480,7 +528,8 @@ pub async fn synchronize_with_progress(
     if client.profile != binding.profile {
         return Err(GatewayError::InvalidWebDav);
     }
-    if segment_sync_managed(client, &binding.path).await {
+    if segment_sync_managed(client, &binding.path).await? || crate::blobs::has_blobs(&config.vault)?
+    {
         let (report, inventory) =
             crate::segment::synchronize(store, client, &binding, password, progress, cancel)
                 .await?;
@@ -543,6 +592,9 @@ pub async fn synchronize_with_progress(
     }
 
     let incoming = Snapshot::new(store, incoming.path())?;
+    incoming
+        .receive_blobs(store, client, &binding.path, password)
+        .await?;
     let inventory = incoming.inspect(password)?;
     if inventory.vault_id != binding.vault_id {
         return Err(GatewayError::SyncConflict);

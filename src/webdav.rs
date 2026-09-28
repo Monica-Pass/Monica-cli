@@ -147,6 +147,7 @@ pub struct Download {
     pub size: u64,
 }
 
+#[derive(Clone, Copy)]
 pub enum WriteCondition<'a> {
     Create,
     Match(&'a str),
@@ -159,6 +160,8 @@ pub struct WebDavClient {
     pub profile: WebDavProfile,
     password: Arc<Zeroizing<String>>,
     http: reqwest::Client,
+    backoff: Arc<tokio::sync::Mutex<tokio::time::Instant>>,
+    cancel: crate::segment::Cancel,
 }
 
 impl WebDavClient {
@@ -194,7 +197,71 @@ impl WebDavClient {
             profile,
             password: Arc::new(password),
             http,
+            backoff: Arc::new(tokio::sync::Mutex::new(tokio::time::Instant::now())),
+            cancel: crate::segment::Cancel::default(),
         })
+    }
+
+    pub(crate) fn with_cancel(&self, cancel: &crate::segment::Cancel) -> Self {
+        let mut client = self.clone();
+        client.cancel = cancel.clone();
+        client
+    }
+
+    async fn cancellable<T>(&self, operation: impl std::future::Future<Output = T>) -> Result<T> {
+        tokio::select! { biased;
+            _ = self.cancel.wait() => Err(GatewayError::SyncCancelled),
+            value = operation => Ok(value),
+        }
+    }
+
+    async fn wait_backoff(&self, started: tokio::time::Instant) -> Result<()> {
+        loop {
+            let deadline = *self.backoff.lock().await;
+            if deadline <= tokio::time::Instant::now() {
+                return Ok(());
+            }
+            if deadline.saturating_duration_since(started) > Duration::from_secs(30) {
+                return Err(GatewayError::WebDavUnavailable);
+            }
+            self.cancellable(tokio::time::sleep_until(deadline)).await?;
+        }
+    }
+
+    async fn throttle(&self, response: &reqwest::Response, attempt: u32) -> bool {
+        if !matches!(response.status().as_u16(), 429 | 503) {
+            return false;
+        }
+        let server = response
+            .headers()
+            .get(header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(retry_after)
+            .unwrap_or_default();
+        let delay = server.max(Duration::from_millis(250 * (1_u64 << attempt.min(5))));
+        let mut deadline = self.backoff.lock().await;
+        *deadline = (*deadline).max(tokio::time::Instant::now() + delay);
+        true
+    }
+
+    async fn send_read(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
+        let started = tokio::time::Instant::now();
+        for attempt in 0..3 {
+            self.wait_backoff(started).await?;
+            let response = self
+                .cancellable(
+                    request
+                        .try_clone()
+                        .ok_or(GatewayError::StateUnavailable)?
+                        .send(),
+                )
+                .await?
+                .map_err(|_| GatewayError::WebDavUnavailable)?;
+            if !self.throttle(&response, attempt).await {
+                return Ok(response);
+            }
+        }
+        Err(GatewayError::WebDavUnavailable)
     }
 
     #[cfg(test)]
@@ -241,16 +308,16 @@ impl WebDavClient {
     pub async fn list(&self, path: &str) -> Result<Vec<RemoteEntry>> {
         let path = normalize_path(path)?;
         let response = self
-            .request(
-                reqwest::Method::from_bytes(b"PROPFIND").unwrap(),
-                self.url(&path, true)?,
-            )?
-            .header("Depth", "1")
-            .header(header::CONTENT_TYPE, "application/xml; charset=utf-8")
-            .body(PROPFIND)
-            .send()
-            .await
-            .map_err(|_| GatewayError::WebDavUnavailable)?;
+            .send_read(
+                self.request(
+                    reqwest::Method::from_bytes(b"PROPFIND").unwrap(),
+                    self.url(&path, true)?,
+                )?
+                .header("Depth", "1")
+                .header(header::CONTENT_TYPE, "application/xml; charset=utf-8")
+                .body(PROPFIND),
+            )
+            .await?;
         check_status(response.status())?;
         let mut bytes = Vec::new();
         if response
@@ -260,7 +327,7 @@ impl WebDavClient {
             return Err(GatewayError::ResponseTooLarge);
         }
         let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {
+        while let Some(chunk) = self.cancellable(stream.next()).await? {
             let chunk = chunk.map_err(|_| GatewayError::WebDavUnavailable)?;
             if bytes.len() + chunk.len() > MAX_LIST_BYTES {
                 return Err(GatewayError::ResponseTooLarge);
@@ -283,10 +350,8 @@ impl WebDavClient {
         }
         private_file(target.path())?;
         let response = self
-            .request(reqwest::Method::GET, self.url(path, false)?)?
-            .send()
-            .await
-            .map_err(|_| GatewayError::WebDavUnavailable)?;
+            .send_read(self.request(reqwest::Method::GET, self.url(path, false)?)?)
+            .await?;
         check_status(response.status())?;
         if response.status() != reqwest::StatusCode::OK {
             return Err(GatewayError::InvalidWebDavResponse);
@@ -304,7 +369,7 @@ impl WebDavClient {
         let mut size = 0;
         let mut hash = Sha256::new();
         let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {
+        while let Some(chunk) = self.cancellable(stream.next()).await? {
             let chunk = chunk.map_err(|_| GatewayError::WebDavUnavailable)?;
             size += chunk.len() as u64;
             if size > MAX_VAULT_BYTES {
@@ -367,39 +432,53 @@ impl WebDavClient {
         if path.is_empty() {
             return Err(GatewayError::InvalidWebDav);
         }
-        let file = tokio::fs::File::open(source)
-            .await
-            .map_err(|_| GatewayError::StateUnavailable)?;
-        let size = file
-            .metadata()
-            .await
-            .map_err(|_| GatewayError::StateUnavailable)?
-            .len();
-        if size == 0 || size > MAX_VAULT_BYTES {
-            return Err(GatewayError::ResponseTooLarge);
+        let started = tokio::time::Instant::now();
+        for attempt in 0..3 {
+            self.wait_backoff(started).await?;
+            let file = tokio::fs::File::open(source)
+                .await
+                .map_err(|_| GatewayError::StateUnavailable)?;
+            let size = file
+                .metadata()
+                .await
+                .map_err(|_| GatewayError::StateUnavailable)?
+                .len();
+            if size == 0 || size > MAX_VAULT_BYTES {
+                return Err(GatewayError::ResponseTooLarge);
+            }
+            let mut request = self
+                .request(reqwest::Method::PUT, self.url(path, false)?)?
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .header(header::CONTENT_LENGTH, size);
+            request = match condition {
+                WriteCondition::Create => request.header(header::IF_NONE_MATCH, "*"),
+                WriteCondition::Match(etag) => request.header(
+                    header::IF_MATCH,
+                    strong_etag(etag).ok_or(GatewayError::RemoteVersionRequired)?,
+                ),
+            };
+            let response = self
+                .cancellable(
+                    request
+                        .body(reqwest::Body::wrap_stream(
+                            tokio_util::io::ReaderStream::new(file),
+                        ))
+                        .send(),
+                )
+                .await?
+                .map_err(|_| GatewayError::SyncOutcomeUnknown)?;
+            if self.throttle(&response, attempt).await {
+                if matches!(condition, WriteCondition::Create) {
+                    continue;
+                }
+                return Err(GatewayError::SyncOutcomeUnknown);
+            }
+            if response.status().is_server_error() {
+                return Err(GatewayError::SyncOutcomeUnknown);
+            }
+            return Ok(response.status());
         }
-        let mut request = self
-            .request(reqwest::Method::PUT, self.url(path, false)?)?
-            .header(header::CONTENT_TYPE, "application/octet-stream")
-            .header(header::CONTENT_LENGTH, size);
-        request = match condition {
-            WriteCondition::Create => request.header(header::IF_NONE_MATCH, "*"),
-            WriteCondition::Match(etag) => request.header(
-                header::IF_MATCH,
-                strong_etag(etag).ok_or(GatewayError::RemoteVersionRequired)?,
-            ),
-        };
-        let response = request
-            .body(reqwest::Body::wrap_stream(
-                tokio_util::io::ReaderStream::new(file),
-            ))
-            .send()
-            .await
-            .map_err(|_| GatewayError::SyncOutcomeUnknown)?;
-        if response.status().is_server_error() {
-            return Err(GatewayError::SyncOutcomeUnknown);
-        }
-        Ok(response.status())
+        Err(GatewayError::WebDavUnavailable)
     }
 
     /// Creates a collection. Servers reject a repeated MKCOL with 405, 409, 412 or 501 rather
@@ -410,13 +489,11 @@ impl WebDavClient {
             return Err(GatewayError::InvalidWebDav);
         }
         let response = self
-            .request(
+            .send_read(self.request(
                 reqwest::Method::from_bytes(b"MKCOL").unwrap(),
                 self.url(&path, true)?,
-            )?
-            .send()
-            .await
-            .map_err(|_| GatewayError::WebDavUnavailable)?;
+            )?)
+            .await?;
         let status = response.status();
         drop(response);
         if status.is_success() {
@@ -445,6 +522,22 @@ fn check_status(status: reqwest::StatusCode) -> Result<()> {
         409 | 412 => Err(GatewayError::SyncConflict),
         _ => Err(GatewayError::WebDavUnavailable),
     }
+}
+
+fn retry_after(value: &str) -> Option<Duration> {
+    if let Ok(seconds) = value.trim().parse::<u64>() {
+        // A longer request is refused by the wait budget, never retried early.
+        return Some(Duration::from_secs(seconds.min(24 * 60 * 60)));
+    }
+    chrono::DateTime::parse_from_rfc2822(value)
+        .ok()
+        .map(|date| {
+            Duration::from_secs(
+                date.timestamp()
+                    .saturating_sub(chrono::Utc::now().timestamp())
+                    .max(0) as u64,
+            )
+        })
 }
 
 fn parse_listing(bytes: &[u8], base: &Url, directory: &str) -> Result<Vec<RemoteEntry>> {

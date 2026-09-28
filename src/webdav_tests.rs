@@ -12,6 +12,86 @@ use crate::webdav::{WebDavClient, WebDavProfile, WriteCondition, normalize_path}
 pub(crate) const DAV_PASSWORD: &str = "synthetic-webdav-password-only";
 
 #[tokio::test]
+async fn transient_backoff_is_shared_bounded_and_cancellable() {
+    let mut throttled = Reply::json(Value::Null);
+    throttled.status = 429;
+    throttled.headers.push(("Retry-After".into(), "0".into()));
+    let server =
+        FakeUpstream::start(vec![throttled, response(200, b"ciphertext".to_vec(), None)]).await;
+    let profile =
+        WebDavProfile::new(&format!("https://127.0.0.1:{}/dav/", server.port), "human").unwrap();
+    let client = WebDavClient::for_test(profile, DAV_PASSWORD, server.client.clone());
+    let started = std::time::Instant::now();
+    client
+        .download("vault.mdbx", &mut tempfile::NamedTempFile::new().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(server.requests().len(), 2);
+    assert!(started.elapsed() >= std::time::Duration::from_millis(250));
+
+    let mut busy = Reply::json(Value::Null);
+    busy.status = 503;
+    busy.headers.push(("Retry-After".into(), "120".into()));
+    let server = FakeUpstream::start(vec![busy]).await;
+    let profile =
+        WebDavProfile::new(&format!("https://127.0.0.1:{}/dav/", server.port), "human").unwrap();
+    let client = WebDavClient::for_test(profile, DAV_PASSWORD, server.client.clone());
+    assert!(matches!(
+        client
+            .download("vault.mdbx", &mut tempfile::NamedTempFile::new().unwrap())
+            .await,
+        Err(GatewayError::WebDavUnavailable)
+    ));
+    assert!(matches!(
+        client.clone().list("").await,
+        Err(GatewayError::WebDavUnavailable)
+    ));
+    assert_eq!(
+        server.requests().len(),
+        1,
+        "a cloned client cannot bypass server backoff"
+    );
+
+    let mut slow = response(200, b"ciphertext".to_vec(), None);
+    slow.delay = std::time::Duration::from_secs(10);
+    let server = FakeUpstream::start(vec![slow]).await;
+    let profile =
+        WebDavProfile::new(&format!("https://127.0.0.1:{}/dav/", server.port), "human").unwrap();
+    let cancel = crate::segment::Cancel::default();
+    let client =
+        WebDavClient::for_test(profile, DAV_PASSWORD, server.client.clone()).with_cancel(&cancel);
+    let trigger = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        trigger.trigger();
+    });
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        client.download("vault.mdbx", &mut tempfile::NamedTempFile::new().unwrap()),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(result, Err(GatewayError::SyncCancelled)));
+}
+
+#[tokio::test]
+async fn uncertain_conditional_overwrites_are_not_retried() {
+    let server = FakeUpstream::start(vec![response(503, Vec::new(), None)]).await;
+    let profile =
+        WebDavProfile::new(&format!("https://127.0.0.1:{}/dav/", server.port), "human").unwrap();
+    let client = WebDavClient::for_test(profile, DAV_PASSWORD, server.client.clone());
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(file.path(), b"ciphertext").unwrap();
+    assert!(matches!(
+        client
+            .upload("vault.mdbx", file.path(), WriteCondition::Match("\"old\""))
+            .await,
+        Err(GatewayError::SyncOutcomeUnknown)
+    ));
+    assert_eq!(server.requests().len(), 1);
+}
+
+#[tokio::test]
 async fn webdav_public_metadata_cannot_disclose_the_session_password() {
     let profile = WebDavProfile::new("https://example.invalid/dav/", DAV_PASSWORD).unwrap();
     assert!(matches!(

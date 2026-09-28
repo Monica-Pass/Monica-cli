@@ -45,8 +45,8 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
         cli.non_interactive || cli.json,
         required_fields(command.name()),
     )?;
-    if let Command::Commands { topic } = &command {
-        return crate::cli_discovery::run(topic, lang, output);
+    if let Command::Commands { topic, summary } = &command {
+        return crate::cli_discovery::run(topic, *summary, lang, output);
     }
     if let Command::Check {
         client: Some(client),
@@ -542,8 +542,8 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
                 ));
             }
         }
-        Command::Next => {
-            let data = crate::cli_guide::next(&store)?;
+        Command::Next { grant } => {
+            let data = crate::cli_guide::next(&store, grant.as_deref())?;
             let human = (!output.json).then(|| crate::cli_guide::render_next(&data, lang));
             output.result_text("next", data, human)?;
         }

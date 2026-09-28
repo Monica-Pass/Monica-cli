@@ -32,7 +32,7 @@ Part of the <a href="https://github.com/Monica-Pass/Monica"><strong>Monica local
 
 </div>
 
-[Implementation status](docs/redesign-progress.md) · [Source dependencies](docs/source-checkout.md) · [Token / Android format](docs/token-format.md)
+[Implementation status](docs/redesign-progress.md) · [Source dependencies](docs/source-checkout.md) · [Token / Android format](docs/token-format.md) · [MDBX compatibility](docs/mdbx-compatibility.md)
 
 Monica CLI stores service tokens in a local, encrypted MDBX3 vault. AI requests an operation through MCP; Monica checks the grant, injects the credential, sends the request, and returns the service result. You manage credentials and permissions, while AI uses connection names and purpose notes to understand which service to use without directly holding the raw token.
 
@@ -50,11 +50,11 @@ Concretely:
 
 - **It manages the credentials you hand to AI**, such as GitHub / GitLab API tokens — not your entire password set.
 - **It keeps the token away from AI.** AI can only ask for an operation, like "list the Issues in this repository"; grant checks, token injection, request sending, and leak checks on the response all happen in the local gateway. The raw token never enters the model's context.
-- **It puts time on permissions.** Every AI authorization expires, can carry a call budget, and can only be renewed by a person running `refresh` locally — **no grant is permanent**. The credential stored in your vault does not expire and is not deleted when a grant ends.
+- **It puts time on permissions.** Every AI authorization expires, can carry a call budget, and can only be renewed by a person running `renew` locally — **no grant is permanent**. The credential stored in your vault does not expire and is not deleted when a grant ends.
 - **It can ask you first.** With `--approval write` a grant asks before every write, and with `--approval all` before every call. The prompt appears only in your own terminal — the TUI modal or the `serve` prompt — and waits at most 15 seconds; nobody answering means `approval_timeout`. AI sees the gate in the catalog but cannot answer it, and a command like `monica approve` **deliberately does not exist**. A refused call spends none of the grant's call budget.
 - **It also manages this database**, because configuring grants, checking status, and syncing over WebDAV should not require picking up a phone.
 
-It reads and writes **the same MDBX3 database** as the phone app, so the two are entry points into one vault rather than two unrelated stores. What it deliberately does not do: no TOTP generation, no autofill, no browser extension, no KeePass / Bitwarden import, and no external attachments — a vault with `.blobs` is refused outright with `external_blobs_unsupported`.
+It reads and writes **the same MDBX3 database** as the phone app, so the two are entry points into one vault rather than two unrelated stores. What it deliberately does not do: no TOTP generation, no autofill, no browser extension, no KeePass / Bitwarden import, and no plaintext attachment export. Encrypted `.blobs` are preserved in managed copies and WebDAV segment sync; see [MDBX compatibility](docs/mdbx-compatibility.md).
 
 > If you want "one app for all my passwords", that is the [main repository](https://github.com/Monica-Pass/Monica). If you want "let AI open Issues and review PRs for me, without ever holding my token", that is this one.
 
@@ -99,7 +99,7 @@ flowchart LR
 
 ## Quick start
 
-On Windows, first follow [Build from source](#build-from-source) to produce `target/release/monica-pass.exe`, then run `./scripts/install.ps1 -InstallDir D:\Apps\MonicaCLI`. The installer uses that build by default and accepts `-Source` for another executable; `-InstallDir` must be an absolute path and not a drive root, a non-empty target is only accepted when it is already a Monica portable install, and Monica must be closed before updating. The install writes `monica-pass.exe` plus `monica` and `monicapass` entry points, adds them to your user PATH, and keeps configuration, vault and logs in the `data/` directory beside them. Open a new terminal and run `monica`. The installed copy does not track the repository: if a recent command such as `monica refresh` is reported as unknown, the installed copy is behind the source and needs a rebuild and reinstall.
+On Windows, first follow [Build from source](#build-from-source) to produce `target/release/monica-pass.exe`, then run `./scripts/install.ps1 -InstallDir D:\Apps\MonicaCLI`. The installer uses that build by default and accepts `-Source` for another executable; `-InstallDir` must be an absolute path and not a drive root, a non-empty target is only accepted when it is already a Monica portable install, and Monica must be closed before updating. The install writes `monica-pass.exe` plus `monica` and `monicapass` entry points, adds them to your user PATH, and keeps configuration, vault and logs in the `data/` directory beside them. Open a new terminal and run `monica`. The installed copy does not track the repository: if a recent command such as `monica renew` is reported as unknown, the installed copy is behind the source and needs a rebuild and reinstall.
 
 The default home shows databases, nested categories, and entries:
 
@@ -131,9 +131,9 @@ While the database is locked, the middle pane lists selectable action rows (open
 
 In edit forms, `Tab` moves between fields and `Ctrl+S` opens a separate database-password step. `Esc` in that step returns to the draft and clears the password. Each management operation unlocks the database only while it runs; summary metadata is cached for at most five minutes. This is separate from the AI broker's five-minute unlock session.
 
-In settings, press `c` for guided service setup, or `a` to configure an explicit grant. Every authorization **expires**: the default lifetime is 240 minutes (`--ttl`, 1–1440; leaving the field blank no longer means forever), and `--max-calls` can additionally cap how many upstream calls that grant may make. Once the window or the call budget is spent the AI only receives `reauthorization_required`, and a person must run `monica refresh GRANT` locally — command line only for now, with no TUI key — which issues a new capability, so the MCP client must be restarted to pick it up. Grants stay revocable and still require an active unlocked broker. Token replacement revokes existing grants for that connection.
+In settings, press `c` for guided service setup, or `a` to configure an explicit grant. Every authorization **expires**: the default lifetime is 240 minutes (`--ttl`, 1–1440; leaving the field blank no longer means forever), and `--max-calls` can additionally cap how many upstream calls that grant may make. Once the window or the call budget is spent the AI only receives `reauthorization_required`, and a person must run `monica renew GRANT` locally — command line only for now, with no TUI key — which issues a new capability, so the MCP client must be restarted to pick it up. Grants stay revocable and still require an active unlocked broker. Token replacement revokes existing grants for that connection.
 
-The same grants can carry a **human approval gate**: `monica grant … --approval write` asks before writes, `--approval all` asks before every call, and `monica rf GRANT --approval all` sets it while renewing (`off` is the default and never asks). The TUI grant form has an **Approval gate** field for the same thing. The quick `add` path has no such flag, so its grants are always `off`; set the gate afterwards with `grant` or `rf`. `st` now shows the setting in a `Gate` column. See section 6.5 of [docs/human-guide.md](docs/human-guide.md) (Chinese) for measured prompts and timings.
+The same grants can carry a **human approval gate**: `monica grant … --approval write` asks before writes, `--approval all` asks before every call, and `monica renew GRANT --approval all` sets it while renewing (`off` is the default and never asks). The TUI grant form has an **Approval gate** field for the same thing. The quick `add` path has no such flag, so its grants are always `off`; set the gate afterwards with `grant` or `rf`. `st` now shows the setting in a `Gate` column. See section 6.5 of [docs/human-guide.md](docs/human-guide.md) (Chinese) for measured prompts and timings.
 
 The home tree always carries an **AI grants** row (locked vault included) whose suffix counts the authorizations currently in force. `Enter` opens the list: live rows show read-only or read-write scope, expired and "Calls used up" rows are dimmed, and the preview of the selected row shows `used/max` calls — so you can see which proxies are still serving without drilling into the database.
 
@@ -162,20 +162,26 @@ A connection name is an ASCII handle (`[A-Za-z0-9_-]`); grants, MCP config and c
 
 ### Start from the command line
 
-You can also create a vault, add a connection, issue a grant, and unlock the gateway with one command:
+Use this order from the command line. add creates a connection and a same-named read-only grant:
 
 ```sh
-monica-pass add work-github --repo your-org/your-repo --note "Track product issues and feature requests" --serve
+monica-pass add work-github --repo your-org/your-repo --note "Track product issues and feature requests"
+monica-pass mcp-config work-github --install codex
+monica-pass serve
+# In another terminal:
+monica-pass check work-github
 ```
 
 Monica prompts for the token and master password using hidden input. `--serve` keeps the gateway running after setup. Without it, the command exits after saving the configuration; run `monica-pass serve` when you want to unlock the gateway.
 
-Not sure what comes next? Run `monica-pass next`. It reads only public metadata and names the missing step (vault, connection, grant, broker, AI client) together with the command for it. `monica-pass --help` lists the commands in seven task groups under a three-step quick start, and a mistyped command is answered with the closest real one.
+Not sure what comes next? Run `monica-pass next`. It reads only public metadata and names the missing step (vault, connection, grant, AI client, broker) together with the command for it. `monica-pass --help` lists the commands in seven task groups under a four-step quick start, and a mistyped command is answered with the closest real one.
+
+`next --grant review-agent` selects the intended grant; several grants require an explicit choice. Client integration stays unverified because next never reads AI client settings; check verifies the broker path only. Reuse the same --config in every terminal.
 
 For GitLab:
 
 ```sh
-monica-pass add work-gitlab --provider gitlab --repo your-group/your-project --note "Handle Issues for the team project" --serve
+monica-pass add work-gitlab --provider gitlab --repo your-group/your-project --note "Handle Issues for the team project"
 ```
 
 Repeat `--repo` to grant access to multiple repositories. To allow Issue creation, explicitly add `--allow-write`, or press `a` in the TUI to create a suitable grant for an existing connection.
@@ -183,7 +189,7 @@ Repeat `--repo` to grant access to multiple repositories. To allow Issue creatio
 Common management commands:
 
 ```sh
-monica-pass list
+monica-pass connections
 monica-pass note work-github "Track Issues in the documentation repository"
 monica-pass serve
 monica-pass lock
@@ -207,23 +213,23 @@ In a human terminal you must type the target back exactly before anything happen
 Aliases are equivalent to the full commands. Common options also have short forms:
 
 ```sh
-monica-pass a work-github -r your-org/your-repo -n "Track product issues" -s
-monica-pass ls
+monica-pass add work-github --repo your-org/your-repo --note "Track product issues" -s
+monica-pass connections
 monica-pass show work-github
 monica-pass e work-github "Track documentation issues"
-monica-pass m work-github
-monica-pass ck work-github
+monica-pass mcp-config work-github
+monica-pass check work-github
 ```
 
 | Action | Full command | Alias |
 | --- | --- | --- |
 | Quick add / save a connection | `add` / `connect` | `a` / `c` |
-| List connections / edit purpose | `list` / `note` | `ls` / `e` |
+| List connections / edit purpose | `connections` / `note` | `ls` / `e` |
 | Create / open a local vault | `init` / `open` | `n` / `o` |
-| Issue / refresh / revoke a grant | `grant` / `refresh` / `revoke` | `g` / `rf` / `rv` |
-| Put a human approval gate on a grant | `grant --approval off\|write\|all` / `refresh --approval <policy>` | Approval gate field |
+| Issue / refresh / revoke a grant | `grant` / `renew` / `revoke` | `g` / `rf` / `rv` |
+| Put a human approval gate on a grant | `grant --approval off\|write\|all` / `renew --approval <policy>` | Approval gate field |
 | Unlock and serve / lock | `serve` / `lock` | `u` / `lk` |
-| MCP settings / check discovery | `settings` / `check` | `m` / `ck` |
+| MCP settings / check discovery | `mcp-config` / `check` | `m` / `ck` |
 | Status / WebDAV / command discovery | `status` / `webdav` / `commands` | `st` / `dav` / `cmds` |
 | Delete a connection or entry / delete an empty category | `delete` / `delete-category` | `rm`, `del` / `rmdir` |
 | Read / change this vault's security profile | `tiga show` / `tiga set <sky\|multi\|power>` | none |
@@ -239,16 +245,18 @@ Use `-r` for a repository, `-p` for the provider, `-n` for a purpose note, `-t` 
 
 `show` selects a connection name and displays its public purpose and grants. `m` and `ck` select a grant name; quick add uses the same name for both. Management that accesses the vault, including sync, first stops the broker and drains in-flight requests. It leaves the broker locked; run `u`, or press `u` in the TUI, to resume MCP access. Metadata queries and revocation do not stop the broker.
 
+Prefer `connections`, `mcp-config`, and `renew`; legacy `list`, `settings`, `refresh` and aliases remain accepted. Execution JSON retains the identifiers `list`, `settings`, and `refresh`. TUI list reload uses `:reload`, with `:refresh` retained.
+
 ### AI management through the CLI
 
-Vault creation, opening, connection creation, purpose edits, grants, revocation, WebDAV, and broker management all have CLI entry points. AI can discover parameters and operate by name:
+Vault creation, opening, connection creation, purpose edits, grants, revocation, WebDAV, and broker management all have CLI entry points. AI can discover parameters; local management still requires human authorization and a trusted executor. Discovery grants no authority:
 
 ```sh
-monica-pass cmds --json
-monica-pass cmds add --json
-monica-pass ls --json
+monica-pass commands --summary --json
+monica-pass commands add --json
+monica-pass connections --json
 monica-pass show work-github --json
-monica-pass m work-github --json
+monica-pass commands mcp-config --json
 ```
 
 `--json` (`-j`) returns `ok`, `command`, `data` or a fixed error code and disables prompts. Results do not depend on the interface language. `--non-interactive` disables prompts without changing the output format. With no subcommand, normal mode opens the TUI; JSON or non-interactive mode shows status.
@@ -258,14 +266,14 @@ Without `--json`, `databases`, `library` and `webdav list` print aligned tables 
 Operations needing credentials accept `--secrets-stdin`. For example, AI can start this command while a **trusted local launcher** sends the `password` and `token` fields directly to its stdin:
 
 ```sh
-monica-pass a work-github -r your-org/your-repo -n "Track product issues" --json --secrets-stdin
+monica-pass add work-github --repo your-org/your-repo --note "Track product issues" --json --secrets-stdin
 ```
 
 Secrets do not need to pass through the model, command arguments, environment variables, or output. Missing input returns `secret_input_required` and the required field names. See [CLI automation](docs/automation.en.md) for the input contract, launcher example, and operation mapping.
 
 ## Connect an AI client
 
-Monica provides an **MCP stdio** service. Use the configuration generated by the program: quick add displays and saves it; press `m` on a selected grant or run `monica-pass m <grant-name>` to retrieve it again.
+Monica provides an **MCP stdio** service. Use the configuration generated by the program: quick add displays and saves it; press `m` on a selected grant or run `monica-pass mcp-config <grant-name>` to retrieve it again.
 
 The following is a common JSON configuration format. Both paths are examples; use the paths generated by your Monica installation. For clients that use TOML or another format, configure the same `command` and `args`.
 
@@ -289,7 +297,7 @@ Each grant binds to one connection. To use multiple connections, add their corre
 Rather than pasting by hand, one command merges that entry into the client's own configuration file — it backs the file up first, touches only this one entry, and refuses a file whose shape it cannot read back:
 
 ```sh
-monica-pass settings GRANT --install claude   # or cursor / codex / vscode
+monica-pass mcp-config GRANT --install claude   # or cursor / codex / vscode
 ```
 
 Claude Desktop and project-level config files still take the JSON above. Section 4 of the [human guide](docs/human-guide.md) lists which file each client gets written into and the exact guarantees.
@@ -345,7 +353,7 @@ monica-pass webdav forget-password
 
 A password you type at the prompt follows the same route into the credential manager; a password injected through `--secrets-stdin` is **used only inside that process and never stored**. `monica-pass dav st` shows the saved connection and whether a password is stored, without touching the network. Single-file sync compares local and remote versions and reports a conflict if both have changed. You can publish the local version under a new filename before resolving the conflict. Opening a different vault preserves the previous local file and clears existing AI grants.
 
-Supported vaults are password-unlocked, **self-contained MDBX files up to 64 MiB**. External `.blobs` attachments are not supported. A remote comes in two shapes: a lone `.mdbx` file syncs whole-file, which needs strong ETags and conditional writes from the server to replace it and stays readable without them; a same-named `.sync` folder — what Monica Android maintains — switches to segment-stream merging, where the engine merges commits, each device only writes immutable segments into its own stream, the one-time bootstrap is never replaced, and no strong ETag is required because every segment is read back and digest-checked after upload. A replay prints one progress line per segment; `Ctrl+C` stops it at a segment boundary with the cursor already on disk, so the next run resumes where it left off, and a second press exits immediately.
+Supported vaults are password-unlocked **MDBX files up to 64 MiB**, with encrypted `.blobs` preserved. Each encrypted block is limited to 64 MiB and total Blob processing to 4 GiB. A remote comes in two shapes: a lone `.mdbx` file syncs whole-file, which needs strong ETags and conditional writes from the server to replace it and stays readable without them; a same-named `.sync` folder — what Monica Android maintains — switches to segment-stream merging, where the engine merges commits, each device only writes immutable segments into its own stream, the one-time bootstrap is never replaced, and no strong ETag is required because every segment is read back and digest-checked after upload. A replay prints one progress line per segment; `Ctrl+C` interrupts network and backoff waits; engine transactions remain atomic. Receive cursors advance only after the segment and referenced Blobs are confirmed, so retries resume idempotently. A second press exits immediately.
 
 In single-file mode, some services, including the tested Jianguoyun endpoint, do not return strong ETags. Creating, reading, and downloading files still work; save later local changes under a new remote filename with `P` or `webdav publish NEW_NAME.mdbx`. The TUI preview and `safe_remote_replace: false` in `webdav status --json` make this limitation explicit. Monica does not force an overwrite.
 

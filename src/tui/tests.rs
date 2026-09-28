@@ -831,14 +831,18 @@ fn home_states_render_the_tree_search_and_detail() {
         capture_buffer(&format!("home-{tag}-search"), &draw(&mut app, 100, 30));
         app.key(key(KeyCode::Esc));
         assert!(app.home_filter.is_empty());
+        // Right keeps the public metadata preview; Enter explicitly asks to unlock details.
         for _ in 0..3 {
-            app.key(key(KeyCode::Enter));
+            app.key(key(KeyCode::Right));
         }
         assert_eq!(app.focus, Focus::Preview);
         let detail = render(&mut app, 100, 30);
         assert!(detail.contains("••••••••"));
         assert!(detail.contains("monica-pass"));
         capture_buffer(&format!("home-{tag}-detail"), &draw(&mut app, 100, 30));
+        app.focus = Focus::List;
+        app.key(key(KeyCode::Enter));
+        assert!(matches!(app.mode, Mode::Form(ref form) if matches!(form.kind, Kind::Inspect(_))));
     }
 }
 

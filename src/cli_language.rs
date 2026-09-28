@@ -37,8 +37,12 @@ pub(super) fn parse() -> Result<(Cli, Language), ExitCode> {
                 });
             }
             if json && !protocol {
-                let _ =
-                    crate::cli_output::print_json(&GatewayError::InvalidRequest.response(), false);
+                let mut value = GatewayError::InvalidRequest.response();
+                value["error"]["recovery"] = serde_json::json!({
+                    "retry":"correct_public_arguments", "automatic_retry":false,
+                    "commands":["monica commands --summary --json"],
+                });
+                let _ = crate::cli_output::print_json(&value, false);
                 return Err(ExitCode::from(2));
             }
             let message = match error.kind() {
@@ -62,6 +66,9 @@ pub(super) fn parse() -> Result<(Cli, Language), ExitCode> {
             // A suggestion is a name taken from the grammar, never the typed text.
             if let Some(suggestion) = suggestion(&error, &localized_command(language)) {
                 eprintln!("{}", tr!(language, CliDidYouMean, suggestion = suggestion));
+            }
+            if !protocol {
+                eprintln!("{}", language.text(Message::RecoveryParse));
             }
             Err(ExitCode::from(2))
         }
@@ -199,9 +206,9 @@ pub(super) fn localize(mut command: Command, language: Language) -> Command {
         "next" => Some(CliNextHelp),
         "tui" => Some(CliTuiHelp),
         "add" => Some(CliAddHelp),
-        "list" => Some(CliListHelp),
+        "list" | "connections" => Some(CliListHelp),
         "show" => Some(CliShowHelp),
-        "settings" => Some(CliSettingsHelp),
+        "mcp-config" => Some(CliSettingsHelp),
         "commands" => Some(CliCommandsHelp),
         "note" => Some(CliNoteHelp),
         "open" => Some(CliOpenHelp),
@@ -210,7 +217,7 @@ pub(super) fn localize(mut command: Command, language: Language) -> Command {
         "init" => Some(CliInitHelp),
         "connect" => Some(CliConnectHelp),
         "grant" => Some(CliGrantHelp),
-        "refresh" => Some(CliRefreshHelp),
+        "renew" => Some(CliRefreshHelp),
         "call" => Some(CliCallHelp),
         "revoke" => Some(CliRevokeHelp),
         "serve" => Some(CliServeHelp),
@@ -263,8 +270,18 @@ pub(super) fn localize(mut command: Command, language: Language) -> Command {
     command = command.mut_args(|arg| {
         // `name` is the connection or grant handle everywhere except `init`,
         // where it labels the database file instead.
+        let role = arg
+            .get_value_names()
+            .and_then(|names| names.first())
+            .map(|s| s.as_str());
         let message = if init && arg.get_id() == "name" {
             Some(CliInitNameHelp)
+        } else if arg.get_id() == "name" && role == Some("GRANT") {
+            Some(CliGrantNameHelp)
+        } else if arg.get_id() == "name" && role == Some("CONNECTION") {
+            Some(CliConnectionNameHelp)
+        } else if arg.get_id() == "target" && role == Some("CATEGORY_ID") {
+            Some(CliMoveTargetHelp)
         } else {
             argument_message(arg.get_id().as_str())
         };
@@ -340,6 +357,8 @@ fn argument_message(id: &str) -> Option<Message> {
         "non_interactive" => CliNonInteractiveHelp,
         "secrets_stdin" => CliSecretsStdinHelp,
         "topic" => CliCommandTopicHelp,
+        "summary" => CliCommandSummaryHelp,
+        "grant" => CliGrantNameHelp,
         "language" => CliLanguageValueHelp,
         "name" => CliNameHelp,
         "target" => CliDeleteTargetHelp,
@@ -476,7 +495,7 @@ mod tests {
                 .map(|help| help.to_string())
         };
         for (id, message) in [
-            ("name", Message::CliNameHelp),
+            ("name", Message::CliGrantNameHelp),
             ("config", Message::CliConfigHelp),
         ] {
             assert_eq!(

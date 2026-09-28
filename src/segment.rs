@@ -10,8 +10,6 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use mdbx_storage::error::StorageError;
 use mdbx_storage::peer_sync::{PeerSyncSegmentOptions, PeerSyncService};
@@ -91,15 +89,19 @@ pub type Progress<'a> = dyn FnMut(&Event) + Send + 'a;
 /// half-applied commit is never a thing: the engine's work is synchronous and the
 /// cursor is written after every segment that lands.
 #[derive(Clone, Default)]
-pub struct Cancel(Arc<AtomicBool>);
+pub struct Cancel(tokio_util::sync::CancellationToken);
 
 impl Cancel {
     pub fn trigger(&self) {
-        self.0.store(true, Ordering::Relaxed);
+        self.0.cancel();
     }
 
     pub fn cancelled(&self) -> bool {
-        self.0.load(Ordering::Relaxed)
+        self.0.is_cancelled()
+    }
+
+    pub(crate) async fn wait(&self) {
+        self.0.cancelled().await;
     }
 }
 
@@ -313,6 +315,9 @@ pub(crate) async fn bootstrap(
         fetched: BTreeMap::new(),
     })
     .await?;
+    if report.cancelled {
+        return Err(GatewayError::SyncCancelled);
+    }
     let merged = vault.gateway_inventory()?;
     reanchor(store, &vault, &mut cursor, drained)?;
     vault.lock()?;
@@ -329,6 +334,13 @@ fn open_vault(path: &Path, binding: &RemoteBinding, password: &str) -> Result<Va
 }
 
 async fn settle(mut run: Run<'_>) -> Result<bool> {
+    if run.cancel.cancelled() {
+        run.report.cancelled = true;
+        return Ok(false);
+    }
+    // Repair Blob work from an atomic apply whose transport acknowledgement failed.
+    crate::blobs::receive(run.vault, run.store, run.client, run.root).await?;
+    crate::blobs::publish(run.vault, run.store, run.client, run.root).await?;
     let drained = run.publish().await?;
     run.receive().await?;
     run.report.cancelled = run.cancel.cancelled();
@@ -356,11 +368,35 @@ fn reanchor(store: &ConfigStore, vault: &Vault, cursor: &mut Cursor, drained: bo
 /// stream name is how peers recognise this device, and losing it would strand the
 /// published history under an orphan stream.
 fn device_id(store: &ConfigStore) -> Result<String> {
-    let existing = store.load()?.webdav_device_id;
+    let current = match store.load() {
+        Ok(config) => Some(config),
+        Err(GatewayError::SetupRequired) => None,
+        Err(error) => return Err(error),
+    };
+    let existing = current
+        .as_ref()
+        .and_then(|config| config.webdav_device_id.clone());
     if let Some(device_id) = existing {
         return Ok(device_id);
     }
-    let generated = format!("monica-cli-{}", uuid::Uuid::new_v4());
+    // A first remote open replays before the vault becomes the active config.
+    // Keep device identity separately so that replay can still be resumed.
+    let identity_path = store.path.with_extension("device.json");
+    let generated = if identity_path.exists() {
+        let id: String = read_json(&identity_path, 1024)?;
+        let suffix = id
+            .strip_prefix("monica-cli-")
+            .ok_or(GatewayError::SyncStateMissing)?;
+        uuid::Uuid::parse_str(suffix).map_err(|_| GatewayError::SyncStateMissing)?;
+        id
+    } else {
+        let id = format!("monica-cli-{}", uuid::Uuid::new_v4());
+        write_json(&identity_path, &id, false)?;
+        id
+    };
+    if current.is_none() {
+        return Ok(generated);
+    }
     let mut stored = generated.clone();
     store.update(|current| {
         let mut current = current.ok_or(GatewayError::NotFound)?;
@@ -421,12 +457,8 @@ fn load_cursor(store: &ConfigStore, vault_id: &str) -> Result<Option<Cursor>> {
     if !path.is_file() {
         return Ok(None);
     }
-    let cursor: Cursor = match read_json(&path, MAX_CURSOR_BYTES) {
-        Ok(cursor) => cursor,
-        // A cursor this module cannot parse is still this module's state, and a
-        // fresh one is always safe to build: the remote segments are immutable.
-        Err(_) => return Ok(None),
-    };
+    let cursor: Cursor =
+        read_json(&path, MAX_CURSOR_BYTES).map_err(|_| GatewayError::SyncStateMissing)?;
     if cursor.vault_id != vault_id || cursor.streams.len() > MAX_SEGMENTS_PER_SYNC {
         return Ok(None);
     }
@@ -666,7 +698,7 @@ async fn upload_segment(
 
 /// Creates each collection top-down once per run; a server that refuses a repeated
 /// MKCOL is confirmed with a PROPFIND instead of failing the whole segment.
-async fn ensure_collections(client: &WebDavClient, remote: &str) -> Result<()> {
+pub(crate) async fn ensure_collections(client: &WebDavClient, remote: &str) -> Result<()> {
     let mut path = String::new();
     for part in remote
         .split('/')
@@ -814,6 +846,7 @@ impl Run<'_> {
                 }
                 Err(ApplyFailure::Failed(error)) => return Err(error),
             };
+            crate::blobs::receive(self.vault, self.store, self.client, self.root).await?;
             self.report.applied_commits += applied.result.applied_commits;
             self.report.skipped_commits += applied.result.skipped_commits;
             self.report.conflicts += applied.result.conflict_count;
@@ -1032,12 +1065,21 @@ fn apply_segment(
     base: &IncrementalBundleCheckpoint,
     resume: Option<&IncrementalBundleResume>,
 ) -> std::result::Result<Applied, ApplyFailure> {
+    let mut pending_dependency = false;
     vault
         .runtime
         .with_write(|conn| {
             let before = PeerSyncService::current_checkpoint(conn)?;
-            let result =
-                PeerSyncService::apply_incremental_segment(conn, device_id, bundle, base, resume)?;
+            let result = match PeerSyncService::apply_incremental_segment(conn, device_id, bundle, base, resume) {
+                Ok(result) => result,
+                Err(error) => {
+                    let dependency = matches!(&error, StorageError::Validation(message)
+                        if message.starts_with("incremental segment is missing ") && message.ends_with(" commit parent(s)"))
+                        || matches!(&error, StorageError::Database(cause) if cause.to_string() == "FOREIGN KEY constraint failed");
+                    pending_dependency = dependency && PeerSyncService::current_checkpoint(conn)? == before;
+                    return Err(error);
+                }
+            };
             let after = PeerSyncService::current_checkpoint(conn)?;
             Ok(Applied {
                 result,
@@ -1049,9 +1091,7 @@ fn apply_segment(
             // `apply_incremental_batch_mut` reports the refusal with this exact
             // wording and zeroes the counter on every path that succeeds, so the
             // result struct can never signal it.
-            if matches!(&error, StorageError::Validation(message)
-                if message.contains("commit parent"))
-            {
+            if pending_dependency {
                 ApplyFailure::MissingParent
             } else {
                 ApplyFailure::Failed(engine_error(error))

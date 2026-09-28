@@ -13,6 +13,50 @@ const TOKEN: &str = "synthetic-cli-service-token-42";
 /// `success`/`failure` check every command's stdout and stderr for these markers.
 const KEY_MATERIAL: &[&str] = &["PRIVATE KEY", "Proc-Type: 4,ENCRYPTED"];
 
+#[test]
+fn compact_discovery_is_locale_independent_and_cli_errors_offer_safe_recovery() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path();
+    let en = success(cli(
+        path,
+        &["commands", "--summary", "--json", "--lang", "en"],
+        None,
+    ));
+    let zh = success(cli(
+        path,
+        &["commands", "--summary", "--json", "--lang", "zh-CN"],
+        None,
+    ));
+    assert_eq!(en, zh);
+    assert_eq!(en["format"], "summary");
+    assert_eq!(en["discovery_grants_authority"], false);
+    for (canonical, legacy) in [
+        ("renew", "refresh"),
+        ("mcp-config", "settings"),
+        ("connections", "list"),
+    ] {
+        let current = success(cli(path, &["commands", canonical, "--json"], None));
+        let old = success(cli(path, &["commands", legacy, "--json"], None));
+        assert_eq!(current, old);
+        assert_eq!(current["execution_command"], legacy);
+    }
+    let output = cli(path, &["renew", "reader", "--json"], None);
+    no_secrets(&output);
+    let error: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(error["command"], "refresh");
+    assert_eq!(error["error"]["required"], json!(["password"]));
+    assert_eq!(error["error"]["recovery"]["automatic_retry"], false);
+    let rejected = cli(path, &["renew", "--password", PASSWORD, "--json"], None);
+    no_secrets(&rejected);
+    assert_eq!(rejected.status.code(), Some(2));
+    let error: Value = serde_json::from_slice(&rejected.stdout).unwrap();
+    assert_eq!(
+        error["error"]["recovery"]["commands"],
+        json!(["monica commands --summary --json"])
+    );
+    assert!(!path.join("gateway.json").exists());
+}
+
 fn command(directory: &Path, args: &[&str]) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_monica-pass"));
     command
@@ -1552,7 +1596,7 @@ fn a_first_run_is_told_the_next_step_at_every_stage() {
     assert_eq!(data["stage"], "vault");
     assert_eq!(
         data["commands"],
-        json!(["monica add <name> --repo <owner/repo>"])
+        json!(["monica add <CONNECTION> --repo <owner/repo>"])
     );
     assert!(
         !path.join("gateway.json").exists(),
@@ -1574,7 +1618,7 @@ fn a_first_run_is_told_the_next_step_at_every_stage() {
     assert_eq!(data["stage"], "grant");
     assert_eq!(
         data["commands"],
-        json!(["monica grant <grant> -c work -r <owner/repo>"])
+        json!(["monica grant <GRANT> --connection work --repo <owner/repo>"])
     );
     success(cli(
         path,
@@ -1591,8 +1635,16 @@ fn a_first_run_is_told_the_next_step_at_every_stage() {
         Some(&password()),
     ));
     let data = next();
-    assert_eq!(data["stage"], "broker");
-    assert_eq!(data["commands"], json!(["monica serve"]));
+    assert_eq!(data["stage"], "client");
+    assert_eq!(
+        data["commands"],
+        json!([
+            "monica mcp-config agent --install <claude|codex|cursor|vscode>",
+            "monica serve",
+            "monica check agent"
+        ])
+    );
+    assert_eq!(data["client_integration"], "unverified");
     let done: Vec<_> = data["steps"]
         .as_array()
         .unwrap()
@@ -1616,7 +1668,7 @@ fn a_first_run_is_told_the_next_step_at_every_stage() {
         (data["stage"].as_str(), data["renew"].as_bool()),
         (Some("grant"), Some(true))
     );
-    assert_eq!(data["commands"], json!(["monica refresh agent"]));
+    assert_eq!(data["commands"], json!(["monica renew agent"]));
 }
 
 #[test]

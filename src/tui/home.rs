@@ -442,6 +442,9 @@ impl App {
                         self.home_selected = 0;
                     }
                     Some(HomeRow::Action { action, .. }) => self.run_home_action(action),
+                    Some(HomeRow::Entry { id, .. }) if key.code == KeyCode::Enter => {
+                        self.show_form(Kind::Inspect(id))
+                    }
                     Some(_) => self.focus = Focus::Preview,
                     None => {}
                 }

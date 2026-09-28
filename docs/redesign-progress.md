@@ -1,5 +1,11 @@
 # Database-first redesign
 
+Current milestone, 2026-09-28: the CLI now has explicit command targets and execution contracts, compact machine discovery, fixed recovery hints and an updated teaching site. MDBX adapters preserve unknown fields and precise JSON numbers; unknown/future objects are read-only, with a human-only masked inspector. Managed copies and WebDAV segments preserve encrypted external Blobs. A numeric precision defect in the packaged Android FFI was fixed in both main and F-Droid runtime sources.
+
+Validation for this milestone: 301 normal CLI tests passed, with independent Android return verification run separately; formatting, all-target Clippy with warnings denied, the release build and generated documentation checks passed. Main Android and F-Droid each passed 210 selected JVM tests and 5 actual application device tests. See [the complete validation record](mdbx-validation-2026-09-28.md) for runtime provenance, scope and limitations. The dated counts below describe earlier milestones.
+
+The core local management and scoped AI gateway workflow is implemented. Remaining release-readiness work includes current-version macOS/Linux acceptance, actual AI-client integration checks, sustained real-cloud/device sync validation, automated core CI gates and audit-log retention. A source push does not publish new downloadable CLI binaries. This milestone does not certify all historical Android adapters or constitute a third-party security audit.
+
 Implemented and tested:
 
 - Launch aliases: `monica`, `monicapass`, `monica-pass` through the Windows installer.
@@ -66,7 +72,7 @@ Guidance, 2026-09-28: the command line and the practice book both teach the firs
 
 Scope and limitations:
 
-- [Token format](token-format.md) documents the native encrypted API-token payload and Android integration contract. Portable MDBX roundtrip is tested; Android's current login-only interface still needs a dedicated Token editor. This change does not claim Android UI support.
+- [Token format](token-format.md) documents the native encrypted API-token payload and Android integration contract. Current Android has a native API-token page; CLI compatibility requires the native type, payload version and schema to match. The cross-client validation above covers precise payload roundtrips and the unknown-object UI, not every Android Token-editor operation.
 - Browsing caches public summaries, not an open management session. Saving requires a fresh database password. Cancelling password confirmation preserves the draft; an operation failure after submission currently closes the form.
 - The home tree and the connection, grant and WebDAV pages all filter with the same fuzzy subsequence matcher (`/` on the home, a per-page filter elsewhere). It scores only the summaries already on screen, never stored secrets.
 - Install only after the application exits; never force-stop a user's session.

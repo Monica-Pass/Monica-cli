@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use mdbx_core::model::ObjectTypeId;
+use mdbx_core::model::{ObjectSummary, ObjectTypeId};
 use mdbx_core::tiga::{
     DeviceAssurance, DeviceContext, PolicyException, ResolvedTigaPolicy, TigaMode,
     TigaPolicyOverride, TigaScope,
@@ -49,7 +49,6 @@ const ANDROID_ROOT_TITLE: &str = "Monica";
 const MAX_KEY_SCAN_ENTRIES: usize = 4096;
 
 #[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct StoredCredential {
     schema: String,
     /// ASCII connection handle, stored so a Chinese display title never breaks vault re-import.
@@ -99,6 +98,7 @@ pub(crate) enum RevealPurpose {
 struct Disclosed {
     payload: Zeroizing<Vec<u8>>,
     project_id: String,
+    snapshot: ObjectSummary,
 }
 
 /// What a person may see about one key entry. Carries public metadata only, never key text.
@@ -398,11 +398,22 @@ impl Vault {
     }
 
     fn reveal_stored(&self, binding: &Connection, now: i64) -> Result<(StoredCredential, String)> {
+        let (stored, disclosed) = self.credential_document(binding, now)?;
+        Ok((stored, disclosed.project_id))
+    }
+
+    fn credential_document(
+        &self,
+        binding: &Connection,
+        now: i64,
+    ) -> Result<(StoredCredential, Disclosed)> {
         let disclosed = self.reveal(&binding.credential_id, RevealPurpose::GatewayToken, now)?;
         let stored: StoredCredential = serde_json::from_slice(&disclosed.payload)
             .map_err(|_| GatewayError::CredentialUnavailable)?;
-        if stored.schema != CREDENTIAL_SCHEMA
-            || stored.provider != binding.provider
+        if stored.schema != CREDENTIAL_SCHEMA {
+            return Err(GatewayError::ObjectReadOnly);
+        }
+        if stored.provider != binding.provider
             || stored.api_base != binding.api_base
             || stored.note != binding.note
         {
@@ -410,7 +421,7 @@ impl Vault {
         }
         validate_token(&stored.token)?;
         validate_note(&stored.note)?;
-        Ok((stored, disclosed.project_id))
+        Ok((stored, disclosed))
     }
 
     /// The only path that turns stored ciphertext into plaintext. Every caller must state which
@@ -435,6 +446,12 @@ impl Vault {
             .map_err(|_| GatewayError::StateUnavailable)?;
         if connection.keyring().is_none() || connection.active_session().is_none() {
             return Err(GatewayError::UnlockRequired);
+        }
+        let snapshot = ObjectSummaryRepo::get(&connection, entry_id)
+            .map_err(|_| GatewayError::StateUnavailable)?
+            .ok_or(GatewayError::NotFound)?;
+        if snapshot.payload_schema_version != 1 {
+            return Err(GatewayError::ObjectReadOnly);
         }
         let device = DeviceContext {
             device_id: Some(device_id.to_owned()),
@@ -466,9 +483,16 @@ impl Vault {
                 RevealPurpose::KeyAdmin => GatewayError::KeyEntryTypeMismatch,
             });
         }
+        if disclosed.object.payload_schema_version != 1
+            || disclosed.object.head_commit_id != snapshot.head_commit_id
+            || disclosed.object.project_id != snapshot.collection_id
+        {
+            return Err(GatewayError::ObjectChanged);
+        }
         Ok(Disclosed {
             payload: Zeroizing::new(disclosed.object.payload_ct),
             project_id: disclosed.object.project_id,
+            snapshot,
         })
     }
 
@@ -491,41 +515,34 @@ impl Vault {
     ) -> Result<Connection> {
         validate_name(name)?;
         validate_note(note)?;
-        let (mut stored, project_id) =
-            self.reveal_stored(binding, chrono::Utc::now().timestamp())?;
+        let (stored, disclosed) =
+            self.credential_document(binding, chrono::Utc::now().timestamp())?;
+        let mut document: Value = serde_json::from_slice(&disclosed.payload)
+            .map_err(|_| GatewayError::CredentialUnavailable)?;
         reject_secret_value(&serde_json::json!([name, note]), &stored.token)
             .map_err(|_| GatewayError::SensitiveMetadata)?;
-        stored.note = note.to_owned();
+        if stored.note != note {
+            document["note"] = Value::String(note.to_owned());
+        }
         if let Some(token) = token {
             validate_token(&token)?;
             reject_secret_value(&serde_json::json!([name, note, &binding.api_base]), &token)
                 .map_err(|_| GatewayError::SensitiveMetadata)?;
-            stored.token.zeroize();
-            stored.token = token.to_string();
+            document["token"] = Value::String(token.to_string());
         }
         let payload_json =
-            serde_json::to_string(&stored).map_err(|_| GatewayError::StateUnavailable)?;
-        let title = self.current_entry_title(&binding.credential_id, name);
-        let connection = self
-            .runtime
-            .read()
-            .map_err(|_| GatewayError::StateUnavailable)?;
-        OperationCoordinator::execute(
-            &connection,
-            &CommitContext::new("monica-pass-admin".to_owned()),
-            WriteOperationRequest::new(
-                uuid::Uuid::new_v4().to_string(),
-                "gateway-edit-note",
-                vec![WriteCommand::UpdateEntry {
-                    entry_id: binding.credential_id.clone(),
-                    project_id,
-                    entry_type: ObjectTypeId::ApiToken.to_string(),
-                    title,
-                    payload_json,
-                }],
-            ),
-        )
-        .map_err(|_| GatewayError::StateUnavailable)?;
+            serde_json::to_string(&document).map_err(|_| GatewayError::StateUnavailable)?;
+        self.write_object(
+            &disclosed.snapshot,
+            "gateway-edit-note",
+            WriteCommand::UpdateEntry {
+                entry_id: binding.credential_id.clone(),
+                project_id: disclosed.project_id,
+                entry_type: ObjectTypeId::ApiToken.to_string(),
+                title: object_title(&disclosed.snapshot)?,
+                payload_json,
+            },
+        )?;
         let mut updated = binding.clone();
         updated.note = note.to_owned();
         Ok(updated)
@@ -535,47 +552,24 @@ impl Vault {
     pub(crate) fn rename_entry(&self, binding: &Connection, title: &str) -> Result<()> {
         validate_title(title)?;
         let title = title.trim();
-        let (stored, project_id) = self.reveal_stored(binding, chrono::Utc::now().timestamp())?;
+        let (stored, disclosed) =
+            self.credential_document(binding, chrono::Utc::now().timestamp())?;
         reject_secret_value(&serde_json::json!([title]), &stored.token)
             .map_err(|_| GatewayError::SensitiveMetadata)?;
-        let payload_json =
-            serde_json::to_string(&stored).map_err(|_| GatewayError::StateUnavailable)?;
-        let connection = self
-            .runtime
-            .read()
-            .map_err(|_| GatewayError::StateUnavailable)?;
-        OperationCoordinator::execute(
-            &connection,
-            &CommitContext::new("monica-pass-admin".to_owned()),
-            WriteOperationRequest::new(
-                uuid::Uuid::new_v4().to_string(),
-                "gateway-rename-entry",
-                vec![WriteCommand::UpdateEntry {
-                    entry_id: binding.credential_id.clone(),
-                    project_id,
-                    entry_type: ObjectTypeId::ApiToken.to_string(),
-                    title: title.to_owned(),
-                    payload_json,
-                }],
-            ),
-        )
-        .map_err(|_| GatewayError::StateUnavailable)?;
+        let payload_json = String::from_utf8(disclosed.payload.to_vec())
+            .map_err(|_| GatewayError::CredentialUnavailable)?;
+        self.write_object(
+            &disclosed.snapshot,
+            "gateway-rename-entry",
+            WriteCommand::UpdateEntry {
+                entry_id: binding.credential_id.clone(),
+                project_id: disclosed.project_id,
+                entry_type: ObjectTypeId::ApiToken.to_string(),
+                title: title.to_owned(),
+                payload_json,
+            },
+        )?;
         Ok(())
-    }
-
-    /// Resolve the entry's stored display title, falling back to the handle when the entry is
-    /// not yet visible in the local library. Editing note/token must never clobber a title.
-    fn current_entry_title(&self, credential_id: &str, fallback: &str) -> String {
-        self.library()
-            .ok()
-            .and_then(|library| {
-                library
-                    .entries
-                    .into_iter()
-                    .find(|entry| entry.id == credential_id)
-                    .map(|entry| entry.title)
-            })
-            .unwrap_or_else(|| fallback.to_owned())
     }
 
     /// Local management of SSH and GPG entries. Nothing here is reachable from the broker: the
@@ -632,6 +626,11 @@ impl Vault {
     /// Discloses a key payload and checks it really is one. An ordinary password login is
     /// refused here, which is what keeps the wider key limit out of reach of normal secrets.
     fn reveal_key(&self, entry_id: &str, login_type: Option<&str>) -> Result<(Value, String)> {
+        let (value, disclosed) = self.key_document(entry_id, login_type)?;
+        Ok((value, disclosed.project_id))
+    }
+
+    fn key_document(&self, entry_id: &str, login_type: Option<&str>) -> Result<(Value, Disclosed)> {
         let disclosed = self.reveal(
             entry_id,
             RevealPurpose::KeyAdmin,
@@ -646,7 +645,57 @@ impl Vault {
         if !known || login_type.is_some_and(|wanted| wanted != stored) {
             return Err(GatewayError::KeyEntryTypeMismatch);
         }
-        Ok((value, disclosed.project_id))
+        if stored == LOGIN_TYPE_SSH {
+            let raw = payload::read_ssh_key_field(&value, "")?;
+            if SshKeyData::decode(&raw)?.is_some_and(|data| data.schema != openssh::SCHEMA_V1) {
+                return Err(GatewayError::ObjectReadOnly);
+            }
+        }
+        Ok((value, disclosed))
+    }
+
+    /// Ordinary mutations require an adapter which understands both the native
+    /// version and the inner schema. Merely recognizing the native type is insufficient.
+    pub(crate) fn editable_object(&self, entry_id: &str) -> Result<ObjectSummary> {
+        let summary = {
+            let connection = self
+                .runtime
+                .read()
+                .map_err(|_| GatewayError::StateUnavailable)?;
+            ObjectSummaryRepo::get(&connection, entry_id)
+                .map_err(|_| GatewayError::StateUnavailable)?
+                .filter(|object| !object.deleted)
+                .ok_or(GatewayError::NotFound)?
+        };
+        match summary.object_type_id {
+            ObjectTypeId::ApiToken => {
+                let disclosed = self.reveal(
+                    entry_id,
+                    RevealPurpose::GatewayToken,
+                    chrono::Utc::now().timestamp(),
+                )?;
+                let stored: StoredCredential = serde_json::from_slice(&disclosed.payload)
+                    .map_err(|_| GatewayError::ObjectReadOnly)?;
+                if stored.schema != CREDENTIAL_SCHEMA {
+                    return Err(GatewayError::ObjectReadOnly);
+                }
+                Ok(disclosed.snapshot)
+            }
+            ObjectTypeId::Login => self
+                .key_document(entry_id, None)
+                .map(|(_, document)| document.snapshot)
+                .map_err(|error| {
+                    if matches!(
+                        error,
+                        GatewayError::KeyEntryTypeMismatch | GatewayError::InvalidKeyMaterial
+                    ) {
+                        GatewayError::ObjectReadOnly
+                    } else {
+                        error
+                    }
+                }),
+            _ => Err(GatewayError::ObjectReadOnly),
+        }
     }
 
     /// `(payload, collection, title)` for a key entry the person can act on.
@@ -791,7 +840,9 @@ impl Vault {
         note: Option<&str>,
         comment: Option<&str>,
     ) -> Result<KeyEntrySummary> {
-        let (mut value, collection_id, current_title) = self.load_key(entry_id, None)?;
+        let (mut value, disclosed) = self.key_document(entry_id, None)?;
+        let collection_id = disclosed.project_id;
+        let current_title = object_title(&disclosed.snapshot)?;
         let login_type = payload::read_login_type(&value);
         let title = match title {
             Some(title) => {
@@ -816,23 +867,19 @@ impl Vault {
             if login_type != LOGIN_TYPE_SSH {
                 return Err(GatewayError::KeyEntryTypeMismatch);
             }
-            let raw = payload::read_ssh_key_field(&value, "")?;
-            let mut data = SshKeyData::decode(&raw)?.ok_or(GatewayError::InvalidKeyMaterial)?;
-            data.public_key_openssh =
-                openssh::public_line_with_comment(&data.public_key_openssh, comment)?;
-            data.comment = comment.trim().to_owned();
-            payload::set_ssh_key_data(&mut value, &data.to_json_string());
+            payload::edit_ssh_comment(&mut value, comment)?;
         }
         let payload_json = payload::serialize(&value)?;
-        self.key_write(
+        self.write_object(
+            &disclosed.snapshot,
             "keys-edit",
-            vec![WriteCommand::UpdateEntry {
+            WriteCommand::UpdateEntry {
                 entry_id: entry_id.to_owned(),
                 project_id: collection_id.clone(),
                 entry_type: LOGIN_ENTRY_TYPE.to_owned(),
                 title: title.clone(),
                 payload_json,
-            }],
+            },
         )?;
         Self::summarize_key(entry_id, &collection_id, &title, &value)
     }
@@ -946,12 +993,6 @@ impl Vault {
             .runtime
             .write()
             .map_err(|_| GatewayError::StateUnavailable)?;
-        let counts = connection
-            .diagnostics_summary()
-            .map_err(|_| GatewayError::InvalidVault)?;
-        if counts.external_attachment_count > 0 {
-            return Err(GatewayError::ExternalBlobsUnsupported);
-        }
         connection
             .vault_id()
             .map_err(|_| GatewayError::InvalidVault)
@@ -965,9 +1006,6 @@ impl Vault {
         let counts = connection
             .diagnostics_summary()
             .map_err(|_| GatewayError::InvalidVault)?;
-        if counts.external_attachment_count > 0 {
-            return Err(GatewayError::ExternalBlobsUnsupported);
-        }
         if counts.project_count > 2048 {
             return Err(GatewayError::VaultConnectionsInvalid);
         }
@@ -1006,19 +1044,30 @@ impl Vault {
                     )
                     .map_err(|_| GatewayError::InvalidVault)?;
                     for object in objects.items {
+                        if object.payload_schema_version != 1 {
+                            continue;
+                        }
                         inspected += 1;
                         if inspected > 256 {
                             return Err(GatewayError::VaultConnectionsInvalid);
                         }
                         let disclosed =
-                            ObjectDisclosureService::reveal_with_active_session_and_limits(
+                            match ObjectDisclosureService::reveal_with_active_session_and_limits(
                                 &mut connection,
                                 &object.object_id,
                                 &device,
                                 chrono::Utc::now().timestamp(),
                                 limits,
-                            )
-                            .map_err(|_| GatewayError::UnlockRequired)?;
+                            ) {
+                                Ok(disclosed) => disclosed,
+                                Err(StorageError::ResourceLimit { .. }) => continue,
+                                Err(_) => return Err(GatewayError::UnlockRequired),
+                            };
+                        if disclosed.object.entry_type != ObjectTypeId::ApiToken
+                            || disclosed.object.payload_schema_version != 1
+                        {
+                            continue;
+                        }
                         let payload = Zeroizing::new(disclosed.object.payload_ct);
                         let Ok(stored) = serde_json::from_slice::<StoredCredential>(&payload)
                         else {
@@ -1093,6 +1142,11 @@ fn map_tiga_error(error: StorageError) -> GatewayError {
         StorageError::NotFound(_) => GatewayError::NotFound,
         _ => GatewayError::StateUnavailable,
     }
+}
+
+fn object_title(snapshot: &ObjectSummary) -> Result<String> {
+    String::from_utf8(snapshot.title.clone().ok_or(GatewayError::ObjectReadOnly)?)
+        .map_err(|_| GatewayError::ObjectReadOnly)
 }
 
 pub(crate) fn validate_token(token: &str) -> Result<()> {

@@ -36,6 +36,16 @@ pub enum GatewayError {
         "This is the folder Monica for Android saves new entries into. It can hold entries but cannot be deleted or moved."
     )]
     ProtectedCollection,
+    #[error(
+        "This object type, payload version or schema has no compatible writer here. Inspect it in the human-only viewer; the object was not changed."
+    )]
+    ObjectReadOnly,
+    #[error(
+        "The object changed after it was read. Reload it before editing; no changes were saved."
+    )]
+    ObjectChanged,
+    #[error("This object's payload exceeds the viewer limit. It was not truncated or changed.")]
+    ObjectPayloadTooLarge,
     #[error("The new password must not be empty or whitespace-only, and both entries must match.")]
     PasswordRequirements,
     #[error("The configured loopback port is unavailable. Check for another running broker.")]
@@ -65,7 +75,7 @@ pub enum GatewayError {
     #[error("The gateway capability is invalid, expired or revoked.")]
     Unauthorized,
     #[error(
-        "This AI authorization has reached its time limit or call limit. A person must run `monica refresh <grant>` locally with the vault password, then restart the MCP server."
+        "This AI authorization has reached its time limit or call limit. A person must run `monica renew <grant>` locally with the vault password, then restart the MCP server."
     )]
     ReauthorizationRequired,
     #[error("This operation or repository is not permitted by the grant.")]
@@ -164,6 +174,10 @@ pub enum GatewayError {
         "This vault needs external attachment files. Single-file WebDAV sync cannot transfer those files."
     )]
     ExternalBlobsUnsupported,
+    #[error("blob_unavailable")]
+    BlobUnavailable,
+    #[error("sync_cancelled")]
+    SyncCancelled,
     #[error(
         "This vault has too many or ambiguous gateway connections. Resolve them in Monica before importing."
     )]
