@@ -112,6 +112,7 @@ pub struct Gateway {
     approvals: Arc<ApprovalQueue>,
     pub(crate) stopped: tokio_util::sync::CancellationToken,
     proxy_slots: Arc<tokio::sync::Semaphore>,
+    proxy_leases: BTreeMap<String, proxy::ProxyAuthorization>,
 }
 
 impl Gateway {
@@ -150,6 +151,7 @@ impl Gateway {
             approvals: ApprovalQueue::new(),
             stopped: tokio_util::sync::CancellationToken::new(),
             proxy_slots: Arc::new(tokio::sync::Semaphore::new(4)),
+            proxy_leases: BTreeMap::new(),
             queued: AtomicUsize::new(0),
             state: Mutex::new(ExecutionState {
                 journal,
@@ -192,6 +194,9 @@ impl Gateway {
 
     pub fn lock(&self) -> Result<()> {
         self.stopped.cancel();
+        for authorization in self.proxy_leases.values() {
+            authorization.lease.revoke();
+        }
         self.vault.lock()
     }
 

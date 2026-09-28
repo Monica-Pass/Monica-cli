@@ -1020,6 +1020,7 @@ pub struct BrokerSession {
     task: Option<tokio::task::JoinHandle<Result<()>>>,
     deadline: Instant,
     approvals: Arc<ApprovalQueue>,
+    proxy_sessions: Value,
 }
 
 impl BrokerSession {
@@ -1032,6 +1033,15 @@ impl BrokerSession {
         password: Zeroizing<String>,
         minutes: u32,
     ) -> Result<Self> {
+        Self::start_with_proxy_grants(store, password, minutes, vec![]).await
+    }
+
+    pub async fn start_with_proxy_grants(
+        store: ConfigStore,
+        password: Zeroizing<String>,
+        minutes: u32,
+        grants: Vec<String>,
+    ) -> Result<Self> {
         if !(1..=1440).contains(&minutes) {
             return Err(GatewayError::InvalidRequest);
         }
@@ -1039,7 +1049,15 @@ impl BrokerSession {
             store,
             password,
             Duration::from_secs(u64::from(minutes) * 60),
-            Gateway::new,
+            move |store, vault| {
+                let mut gateway = Gateway::new(store, vault)?;
+                gateway.authorize_proxy_grants(
+                    &grants,
+                    minutes * 60,
+                    chrono::Utc::now().timestamp(),
+                )?;
+                Ok(gateway)
+            },
         )
         .await
     }
@@ -1083,6 +1101,7 @@ impl BrokerSession {
         .map_err(|_| GatewayError::StateUnavailable)??;
         let (stop, receiver) = tokio::sync::oneshot::channel();
         let approvals = gateway.approvals();
+        let proxy_sessions = gateway.proxy_session_info();
         let task = tokio::spawn(async move {
             let _guard = guard;
             serve_broker(gateway, listener, async move {
@@ -1098,6 +1117,7 @@ impl BrokerSession {
             task: Some(task),
             deadline: Instant::now() + lifetime,
             approvals,
+            proxy_sessions,
         })
     }
 
@@ -1106,6 +1126,10 @@ impl BrokerSession {
     /// actually looking at.
     pub fn approvals(&self) -> Arc<ApprovalQueue> {
         self.approvals.clone()
+    }
+
+    pub fn proxy_sessions(&self) -> &Value {
+        &self.proxy_sessions
     }
 
     pub fn is_finished(&self) -> bool {

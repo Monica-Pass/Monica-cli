@@ -39,7 +39,7 @@ monica bind work-ai --entry <ENTRY_ID> --protocol openai --note "编程助手使
 ```sh
 monica grant my-model-client --connection work-ai --repo "*" --operation model-list --operation model-invoke --ttl-minutes 240 --max-calls 1000
 monica proxy-config my-model-client --output ./my-model-client.json
-monica serve
+monica serve --proxy-grant my-model-client --session-minutes 60
 ```
 
 `model-list` 允许查询模型，`model-invoke` 允许模型调用和计数接口。这里的 `--repo "*"` 表示该连接的模型接口范围，不开放任意 URL 或通用服务 API。这两种权限不能与 Issue、`api-read`、`api-write` 混合；模型授权也不能调用这些 MCP 工具。模型调用按写操作处理，`--approval write` 会要求本人逐次批准。
@@ -63,7 +63,7 @@ Anthropic 的完整配置步骤相同，只需使用另一条已保存的 Key：
 monica bind work-claude --entry <ANTHROPIC_ENTRY_ID> --protocol anthropic
 monica grant claude-client --connection work-claude --repo "*" --operation model-list --operation model-invoke
 monica proxy-config claude-client --output ./claude-client.json
-monica serve
+monica serve --proxy-grant claude-client --session-minutes 60
 ```
 
 | 协议 | 默认本地 base_url | 本地认证 | 路由 |
@@ -75,9 +75,15 @@ monica serve
 
 ## 3. 会话、续期和撤销
 
-三个限制各自生效：代理进程运行时长、MDBX Tiga 会话/新鲜认证策略、AI 授权的有效期和调用预算。上游 Key 的存储不会随其中任何一个到期而删除。
+三个限制各自生效：代理进程运行时长、MDBX Tiga 代理会话与绝对期限、AI 授权的有效期和调用预算。上游 Key 的存储不会随其中任何一个到期而删除。
 
-`serve` 默认最长运行 5 分钟。需要较长进程时可用 `monica serve --session-minutes 60`（范围 1–1440）。**该参数不会放宽 Tiga：默认 Multi 的秘密读取仍要求 5 分钟内的新鲜认证，即使代理进程还在，也可能返回 `unlock_required`，此时需要本人重新运行 serve。** 条目或分类策略也可能更严格；本版本没有无人值守自动解锁。
+本人执行 `monica serve --proxy-grant my-model-client --session-minutes 60`，输入主密码，明确批准指定模型授权的一小时代理会话。需要多个授权时重复 `--proxy-grant`，例如 `--proxy-grant my-model-client --proxy-grant claude-client`。启动时显示每份代理会话的实际到期时间，JSON 的 `ready.data.proxy_sessions` 提供同样的信息。
+
+代理会话不受普通秘密读取的五分钟新鲜认证窗口和空闲窗口影响，但不能超过原解锁会话的 Tiga 绝对期限：默认 Multi 最多两小时，从本次解锁算起；条目或分类的更严格策略仍会限制或拒绝授权。实际期限取进程时长、AI 授权剩余时间和 Tiga 绝对期限的最小值。`--session-minutes` 范围为 1–1440，默认仍为 5。
+
+未指定 `--proxy-grant` 时保留原来的五分钟新鲜认证检查；普通 MCP、查看、复制和导出权限也不会获得延长。会话到期后需本人重新执行同一条 serve 命令，AI 授权尚未到期且预算未用完时，本地 Key 可继续使用。锁库、撤销、源条目或策略变化会停止代理；会话不能在重启或重新解锁后恢复，也没有自动解锁。
+
+代理会话只保存在本机引擎内存中，不修改数据库格式或 Android API Key 字段，不参与同步。旧版 Android 等客户端可以继续使用现有引擎。引擎审计沿用现有 `reveal-secret` 操作值与约束，不新增旧版无法识别的枚举。
 
 授权默认 240 分钟，最长 1440 分钟；`--requests-per-minute` 和 `--max-calls` 分别限制速率与总次数。预算持久化，重启代理不会清零。每次上游请求消耗一次，包括上游返回错误的请求。
 
@@ -86,7 +92,7 @@ monica serve
 ```sh
 monica renew my-model-client
 monica proxy-config my-model-client --output ./my-model-client.json --force
-monica serve
+monica serve --proxy-grant my-model-client --session-minutes 60
 ```
 
 续期会轮换本地 Key，旧文件内容随即失效；客户端需要重新载入新配置。`--force` 仅用于明确替换已有输出文件。

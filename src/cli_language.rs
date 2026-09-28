@@ -389,6 +389,7 @@ fn argument_message(id: &str) -> Option<Message> {
         "note" => CliNoteValueHelp,
         "serve" => CliServeAfterHelp,
         "session_minutes" => CliSessionMinutesHelp,
+        "proxy_grants" => CliProxyGrantsHelp,
         "protocol" => CliProtocolHelp,
         "auth" => CliAuthenticationHelp,
         "replace" => CliRebindHelp,

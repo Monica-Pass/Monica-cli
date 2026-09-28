@@ -83,6 +83,10 @@ fn android_key_binding_grant_proxy_config_renewal_and_unbind_work_through_cli() 
             .unwrap()
             .contains("proxy-config")
     );
+    assert_eq!(
+        next["commands"][1],
+        "monica serve --proxy-grant model-client --session-minutes 60"
+    );
     let output = dir.join("model-client.json");
     let args = [
         "proxy-config",
@@ -110,6 +114,54 @@ fn android_key_binding_grant_proxy_config_renewal_and_unbind_work_through_cli() 
     success(cli(dir, &forced, None));
     let second: Value = serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
     assert_ne!(first["api_key"], second["api_key"]);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    store
+        .update(|config| {
+            let mut config = config.unwrap();
+            config.listen.set_port(port);
+            Ok((config, ()))
+        })
+        .unwrap();
+    drop(listener);
+    let mut broker = Broker(
+        command(
+            dir,
+            &[
+                "serve",
+                "--proxy-grant",
+                "model-client",
+                "--session-minutes",
+                "60",
+                "--json",
+                "--secrets-stdin",
+            ],
+        )
+        .spawn()
+        .unwrap(),
+    );
+    broker
+        .0
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&password())
+        .unwrap();
+    let mut reader = BufReader::new(broker.0.stdout.take().unwrap());
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    assert!(!line.contains(TOKEN));
+    assert!(!line.contains(PASSWORD));
+    assert!(!line.contains(second["api_key"].as_str().unwrap()));
+    let ready: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(ready["event"], "ready");
+    assert_eq!(ready["data"]["proxy_sessions"][0]["grant"], "model-client");
+    let expires = ready["data"]["proxy_sessions"][0]["expires_at_unix"]
+        .as_i64()
+        .unwrap();
+    assert!(expires > chrono::Utc::now().timestamp() + 3500);
+    success(cli(dir, &["lock", "--json"], None));
+    assert!(broker.0.wait().unwrap().success());
     success(cli(
         dir,
         &["unbind", "work-ai", "--json", "--secrets-stdin"],

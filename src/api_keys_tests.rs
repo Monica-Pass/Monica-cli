@@ -115,6 +115,217 @@ fn local_key(fixture: &Fixture) -> String {
     format!("monica-{}", fixture.capability.as_str())
 }
 
+fn approve_proxy(fixture: &mut Fixture, seconds: u32) {
+    std::sync::Arc::get_mut(&mut fixture.gateway)
+        .unwrap()
+        .authorize_proxy_grants(
+            &["test-agent".to_owned()],
+            seconds,
+            chrono::Utc::now().timestamp(),
+        )
+        .unwrap();
+}
+
+#[tokio::test]
+async fn explicit_proxy_sessions_cross_fresh_auth_window_for_both_protocols() {
+    for protocol in [ApiProtocol::Openai, ApiProtocol::Anthropic] {
+        let (mut fixture, _, _) = bound_fixture(
+            protocol,
+            SourceFormat::AndroidApiKey,
+            vec![Reply::json(json!({"id":"beyond-freshness"}))],
+        )
+        .await;
+        // Start close to the boundary, then let real wall time cross it without
+        // replacing the authenticated session (which correctly revokes leases).
+        {
+            let mut conn = fixture.vault.runtime.write().unwrap();
+            let mut session = conn.active_session().unwrap().clone();
+            session.assurance.authenticated_at_unix_secs = chrono::Utc::now().timestamp() - 299;
+            session.assurance.last_activity_at_unix_secs =
+                session.assurance.authenticated_at_unix_secs;
+            conn.attach_session(session);
+        }
+        assert_eq!(fixture.gateway.proxy_session_info(), json!([]));
+        approve_proxy(&mut fixture, 3600);
+        tokio::time::sleep(Duration::from_millis(2200)).await;
+        let binding = fixture.store.load().unwrap().connections["android"].clone();
+        assert!(
+            fixture
+                .vault
+                .credential(&binding, chrono::Utc::now().timestamp())
+                .is_err()
+        );
+        assert!(
+            fixture
+                .gateway
+                .call(
+                    &fixture.capability,
+                    ToolCall {
+                        tool: CONNECTION_CATALOG_TOOL.to_owned(),
+                        arguments: json!({}),
+                    }
+                )
+                .await
+                .is_err()
+        );
+        let (stop, task) = start(&mut fixture);
+        let path = if protocol == ApiProtocol::Openai {
+            "/v1/responses"
+        } else {
+            "/v1/messages"
+        };
+        let response = reqwest::Client::new()
+            .post(local_url(&fixture, path))
+            .bearer_auth(local_key(&fixture))
+            .json(&json!({"model":"fixture","messages":[],"max_tokens":8}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.json::<Value>().await.unwrap()["id"],
+            "beyond-freshness"
+        );
+        assert_eq!(fixture.upstream.requests().len(), 1);
+        stop.send(()).unwrap();
+        task.await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn explicit_proxy_session_expiry_interrupts_stream_and_cannot_fall_back() {
+    let (mut fixture, _, _) = bound_fixture(
+        ApiProtocol::Openai,
+        SourceFormat::AndroidApiKey,
+        vec![Reply {
+            body: b"data: {\"id\":\"first\"}\n\n".to_vec(),
+            headers: vec![("Content-Type".to_owned(), "text/event-stream".to_owned())],
+            stream_chunks: vec![(Duration::from_secs(5), b"data: [DONE]\n\n".to_vec())],
+            ..Reply::json(Value::Null)
+        }],
+    )
+    .await;
+    approve_proxy(&mut fixture, 2);
+    let (stop, task) = start(&mut fixture);
+    let http = reqwest::Client::new();
+    let mut response = http
+        .post(local_url(&fixture, "/v1/responses"))
+        .bearer_auth(local_key(&fixture))
+        .json(&json!({"model":"fixture","stream":true}))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.chunk().await.unwrap().is_some());
+    assert!(
+        tokio::time::timeout(Duration::from_secs(3), response.text())
+            .await
+            .unwrap()
+            .is_err()
+    );
+    let response = http
+        .post(local_url(&fixture, "/v1/responses"))
+        .bearer_auth(local_key(&fixture))
+        .json(&json!({"model":"fixture"}))
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(response.status(), 200);
+    assert_eq!(fixture.upstream.requests().len(), 1);
+    stop.send(()).unwrap();
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn proxy_session_admission_rejects_invalid_grants_and_reports_actual_deadline() {
+    let (mut fixture, _, _) =
+        bound_fixture(ApiProtocol::Openai, SourceFormat::AndroidApiKey, vec![]).await;
+    let now = chrono::Utc::now().timestamp();
+    let original = fixture.store.load().unwrap();
+    for invalid in [
+        "missing",
+        "future",
+        "expired",
+        "unbounded",
+        "rest",
+        "duplicate",
+    ] {
+        let mut config = original.clone();
+        match invalid {
+            "future" => config.grants[0].issued_at = now + 100,
+            "expired" => config.grants[0].expires_at = now - 1,
+            "unbounded" => config.grants[0].expires_at = 0,
+            "rest" => config.grants[0].operations = [Operation::ApiRead].into(),
+            _ => {}
+        }
+        fixture.store.update(|_| Ok((config, ()))).unwrap();
+        fixture.gateway = fixture.rebuild();
+        let names = match invalid {
+            "missing" => vec!["missing".into()],
+            "duplicate" => vec!["test-agent".into(), "test-agent".into()],
+            _ => vec!["test-agent".into()],
+        };
+        assert!(
+            std::sync::Arc::get_mut(&mut fixture.gateway)
+                .unwrap()
+                .authorize_proxy_grants(&names, 3600, now)
+                .is_err()
+        );
+        assert_eq!(fixture.gateway.proxy_session_info(), json!([]));
+    }
+    fixture.store.update(|_| Ok((original, ()))).unwrap();
+    fixture.gateway = fixture.rebuild();
+    approve_proxy(&mut fixture, 86400);
+    let expires = fixture.gateway.proxy_session_info()[0]["expires_at_unix"]
+        .as_i64()
+        .unwrap();
+    assert!(expires <= now + 7200);
+    assert!(expires > now + 600);
+    assert_eq!(fixture.rebuild().proxy_session_info(), json!([]));
+    assert!(fixture.upstream.requests().is_empty());
+}
+
+#[tokio::test]
+async fn proxy_sessions_preserve_call_budgets_across_broker_rebuilds() {
+    let (mut fixture, _, _) = bound_fixture(
+        ApiProtocol::Openai,
+        SourceFormat::AndroidApiKey,
+        vec![Reply::json(json!({"id":"one-call"}))],
+    )
+    .await;
+    fixture
+        .store
+        .update(|config| {
+            let mut config = config.unwrap();
+            config.grants[0].max_calls = 1;
+            Ok((config, ()))
+        })
+        .unwrap();
+    fixture.gateway = fixture.rebuild();
+    approve_proxy(&mut fixture, 3600);
+    let (stop, task) = start(&mut fixture);
+    for expected in [200, 401] {
+        let response = reqwest::Client::new()
+            .post(local_url(&fixture, "/v1/responses"))
+            .bearer_auth(local_key(&fixture))
+            .json(&json!({"model":"fixture"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        let _ = response.text().await.unwrap();
+    }
+    assert_eq!(fixture.upstream.requests().len(), 1);
+    stop.send(()).unwrap();
+    task.await.unwrap().unwrap();
+    fixture.gateway = fixture.rebuild();
+    assert!(matches!(
+        std::sync::Arc::get_mut(&mut fixture.gateway)
+            .unwrap()
+            .authorize_proxy_grants(&["test-agent".into()], 3600, chrono::Utc::now().timestamp()),
+        Err(GatewayError::ReauthorizationRequired)
+    ));
+}
+
 #[tokio::test]
 async fn upstream_receives_only_the_inspected_json_when_fields_are_duplicated() {
     let (mut fixture, _, _) = bound_fixture(
@@ -309,6 +520,7 @@ async fn expired_grants_and_revoked_streams_stop_without_completion() {
             vec![reply],
         )
         .await;
+        approve_proxy(&mut fixture, 3600);
         let (stop, task) = start(&mut fixture);
         let http = reqwest::Client::new();
         let mut response = http
@@ -719,6 +931,7 @@ async fn streaming_delivers_first_event_before_completion_and_shutdown_cancels_i
         vec![reply],
     )
     .await;
+    approve_proxy(&mut fixture, 3600);
     let (stop, task) = start(&mut fixture);
     let mut response = reqwest::Client::new()
         .post(local_url(&fixture, "/v1/responses"))

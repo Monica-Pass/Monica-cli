@@ -249,9 +249,12 @@ pub enum Command {
     /// Unlock and run until Ctrl+C, lock, or session expiry; Tiga limits still apply.
     #[command(visible_aliases = ["s", "u", "unlock"])]
     Serve {
-        /// Broker lifetime in minutes (1–1440, default 5); does not extend Tiga or grants.
+        /// Broker lifetime in minutes (1–1440, default 5); proxy grants also respect Tiga's absolute deadline.
         #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u32).range(1..=1440))]
         session_minutes: u32,
+        /// Explicitly authorize a model grant for this session. Repeat for multiple grants.
+        #[arg(long = "proxy-grant", value_name = "GRANT")]
+        proxy_grants: Vec<String>,
     },
     /// Lock the broker and wait for in-flight operations to drain.
     #[command(visible_aliases = ["lk", "L"])]

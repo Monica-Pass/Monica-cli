@@ -1,7 +1,120 @@
 use super::*;
 use crate::ai_proxy::{Delivery, ProxyRequest, REQUEST_TIMEOUT};
+use mdbx_storage::tiga::TigaService;
+use mdbx_storage::tiga_policy::CredentialUseLease;
+
+pub(super) struct ProxyAuthorization {
+    grant: Grant,
+    pub(super) lease: CredentialUseLease,
+}
 
 impl Gateway {
+    /// Called once by trusted management after password authentication, never by a request.
+    pub(crate) fn authorize_proxy_grants(
+        &mut self,
+        names: &[String],
+        seconds: u32,
+        now: i64,
+    ) -> Result<()> {
+        if !self.proxy_leases.is_empty() || names.len() > 64 {
+            return Err(GatewayError::InvalidRequest);
+        }
+        let config = self.store.load()?;
+        let usage = load_call_usage(&self.store)?;
+        let conn = self
+            .vault
+            .runtime
+            .read()
+            .map_err(|_| GatewayError::StateUnavailable)?;
+        let mut leases = BTreeMap::new();
+        for name in names {
+            let grant = config
+                .grants
+                .iter()
+                .find(|g| &g.name == name)
+                .ok_or(GatewayError::NotFound)?;
+            if crate::config::grant_state(grant, &usage, now).refresh_required() {
+                return Err(GatewayError::ReauthorizationRequired);
+            }
+            if now < grant.issued_at {
+                return Err(GatewayError::Unauthorized);
+            }
+            if grant.expires_at <= now
+                || grant.operations.is_empty()
+                || !grant
+                    .operations
+                    .iter()
+                    .all(|op| matches!(op, Operation::ModelList | Operation::ModelInvoke))
+                || grant.repositories != ["*".to_owned()].into()
+            {
+                return Err(GatewayError::PermissionDenied);
+            }
+            let binding = config
+                .connections
+                .get(&grant.connection)
+                .ok_or(GatewayError::NotFound)?;
+            let source = binding
+                .api_key
+                .as_ref()
+                .ok_or(GatewayError::PermissionDenied)?;
+            if grant.connection_fingerprint != connection_fingerprint(binding) {
+                return Err(GatewayError::Unauthorized);
+            }
+            let summary = mdbx_storage::repo::ObjectSummaryRepo::get(&conn, &binding.credential_id)
+                .map_err(|_| GatewayError::StateUnavailable)?
+                .ok_or(GatewayError::ObjectChanged)?;
+            if !source.matches(&summary) {
+                return Err(GatewayError::ObjectChanged);
+            }
+            let requested = i64::from(seconds).min(grant.expires_at - now) as u32;
+            let lease = TigaService::authorize_credential_use(
+                &conn,
+                &binding.credential_id,
+                &grant.capability_hash,
+                requested,
+                &crate::api_keys::broker_device(),
+                now,
+            )
+            .map_err(|_| GatewayError::UnlockRequired)?;
+            if leases
+                .insert(
+                    grant.capability_hash.clone(),
+                    ProxyAuthorization {
+                        grant: grant.clone(),
+                        lease,
+                    },
+                )
+                .is_some()
+            {
+                return Err(GatewayError::InvalidRequest);
+            }
+        }
+        self.proxy_leases = leases;
+        Ok(())
+    }
+
+    pub(crate) fn proxy_session_info(&self) -> Value {
+        json!(
+            self.proxy_leases
+                .values()
+                .map(|a| json!({
+                    "grant": a.grant.name, "expires_at_unix": a.lease.expires_at_unix_secs(),
+                }))
+                .collect::<Vec<_>>()
+        )
+    }
+
+    fn proxy_lease(&self, grant: &Grant) -> Result<Option<&CredentialUseLease>> {
+        let Some(auth) = self.proxy_leases.get(&grant.capability_hash) else {
+            return Ok(None);
+        };
+        if &auth.grant != grant {
+            auth.lease.revoke();
+            return Err(GatewayError::PermissionDenied);
+        }
+        Ok(Some(&auth.lease))
+    }
+
     pub(crate) fn proxy_slot(&self) -> Result<tokio::sync::OwnedSemaphorePermit> {
         self.proxy_slots
             .clone()
@@ -18,6 +131,8 @@ impl Gateway {
             return Err(GatewayError::UnlockRequired);
         }
         self.recheck_access(capability, binding, operation, "*")?;
+        let (grant, _) = self.access(capability)?;
+        let lease = self.proxy_lease(&grant)?;
         let source = binding
             .api_key
             .as_ref()
@@ -37,21 +152,31 @@ impl Gateway {
         use mdbx_core::tiga::{
             AuthorizationOutcome, DeviceAssurance, DeviceContext, TigaOperation, TigaScope,
         };
-        let decision = mdbx_storage::tiga::TigaService::evaluate_operation(
-            &conn,
-            &TigaScope::Entry {
-                entry_id: binding.credential_id.clone(),
-            },
-            TigaOperation::RevealSecret,
-            mdbx_storage::tiga_policy::TigaAuthorizationContext {
-                session: conn.active_session(),
-                device: &DeviceContext {
-                    assurance: DeviceAssurance::Standard,
-                    ..Default::default()
+        let decision = if let Some(lease) = lease {
+            TigaService::evaluate_credential_use(
+                &conn,
+                lease,
+                &grant.capability_hash,
+                &crate::api_keys::broker_device(),
+                chrono::Utc::now().timestamp(),
+            )
+        } else {
+            mdbx_storage::tiga::TigaService::evaluate_operation(
+                &conn,
+                &TigaScope::Entry {
+                    entry_id: binding.credential_id.clone(),
                 },
-                now_unix_secs: chrono::Utc::now().timestamp(),
-            },
-        )
+                TigaOperation::RevealSecret,
+                mdbx_storage::tiga_policy::TigaAuthorizationContext {
+                    session: conn.active_session(),
+                    device: &DeviceContext {
+                        assurance: DeviceAssurance::Standard,
+                        ..Default::default()
+                    },
+                    now_unix_secs: chrono::Utc::now().timestamp(),
+                },
+            )
+        }
         .map_err(|_| GatewayError::UnlockRequired)?;
         if conn.keyring().is_none()
             || !matches!(
@@ -106,9 +231,12 @@ impl Gateway {
         }
         let mut state = self.turn(QUEUE_WAIT).await?;
         self.proxy_recheck(&capability, &binding, operation)?;
-        let credential = self
-            .vault
-            .credential(&binding, chrono::Utc::now().timestamp())?;
+        let credential = self.vault.bound_api_key_with_lease(
+            &binding,
+            chrono::Utc::now().timestamp(),
+            self.proxy_lease(&grant)?
+                .map(|lease| (lease, grant.capability_hash.as_str())),
+        )?;
         let local_key = zeroize::Zeroizing::new(format!("monica-{}", capability.as_str()));
         if let Some(body) = &call.parsed {
             upstream::reject_secret_value(body, &credential.token)?;

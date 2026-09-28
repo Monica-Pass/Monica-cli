@@ -1,5 +1,7 @@
 # Android API Key 模型中转：主会话审查交接
 
+> 本文记录 2026-09-28 的首版。后续有限代理会话见 [2026-09-29 增量复核](proxy-session-review-2026-09-29.md)；下面的五分钟限制不再适用于显式 `--proxy-grant` 会话。
+
 用户确认的目标：复用 Monica Android 已存 API Key，生成本地地址与可撤销的本地 Key，通过 Monica 路由中转；第一版同时支持 OpenAI 和 Anthropic。
 
 ## 改动位置与整合

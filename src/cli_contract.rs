@@ -351,6 +351,7 @@ pub fn describe(name: &str) -> Option<Value> {
                 ("always", "lock_broker"),
                 ("always", "foreground_broker"),
                 ("always", "bounded_broker_session"),
+                ("--proxy-grant", "authorize_local_model_session"),
             ],
         ),
         "lock" => (

@@ -18,6 +18,14 @@ use crate::vault::{Credential, Vault};
 
 const MAX_PAYLOAD_BYTES: u64 = 256 * 1024;
 
+pub(crate) fn broker_device() -> DeviceContext {
+    DeviceContext {
+        device_id: Some("monica-api-key-broker".to_owned()),
+        assurance: DeviceAssurance::Standard,
+        ..Default::default()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum ApiProtocol {
@@ -259,11 +267,19 @@ impl Vault {
         id: &str,
         expected: Option<&ApiKeyBinding>,
         now: i64,
+        lease: Option<(&mdbx_storage::tiga_policy::CredentialUseLease, &str)>,
     ) -> Result<Source> {
         let mut conn = self
             .runtime
             .write()
             .map_err(|_| GatewayError::StateUnavailable)?;
+        // Sample after acquiring the runtime: an older queued request must not look like
+        // clock rollback after another request has advanced the lease's last check.
+        let now = if lease.is_some() {
+            chrono::Utc::now().timestamp()
+        } else {
+            now
+        };
         if conn.keyring().is_none() || conn.active_session().is_none() {
             return Err(GatewayError::UnlockRequired);
         }
@@ -282,18 +298,29 @@ impl Vault {
             ObjectTypeId::ApiToken => SourceFormat::NativeApiToken,
             _ => return Err(GatewayError::ObjectReadOnly),
         };
-        let disclosed = ObjectDisclosureService::reveal_with_active_session_and_limits(
-            &mut conn,
-            id,
-            &DeviceContext {
-                device_id: Some("monica-api-key-broker".to_owned()),
-                assurance: DeviceAssurance::Standard,
-                ..Default::default()
-            },
-            now,
-            ObjectDisclosureLimits::new(MAX_PAYLOAD_BYTES)
-                .map_err(|_| GatewayError::StateUnavailable)?,
-        )
+        let limits = ObjectDisclosureLimits::new(MAX_PAYLOAD_BYTES)
+            .map_err(|_| GatewayError::StateUnavailable)?;
+        let disclosed = if let Some((lease, audience)) = lease {
+            if lease.object_id() != id {
+                return Err(GatewayError::PermissionDenied);
+            }
+            ObjectDisclosureService::use_with_lease_and_limits(
+                &conn,
+                lease,
+                audience,
+                &broker_device(),
+                now,
+                limits,
+            )
+        } else {
+            ObjectDisclosureService::reveal_with_active_session_and_limits(
+                &mut conn,
+                id,
+                &broker_device(),
+                now,
+                limits,
+            )
+        }
         .map_err(|error| match error {
             mdbx_storage::error::StorageError::ResourceLimit { .. } => {
                 GatewayError::ObjectPayloadTooLarge
@@ -318,11 +345,20 @@ impl Vault {
     }
 
     pub(crate) fn bound_api_key(&self, binding: &Connection, now: i64) -> Result<Credential> {
+        self.bound_api_key_with_lease(binding, now, None)
+    }
+
+    pub(crate) fn bound_api_key_with_lease(
+        &self,
+        binding: &Connection,
+        now: i64,
+        lease: Option<(&mdbx_storage::tiga_policy::CredentialUseLease, &str)>,
+    ) -> Result<Credential> {
         let expected = binding
             .api_key
             .as_ref()
             .ok_or(GatewayError::InvalidConfig)?;
-        let source = self.api_key_source(&binding.credential_id, Some(expected), now)?;
+        let source = self.api_key_source(&binding.credential_id, Some(expected), now, lease)?;
         if !source.endpoint.is_empty() && normalized_base(&source.endpoint)? != binding.api_base {
             return Err(GatewayError::ObjectChanged);
         }
@@ -355,7 +391,8 @@ pub fn bind(
             return Err(GatewayError::NotFound);
         }
         let vault = Vault::open(&config.vault, password)?;
-        let source = vault.api_key_source(&options.entry, None, chrono::Utc::now().timestamp());
+        let source =
+            vault.api_key_source(&options.entry, None, chrono::Utc::now().timestamp(), None);
         vault.lock()?;
         let source = source?;
         let stored_base = (!source.endpoint.is_empty())

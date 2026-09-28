@@ -7,6 +7,7 @@
     remove_api_key_binding: '解除本地连接绑定，保留 Android 原条目',
     write_proxy_client_config: '保存本地代理地址和有期限的本地 Key；不包含上游 Key',
     bounded_broker_session: '代理默认 5 分钟，可显式设置 1–1440 分钟；Tiga 和授权期限独立生效',
+    authorize_local_model_session: '本人明确批准指定模型授权的本机会话；保留 Tiga 绝对期限、锁库和撤销限制',
     service_tool_grant: '授权为服务工具', model_proxy_grant: '授权为模型中转',
     print_proxy_config_hint: '提示用 proxy-config 生成本地地址和 Key 文件',
     command: '命令路径', grant: 'AI 授权名 GRANT', vault: '当前保险库', connection: '连接标识 CONNECTION',

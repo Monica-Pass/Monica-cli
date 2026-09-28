@@ -211,7 +211,11 @@ fn next_from_status(status: Option<&Value>, selected: Option<&str>) -> Result<Va
             format!("mcp-config {name} --install <claude|codex|cursor|vscode>")
         }];
         if !running {
-            commands.push("serve".to_owned());
+            commands.push(if model_proxy {
+                format!("serve --proxy-grant {name} --session-minutes 60")
+            } else {
+                "serve".to_owned()
+            });
         }
         if !model_proxy {
             commands.push(format!("check {name}"));

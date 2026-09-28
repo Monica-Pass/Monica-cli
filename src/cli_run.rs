@@ -254,7 +254,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
                 path = path.with_extension("mcp.json").display()
             ));
             if serve {
-                return run_broker(store, password, lang, output, 5).await;
+                return run_broker(store, password, lang, output, 5, vec![]).await;
             }
             output.note(tr!(lang, CliNextServe));
         }
@@ -554,10 +554,13 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             output.result("revoke", json!({"name":name, "revoked":true}), None)?;
             output.note(tr!(lang, CliGrantRevoked, name = name));
         }
-        Command::Serve { session_minutes } => {
+        Command::Serve {
+            session_minutes,
+            proxy_grants,
+        } => {
             let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;
-            return run_broker(store, password, lang, output, session_minutes).await;
+            return run_broker(store, password, lang, output, session_minutes, proxy_grants).await;
         }
         Command::Lock => {
             if !store.path.is_file() {
@@ -615,18 +618,36 @@ async fn run_broker(
     lang: Language,
     output: Output,
     session_minutes: u32,
+    proxy_grants: Vec<String>,
 ) -> Result<()> {
-    let mut session =
-        BrokerSession::start_with_minutes(store.clone(), password, session_minutes).await?;
+    let mut session = BrokerSession::start_with_proxy_grants(
+        store.clone(),
+        password,
+        session_minutes,
+        proxy_grants,
+    )
+    .await?;
     let config = store.load()?;
     let address = config.listen;
     output.event(
         "serve",
         "ready",
-        json!({"listen":address, "session_seconds":u64::from(session_minutes) * 60}),
+        json!({"listen":address, "session_seconds":u64::from(session_minutes) * 60, "proxy_sessions":session.proxy_sessions()}),
     )?;
     output.note(tr!(lang, CliBrokerReady, address = address));
     output.note(tr!(lang, CliSessionLifetime, minutes = session_minutes));
+    for info in session.proxy_sessions().as_array().into_iter().flatten() {
+        let expires = info["expires_at_unix"].as_i64().unwrap_or_default();
+        let expires = chrono::DateTime::from_timestamp(expires, 0)
+            .map(|time| time.with_timezone(&chrono::Local).to_rfc3339())
+            .unwrap_or_default();
+        output.note(tr!(
+            lang,
+            CliProxySession,
+            grant = info["grant"].as_str().unwrap_or_default(),
+            expires = expires
+        ));
+    }
     let gated = config
         .grants
         .iter()

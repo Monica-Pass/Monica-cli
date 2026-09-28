@@ -1500,6 +1500,10 @@ window.MONICA_TEACH = {
      {
       "effect": "bounded_broker_session",
       "when": "always"
+     },
+     {
+      "effect": "authorize_local_model_session",
+      "when": "--proxy-grant"
      }
     ],
     "mcp_tool": false,
@@ -1539,7 +1543,26 @@ window.MONICA_TEACH = {
      "defaults": [
       "5"
      ],
-     "help": "Broker lifetime: 1–1440 minutes, default 5; does not extend Tiga or grants"
+     "help": "Broker lifetime: 1–1440 minutes, default 5; proxy sessions also respect Tiga's absolute deadline"
+    },
+    {
+     "id": "proxy_grants",
+     "role": "grant",
+     "long": "proxy-grant",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": true,
+     "takesValue": true,
+     "valueNames": [
+      "GRANT"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Explicitly authorize this model grant for the session; repeat for multiple grants"
     },
     {
      "id": "help",
@@ -1572,7 +1595,7 @@ window.MONICA_TEACH = {
    "handAuthored": false,
    "pitfalls": [
     "先用 mcp-config GRANT --install CLIENT 配置 AI，再执行 serve；在另一个终端运行 check GRANT。",
-    "会话最长 5 分钟，到期需由人重新解锁，不改变授权窗口。",
+    "默认时长 5 分钟；模型代理用 --proxy-grant 与 --session-minutes 显式批准，受 Tiga 绝对期限和授权预算约束。",
     "需要访问保险库的管理操作会先停止并排空代理；完成后重新 serve。端口被其他进程占用时先检查。",
     "旧别名 s / u / unlock 保持兼容。"
    ],
@@ -1585,8 +1608,8 @@ window.MONICA_TEACH = {
      "capturedAt": "此前版本快照"
     },
     {
-     "cmd": "monica serve --session-minutes 60",
-     "note": "只延长进程上限；Multi 默认仍要求 5 分钟内的新鲜认证，可能需更早重新解锁。",
+     "cmd": "monica serve --proxy-grant my-model-client --session-minutes 60",
+     "note": "明确批准指定模型授权的一小时代理；不延长普通秘密读取，Multi 默认仍有两小时绝对上限。",
      "secrets": "{\"password\":\"<主密码>\"}",
      "tested": false,
      "reason": "此处使用说明性名称与 UUID；功能由临时 MDBX 和模拟上游回归覆盖，未为这条展示命令采集输出。"
