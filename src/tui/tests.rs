@@ -169,6 +169,7 @@ fn a_row_only_deletes_after_its_own_name_is_typed_back() {
     config.connections.insert(
         "work-gitlab".to_owned(),
         crate::config::Connection {
+            api_key: None,
             provider: crate::model::Provider::Gitlab,
             credential_id: bound.clone(),
             api_base: "https://gitlab.example.com/".to_owned(),
@@ -1123,6 +1124,7 @@ fn manager_fixture(directory: &std::path::Path) -> App {
         config.connections.insert(
             name.to_owned(),
             Connection {
+                api_key: None,
                 provider,
                 credential_id: uuid::Uuid::new_v4().to_string(),
                 api_base: provider.default_api_base().to_owned(),

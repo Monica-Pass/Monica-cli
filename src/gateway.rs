@@ -20,6 +20,8 @@ use crate::model::{Arguments, CONNECTION_CATALOG_TOOL, Operation, ToolCall};
 use crate::upstream;
 use crate::vault::{Credential, Vault};
 
+mod proxy;
+
 const MAX_JOURNAL_ENTRIES: usize = 4096;
 const MAX_STATE_BYTES: u64 = 8 * 1024 * 1024;
 /// How long the broker gives itself to answer one call. The bridge stops
@@ -108,6 +110,8 @@ pub struct Gateway {
     /// Callers currently queued for `state`, bounded by `MAX_QUEUED`.
     queued: AtomicUsize,
     approvals: Arc<ApprovalQueue>,
+    pub(crate) stopped: tokio_util::sync::CancellationToken,
+    proxy_slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl Gateway {
@@ -144,6 +148,8 @@ impl Gateway {
             listen: config.listen,
             http,
             approvals: ApprovalQueue::new(),
+            stopped: tokio_util::sync::CancellationToken::new(),
+            proxy_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             queued: AtomicUsize::new(0),
             state: Mutex::new(ExecutionState {
                 journal,
@@ -179,12 +185,13 @@ impl Gateway {
 
     pub fn observe_lock(&self) -> Result<()> {
         if self.store.lock_marker().exists() {
-            self.vault.lock()?;
+            self.lock()?;
         }
         Ok(())
     }
 
     pub fn lock(&self) -> Result<()> {
+        self.stopped.cancel();
         self.vault.lock()
     }
 
@@ -686,6 +693,7 @@ fn catalog(grant: &Grant, binding: &Connection) -> Value {
     let tools: Vec<_> = grant
         .operations
         .iter()
+        .filter(|operation| !operation.is_proxy())
         .map(|operation| {
             json!({
                 "name": operation.tool_name(binding.provider), "read_only": !operation.is_write(),

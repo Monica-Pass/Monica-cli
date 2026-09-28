@@ -99,7 +99,8 @@ pub fn describe(name: &str) -> Option<Value> {
                 ("always", "lock_broker"),
                 ("always", "create_grant"),
                 ("always", "write_capability_file"),
-                ("always", "print_mcp_snippet"),
+                ("service_tool_grant", "print_mcp_snippet"),
+                ("model_proxy_grant", "print_proxy_config_hint"),
             ],
         ),
         "renew" => (
@@ -114,8 +115,42 @@ pub fn describe(name: &str) -> Option<Value> {
                 ("always", "rotate_capability"),
                 ("always", "reset_grant_window_and_budget"),
                 ("always", "write_capability_file"),
-                ("always", "print_mcp_snippet"),
+                ("service_tool_grant", "print_mcp_snippet"),
+                ("model_proxy_grant", "print_proxy_config_hint"),
                 ("--approval", "change_approval_policy"),
+            ],
+        ),
+        "bind" => (
+            "connection",
+            &[
+                "configured_vault",
+                "existing_api_key_entry",
+                "secure_password_input",
+            ],
+            &[
+                ("always", "lock_broker"),
+                ("always", "bind_existing_api_key"),
+                ("always", "write_local_config"),
+                ("--replace", "revoke_connection_grants"),
+                ("android_root_missing", "restore_android_root"),
+            ],
+        ),
+        "proxy-config" => (
+            "grant",
+            &["configured_vault", "existing_grant"],
+            &[("always", "write_proxy_client_config")],
+        ),
+        "unbind" => (
+            "connection",
+            &[
+                "configured_vault",
+                "existing_connection",
+                "secure_password_input",
+            ],
+            &[
+                ("always", "lock_broker"),
+                ("always", "remove_api_key_binding"),
+                ("always", "revoke_connection_grants"),
             ],
         ),
         "revoke" => (
@@ -315,7 +350,7 @@ pub fn describe(name: &str) -> Option<Value> {
             &[
                 ("always", "lock_broker"),
                 ("always", "foreground_broker"),
-                ("always", "five_minute_session"),
+                ("always", "bounded_broker_session"),
             ],
         ),
         "lock" => (

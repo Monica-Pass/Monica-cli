@@ -209,6 +209,23 @@ pub enum Command {
         #[arg(short = 'n', long, default_value = "")]
         note: String,
     },
+    /// Bind an Android API Key already in this vault; keep its key out of AI output.
+    Bind(monica_pass_cli::api_keys::BindOptions),
+    /// Remove an API-key connection and its grants, preserving the Android entry.
+    Unbind {
+        #[arg(value_name = "CONNECTION")]
+        name: String,
+    },
+    /// Write the local proxy address and scoped local Key to a private client config file.
+    ProxyConfig {
+        #[arg(value_name = "GRANT")]
+        name: String,
+        #[arg(long, value_name = "FILE")]
+        output: PathBuf,
+        /// Replace the file explicitly; the local Key still follows this grant's expiry.
+        #[arg(long)]
+        force: bool,
+    },
     /// Authorize exact repositories and operations. Requires the vault password.
     #[command(visible_alias = "g")]
     Grant(GrantOptions),
@@ -229,9 +246,13 @@ pub enum Command {
         #[arg(value_name = "GRANT")]
         name: String,
     },
-    /// Unlock and run until Ctrl+C, lock, or five-minute session expiry.
+    /// Unlock and run until Ctrl+C, lock, or session expiry; Tiga limits still apply.
     #[command(visible_aliases = ["s", "u", "unlock"])]
-    Serve,
+    Serve {
+        /// Broker lifetime in minutes (1–1440, default 5); does not extend Tiga or grants.
+        #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u32).range(1..=1440))]
+        session_minutes: u32,
+    },
     /// Lock the broker and wait for in-flight operations to drain.
     #[command(visible_aliases = ["lk", "L"])]
     Lock,
@@ -438,10 +459,13 @@ impl Command {
             Self::Check { .. } => "check",
             Self::Init { .. } => "init",
             Self::Connect { .. } => "connect",
+            Self::Bind(_) => "bind",
+            Self::Unbind { .. } => "unbind",
+            Self::ProxyConfig { .. } => "proxy-config",
             Self::Grant(_) => "grant",
             Self::Refresh(_) => "refresh",
             Self::Revoke { .. } => "revoke",
-            Self::Serve => "serve",
+            Self::Serve { .. } => "serve",
             Self::Lock => "lock",
             Self::Status => "status",
             Self::Next { .. } => "next",

@@ -32,6 +32,9 @@ pub struct Connection {
     /// Human-designated public context; safe for the authorized AI to see.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
+    /// Local reference to an existing Android object. Contains no credential value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<crate::api_keys::ApiKeyBinding>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,6 +158,11 @@ impl Config {
                 .map_err(|_| GatewayError::InvalidConfig)?;
             validate_api_base(&connection.api_base, connection.provider)?;
             validate_note(&connection.note)?;
+            match (&connection.api_key, connection.provider) {
+                (Some(source), Provider::ApiKey) => source.validate()?,
+                (None, Provider::Github | Provider::Gitlab) => {}
+                _ => return Err(GatewayError::InvalidConfig),
+            }
         }
         let mut names = BTreeSet::new();
         let mut hashes = BTreeSet::new();
@@ -189,6 +197,16 @@ impl Config {
                 if grant.repositories.len() != 1
                     || !grant.repositories.contains("*")
                     || grant.operations.iter().any(|op| !op.is_api())
+                {
+                    return Err(GatewayError::InvalidConfig);
+                }
+                continue;
+            }
+            if grant.operations.iter().any(|op| op.is_proxy()) {
+                if connection.provider != Provider::ApiKey
+                    || grant.repositories.len() != 1
+                    || !grant.repositories.contains("*")
+                    || grant.operations.iter().any(|op| !op.is_proxy())
                 {
                     return Err(GatewayError::InvalidConfig);
                 }
@@ -376,12 +394,23 @@ pub fn capability_hash(capability: &str) -> String {
 }
 
 pub fn connection_fingerprint(connection: &Connection) -> String {
-    let bytes = format!(
+    let mut bytes = format!(
         "{}\n{}\n{}",
         connection.provider.prefix(),
         connection.credential_id,
         connection.api_base
     );
+    if let Some(source) = &connection.api_key {
+        // Preserve legacy fingerprints; include the authentication mode and pinned
+        // source revision for new bindings so changing either invalidates grants.
+        bytes.push_str(&format!(
+            "\n{}\n{}\n{}\n{}",
+            source.format.name(),
+            source.protocol.name(),
+            source.auth.name(),
+            source.head_commit_id
+        ));
+    }
     hex::encode(Sha256::digest(bytes.as_bytes()))
 }
 
@@ -575,6 +604,7 @@ mod tests {
     fn fixture(directory: &Path) -> (Config, String) {
         let capability = new_capability().to_string();
         let connection = Connection {
+            api_key: None,
             provider: Provider::Github,
             credential_id: uuid::Uuid::new_v4().to_string(),
             api_base: Provider::Github.default_api_base().to_owned(),

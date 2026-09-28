@@ -483,7 +483,18 @@ pub fn update_note(store: &ConfigStore, name: &str, note: &str, password: &str) 
         let mut config = config.ok_or(GatewayError::NotFound)?;
         let binding = config.connections.get(name).ok_or(GatewayError::NotFound)?;
         let vault = Vault::open(&config.vault, password)?;
-        let updated = vault.update_note(name, binding, note);
+        let updated = if binding.api_key.is_some() {
+            vault
+                .credential(binding, chrono::Utc::now().timestamp())
+                .and_then(|credential| {
+                    check_public(&json!([name, note]), &[&credential.token])?;
+                    let mut binding = binding.clone();
+                    binding.note = note.to_owned();
+                    Ok(binding)
+                })
+        } else {
+            vault.update_note(name, binding, note)
+        };
         vault.lock()?;
         config.connections.insert(name.to_owned(), updated?);
         Ok((config, ()))
@@ -526,6 +537,9 @@ pub fn delete_connection(
     let _guard = store.acquire_broker_lock()?;
     let config = store.load()?;
     let binding = config.connections.get(name).ok_or(GatewayError::NotFound)?;
+    if binding.api_key.is_some() {
+        return Err(GatewayError::ObjectReadOnly);
+    }
     let vault = Vault::open(&config.vault, password)?;
     let result = vault.delete_entry(&binding.credential_id);
     vault.lock()?;
@@ -1010,7 +1024,24 @@ pub struct BrokerSession {
 
 impl BrokerSession {
     pub async fn start(store: ConfigStore, password: Zeroizing<String>) -> Result<Self> {
-        Self::start_using(store, password, Gateway::new).await
+        Self::start_with_minutes(store, password, 5).await
+    }
+
+    pub async fn start_with_minutes(
+        store: ConfigStore,
+        password: Zeroizing<String>,
+        minutes: u32,
+    ) -> Result<Self> {
+        if !(1..=1440).contains(&minutes) {
+            return Err(GatewayError::InvalidRequest);
+        }
+        Self::start_using(
+            store,
+            password,
+            Duration::from_secs(u64::from(minutes) * 60),
+            Gateway::new,
+        )
+        .await
     }
 
     #[cfg(test)]
@@ -1019,15 +1050,19 @@ impl BrokerSession {
         password: Zeroizing<String>,
         http: reqwest::Client,
     ) -> Result<Self> {
-        Self::start_using(store, password, move |store, vault| {
-            Gateway::with_client(store, vault, http)
-        })
+        Self::start_using(
+            store,
+            password,
+            Duration::from_secs(300),
+            move |store, vault| Gateway::with_client(store, vault, http),
+        )
         .await
     }
 
     async fn start_using(
         store: ConfigStore,
         password: Zeroizing<String>,
+        lifetime: Duration,
         build: impl FnOnce(ConfigStore, Vault) -> Result<Gateway> + Send + 'static,
     ) -> Result<Self> {
         let guard = store.acquire_broker_lock()?;
@@ -1047,7 +1082,6 @@ impl BrokerSession {
         .await
         .map_err(|_| GatewayError::StateUnavailable)??;
         let (stop, receiver) = tokio::sync::oneshot::channel();
-        let lifetime = Duration::from_secs(300);
         let approvals = gateway.approvals();
         let task = tokio::spawn(async move {
             let _guard = guard;

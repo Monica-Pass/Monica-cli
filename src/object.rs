@@ -251,6 +251,7 @@ mod tests {
         let original: Value = serde_json::from_str(r#"{"schema":"monica.gateway.credential.v1","provider":"github","api_base":"https://api.github.com","token":"synthetic-token-1234567890","future":{"array":[null,false,"",{"id":"stable","n":123456789012345678901234567890}]}}"#).unwrap();
         let (directory, vault, id) = fixture("api-token", 1, &original);
         let binding = crate::config::Connection {
+            api_key: None,
             provider: crate::model::Provider::Github,
             credential_id: id.clone(),
             api_base: "https://api.github.com".into(),

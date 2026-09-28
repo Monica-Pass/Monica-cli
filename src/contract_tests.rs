@@ -144,6 +144,7 @@ fn synthetic_cross_client_fixture_and_portable_copy() {
         ids.push(entry.entry_id);
     }
     let binding = crate::config::Connection {
+        api_key: None,
         provider: crate::model::Provider::Github,
         credential_id: ids[2].clone(),
         api_base: "https://api.github.com".into(),

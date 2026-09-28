@@ -1,5 +1,7 @@
 # 通用服务 API 代理
 
+OpenAI / Anthropic 原生模型请求使用 [本地模型中转](model-proxy.md) 和独立的 model-list/model-invoke 权限；此页的 api-read/api-write 不由模型授权隐式开放。
+
 Monica 不再通过三个 Issue 工具限制 Token 的 API 能力。`gitlab_api_read` / `gitlab_api_write` 和 `github_api_read` / `github_api_write` 将请求发送到连接配置的 API 地址，由代理注入加密保存的 Token。MR、分支、文件提交、评论、流水线、项目及用户 API 都走同一入口，实际权限由服务端 Token scope 与用户角色决定。
 
 ## 本地授权

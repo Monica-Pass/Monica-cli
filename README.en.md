@@ -1,5 +1,7 @@
 <h1 align="center">Monica CLI</h1>
 
+Android API Keys stored in MDBX can now be bound to a local OpenAI / Anthropic proxy. Each scoped local key selects one upstream; JSON and SSE are supported. See the [model proxy guide](docs/model-proxy.md) for setup, Tiga reauthentication limits and supported endpoints.
+
 <div align="center">
 
 **English** · [简体中文](README.md)

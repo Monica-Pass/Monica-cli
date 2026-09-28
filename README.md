@@ -36,6 +36,8 @@
 
 Monica CLI 将服务 Token 保存在本地 MDBX3 加密保险库中。AI 通过 MCP 请求操作，Monica 校验授权、注入凭据并代为发送请求，再将业务结果返回给 AI。你负责管理凭据和权限，AI 通过连接名称和用途备注理解该使用哪个服务，无需直接持有原始 Token。
 
+也可绑定 Android 在 MDBX 中已保存的 API Key，生成本地地址和可撤销的本地 Key，供 OpenAI / Anthropic 客户端通过 Monica 中转模型请求。支持 JSON 与 SSE；完整步骤、Tiga 时限和接口范围见 [本地模型中转](docs/model-proxy.md)。
+
 [它是什么](#先说清楚它是什么) · [快速开始](#快速开始) · [接入 AI](#接入-ai) · [WebDAV 保险库](#webdav-保险库) · [从源码构建](#从源码构建) · [Monica 主仓库](https://github.com/Monica-Pass/Monica) · [本仓库](https://github.com/Monica-Pass/Monica-cli)
 
 ![Monica CLI 终端管理界面](docs/images/home.png)

@@ -13,6 +13,10 @@ pub const CONNECTION_CATALOG_TOOL: &str = "monica_list_connections";
 pub enum Provider {
     Github,
     Gitlab,
+    /// Local Android key bindings support model proxies or separately granted REST operations.
+    #[serde(rename = "api-key")]
+    #[value(skip)]
+    ApiKey,
 }
 
 impl Provider {
@@ -20,6 +24,7 @@ impl Provider {
         match self {
             Self::Github => "github",
             Self::Gitlab => "gitlab",
+            Self::ApiKey => "service",
         }
     }
 
@@ -27,6 +32,7 @@ impl Provider {
         match self {
             Self::Github => "https://api.github.com/",
             Self::Gitlab => "https://gitlab.com/api/v4/",
+            Self::ApiKey => "",
         }
     }
 }
@@ -72,21 +78,28 @@ pub enum Operation {
     CreateIssue,
     ApiRead,
     ApiWrite,
+    ModelList,
+    ModelInvoke,
 }
 
 impl Operation {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::ListIssues,
         Self::GetIssue,
         Self::CreateIssue,
         Self::ApiRead,
         Self::ApiWrite,
+        Self::ModelList,
+        Self::ModelInvoke,
     ];
     pub fn is_write(self) -> bool {
-        matches!(self, Self::CreateIssue | Self::ApiWrite)
+        matches!(self, Self::CreateIssue | Self::ApiWrite | Self::ModelInvoke)
     }
     pub fn is_api(self) -> bool {
         matches!(self, Self::ApiRead | Self::ApiWrite)
+    }
+    pub fn is_proxy(self) -> bool {
+        matches!(self, Self::ModelList | Self::ModelInvoke)
     }
 
     pub fn name(self) -> &'static str {
@@ -96,6 +109,8 @@ impl Operation {
             Self::CreateIssue => "create_issue",
             Self::ApiRead => "api_read",
             Self::ApiWrite => "api_write",
+            Self::ModelList => "model_list",
+            Self::ModelInvoke => "model_invoke",
         }
     }
 
@@ -106,6 +121,8 @@ impl Operation {
     pub fn from_tool(name: &str, provider: Provider) -> Result<Self> {
         Self::ALL
             .into_iter()
+            .filter(|operation| !operation.is_proxy())
+            .filter(|operation| provider != Provider::ApiKey || operation.is_api())
             .find(|operation| operation.tool_name(provider) == name)
             .ok_or(GatewayError::PermissionDenied)
     }
@@ -175,10 +192,18 @@ pub enum Arguments {
 
 impl Arguments {
     pub fn parse(operation: Operation, value: Value, provider: Provider) -> Result<Self> {
+        if operation.is_proxy() {
+            return Err(GatewayError::PermissionDenied);
+        }
+        if provider == Provider::ApiKey && !operation.is_api() {
+            return Err(GatewayError::PermissionDenied);
+        }
         if operation.is_api() {
-            return Ok(Self::Api(crate::service_api::ApiArgs::parse(
-                operation, value,
-            )?));
+            let args = crate::service_api::ApiArgs::parse(operation, value)?;
+            if provider == Provider::ApiKey && args.api != crate::service_api::ApiSurface::Rest {
+                return Err(GatewayError::InvalidRequest);
+            }
+            return Ok(Self::Api(args));
         }
         let parsed = match operation {
             Operation::ListIssues => {
@@ -213,7 +238,10 @@ impl Arguments {
                     .to_string();
                 Self::Create(args)
             }
-            Operation::ApiRead | Operation::ApiWrite => unreachable!(),
+            Operation::ApiRead
+            | Operation::ApiWrite
+            | Operation::ModelList
+            | Operation::ModelInvoke => unreachable!(),
         };
         validate_repository(parsed.repository(), provider)?;
         Ok(parsed)
@@ -297,6 +325,9 @@ pub fn validate_title(value: &str) -> Result<()> {
 }
 
 pub fn validate_repository(value: &str, provider: Provider) -> Result<()> {
+    if provider == Provider::ApiKey {
+        return Err(GatewayError::InvalidRequest);
+    }
     let segments: Vec<_> = value.split('/').collect();
     if value.len() > 512
         || segments.len() < 2
@@ -325,6 +356,7 @@ pub fn validate_api_base(value: &str, provider: Provider) -> Result<Url> {
     let valid_path = match provider {
         Provider::Github => matches!(url.path(), "/" | "/api/v3/"),
         Provider::Gitlab => url.path() == "/api/v4/",
+        Provider::ApiKey => url.path().ends_with('/'),
     };
     if url.scheme() != "https"
         || url.host_str().is_none()
@@ -345,6 +377,15 @@ pub fn validate_grant_scope(
     operations: &[Operation],
     provider: Provider,
 ) -> Result<()> {
+    if operations.iter().any(|op| op.is_proxy()) {
+        if provider != Provider::ApiKey
+            || repositories != ["*"]
+            || operations.iter().any(|op| !op.is_proxy())
+        {
+            return Err(GatewayError::InvalidRequest);
+        }
+        return Ok(());
+    }
     if operations.iter().any(|op| op.is_api()) {
         if repositories != ["*"] || operations.iter().any(|op| !op.is_api()) {
             return Err(GatewayError::InvalidRequest);

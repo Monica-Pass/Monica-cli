@@ -962,6 +962,8 @@ impl Form {
                         "create-issue" => Ok(Operation::CreateIssue),
                         "api-read" => Ok(Operation::ApiRead),
                         "api-write" => Ok(Operation::ApiWrite),
+                        "model-list" => Ok(Operation::ModelList),
+                        "model-invoke" => Ok(Operation::ModelInvoke),
                         _ => Err(GatewayError::InvalidRequest),
                     })
                     .collect::<Result<_>>()?;

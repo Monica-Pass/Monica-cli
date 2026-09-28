@@ -1,4 +1,8 @@
 pub mod admin;
+pub mod ai_proxy;
+pub mod api_keys;
+#[cfg(test)]
+mod api_keys_tests;
 pub mod approval;
 mod blobs;
 pub mod clipboard;

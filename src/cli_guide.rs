@@ -15,7 +15,7 @@ use unicode_width::UnicodeWidthStr;
 /// Where the practice book lives; `--help` and `next` both point at it.
 pub(super) const PRACTICE_URL: &str = "https://monica-pass.github.io/Monica-cli/reference/";
 
-/// The same seven groups, in the same order, as the practice book
+/// The same groups, in the same order, as the practice book
 /// (`docs/reference/examples.json`); a test keeps the two in step and requires
 /// every visible command to sit in exactly one of them.
 pub(super) const GROUPS: &[(&str, Message, &[&str])] = &[
@@ -79,6 +79,11 @@ pub(super) const GROUPS: &[(&str, Message, &[&str])] = &[
         ],
     ),
     ("sync", Message::HelpGroupSync, &["webdav"]),
+    (
+        "models",
+        Message::HelpGroupModels,
+        &["bind", "proxy-config", "unbind"],
+    ),
 ];
 
 /// The name this binary was started under, so a person who only has
@@ -176,6 +181,11 @@ fn next_from_status(status: Option<&Value>, selected: Option<&str>) -> Result<Va
     let running =
         status.is_some_and(|s| s["broker_running"] == true && s["lock_requested"] != true);
     let name = chosen.and_then(|g| g["name"].as_str()).unwrap_or("<GRANT>");
+    let model_proxy = chosen.is_some_and(|g| {
+        g["operations"]
+            .as_array()
+            .is_some_and(|ops| ops.iter().any(|op| op == "model_invoke"))
+    });
     let (stage, commands, renew) = if status.is_none() {
         (
             "vault",
@@ -195,13 +205,17 @@ fn next_from_status(status: Option<&Value>, selected: Option<&str>) -> Result<Va
             false,
         )
     } else if usable {
-        let mut commands = vec![format!(
-            "mcp-config {name} --install <claude|codex|cursor|vscode>"
-        )];
+        let mut commands = vec![if model_proxy {
+            format!("proxy-config {name} --output <PRIVATE_FILE>")
+        } else {
+            format!("mcp-config {name} --install <claude|codex|cursor|vscode>")
+        }];
         if !running {
             commands.push("serve".to_owned());
         }
-        commands.push(format!("check {name}"));
+        if !model_proxy {
+            commands.push(format!("check {name}"));
+        }
         ("client", commands, false)
     } else if chosen.is_some() {
         ("grant", vec![format!("renew {name}")], true)
@@ -213,9 +227,15 @@ fn next_from_status(status: Option<&Value>, selected: Option<&str>) -> Result<Va
         };
         (
             "grant",
-            vec![format!(
-                "grant <GRANT> --connection {connection} --repo <owner/repo>"
-            )],
+            vec![
+                if connections.len() == 1 && connections[0]["provider"] == "api-key" {
+                    format!(
+                        "grant <GRANT> --connection {connection} --repo '*' --operation model-list --operation model-invoke"
+                    )
+                } else {
+                    format!("grant <GRANT> --connection {connection} --repo <owner/repo>")
+                },
+            ],
             false,
         )
     };
@@ -249,7 +269,7 @@ fn next_from_status(status: Option<&Value>, selected: Option<&str>) -> Result<Va
         "stage":stage,"renew":renew,"steps":steps,"commands":commands,"actions":actions,
         "selected_grant":chosen.map(|g| &g["name"]),
         "available_grants":grants.iter().map(|g| &g["name"]).collect::<Vec<_>>(),
-        "client_integration":"unverified",
+        "client_integration":"unverified", "model_proxy":model_proxy,
         "broker_running":running,
     }))
 }
@@ -286,10 +306,11 @@ pub(super) fn render_next(data: &Value, language: Language) -> String {
         ("grant", true) => Message::NextWhyRenew,
         ("grant", false) => Message::NextWhyGrant,
         ("broker", _) => Message::NextWhyBroker,
+        _ if data["model_proxy"] == true => Message::NextWhyModelClient,
         _ => Message::NextWhyClient,
     };
     out.push_str(&language.format(why, &[("bin", &bin)]));
-    if stage == "client" {
+    if stage == "client" && data["model_proxy"] != true {
         out.push('\n');
         out.push_str(language.text(Message::NextTerminalOrder));
     }

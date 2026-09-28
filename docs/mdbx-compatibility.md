@@ -1,5 +1,7 @@
 # MDBX 跨端兼容
 
+新增的 [Android API Key 绑定](model-proxy.md) 只读取受支持的原生 v1 对象并保存本机引用，不扩展其编辑 Adapter，不改写原 payload 或标签。来源 head 变化会使旧授权失效。
+
 CLI 以 [Monica 跨端存储契约](https://github.com/Monica-Pass/Monica/blob/main/docs/storage/MDBX-CROSS-CLIENT-CONTRACT.zh-CN.md) 为接入要求。MDBX3 是运行时名称，当前可写文件格式为 MDBX-2；对象的 `payload_schema_version` 独立于文件版本。文件打开、加密、提交、删除和同步均使用 MDBX 引擎。
 
 ## 对象与编辑

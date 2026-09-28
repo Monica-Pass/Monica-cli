@@ -216,6 +216,9 @@ pub(super) fn localize(mut command: Command, language: Language) -> Command {
         "check" => Some(CliCheckHelp),
         "init" => Some(CliInitHelp),
         "connect" => Some(CliConnectHelp),
+        "bind" => Some(CliBindHelp),
+        "unbind" => Some(CliUnbindHelp),
+        "proxy-config" => Some(CliProxyConfigHelp),
         "grant" => Some(CliGrantHelp),
         "renew" => Some(CliRefreshHelp),
         "call" => Some(CliCallHelp),
@@ -255,6 +258,7 @@ pub(super) fn localize(mut command: Command, language: Language) -> Command {
     let tiga = command.get_name() == "tiga";
     let init = command.get_name() == "init";
     let mdbx = command.get_name() == "mdbx";
+    let bind = command.get_name() == "bind";
     if let Some(about) = about {
         command = command.about(language.text(about));
     }
@@ -274,7 +278,13 @@ pub(super) fn localize(mut command: Command, language: Language) -> Command {
             .get_value_names()
             .and_then(|names| names.first())
             .map(|s| s.as_str());
-        let message = if init && arg.get_id() == "name" {
+        let message = if bind && arg.get_id() == "entry" {
+            Some(CliBindEntryHelp)
+        } else if bind && arg.get_id() == "api_base" {
+            Some(CliBindBaseHelp)
+        } else if bind && arg.get_id() == "note" {
+            Some(CliBindNoteHelp)
+        } else if init && arg.get_id() == "name" {
             Some(CliInitNameHelp)
         } else if arg.get_id() == "name" && role == Some("GRANT") {
             Some(CliGrantNameHelp)
@@ -378,6 +388,10 @@ fn argument_message(id: &str) -> Option<Message> {
         "force" => CliForceHelp,
         "note" => CliNoteValueHelp,
         "serve" => CliServeAfterHelp,
+        "session_minutes" => CliSessionMinutesHelp,
+        "protocol" => CliProtocolHelp,
+        "auth" => CliAuthenticationHelp,
+        "replace" => CliRebindHelp,
         "vault" => CliVaultHelp,
         "client" => CliClientHelp,
         "port" => CliPortHelp,

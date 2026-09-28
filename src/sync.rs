@@ -462,13 +462,28 @@ fn apply_remote_vault(
             current.vault = vault;
         }
         current.collection_id = inventory.collection_id;
+        let local_api_keys: Vec<_> = current
+            .connections
+            .iter()
+            .filter(|(_, c)| c.api_key.is_some())
+            .map(|(name, c)| (name.clone(), c.clone()))
+            .collect();
         current.connections = inventory.connections;
+        // Local choices never arrive from another client's payload. Keep the
+        // binding visible for rebind/unbind; retain grants only for the exact head.
+        current.connections.extend(local_api_keys);
         current.grants.retain(|grant| {
             current
                 .connections
                 .get(&grant.connection)
                 .is_some_and(|connection| {
                     connection_fingerprint(connection) == grant.connection_fingerprint
+                        && connection.api_key.as_ref().is_none_or(|source| {
+                            inventory
+                                .api_key_heads
+                                .get(&connection.credential_id)
+                                .is_some_and(|head| source.matches(head))
+                        })
                 })
         });
         current.webdav = Some(binding);
@@ -610,6 +625,72 @@ pub async fn synchronize_with_progress(
 mod tests {
     use super::*;
     use crate::test_support::PASSWORD;
+
+    #[tokio::test]
+    async fn api_key_sync_preserves_local_choices_but_never_restores_stale_grants() {
+        use crate::api_keys::{ApiProtocol, SourceFormat};
+        let (fixture, options, _) = crate::api_keys_tests::bound_fixture(
+            ApiProtocol::Anthropic,
+            SourceFormat::AndroidApiKey,
+            vec![],
+        )
+        .await;
+        let config = fixture.store.load().unwrap();
+        let inventory = fixture.vault.gateway_inventory().unwrap();
+        let remote = RemoteBinding {
+            profile: WebDavProfile::new("https://sync.example.test/dav/", "fixture").unwrap(),
+            path: "vault.mdbx".to_owned(),
+            vault_id: inventory.vault_id.clone(),
+            etag: None,
+            remote_sha256: "a".repeat(64),
+            local_sha256: "b".repeat(64),
+            last_sync: 0,
+        };
+        apply_remote_vault(
+            &fixture.store,
+            &config,
+            config.vault.clone(),
+            remote.clone(),
+            Some(inventory),
+        )
+        .unwrap();
+        let same = fixture.store.load().unwrap();
+        assert!(same.connections["android"] == config.connections["android"]);
+        assert_eq!(same.grants.len(), 1);
+        for missing in [false, true] {
+            let mut changed = fixture.vault.gateway_inventory().unwrap();
+            if missing {
+                changed.api_key_heads.remove(&options.entry);
+            } else {
+                changed
+                    .api_key_heads
+                    .get_mut(&options.entry)
+                    .unwrap()
+                    .head_commit_id = "new-head".to_owned();
+            }
+            apply_remote_vault(
+                &fixture.store,
+                &same,
+                same.vault.clone(),
+                remote.clone(),
+                Some(changed),
+            )
+            .unwrap();
+            let after = fixture.store.load().unwrap();
+            assert!(after.connections["android"] == config.connections["android"]);
+            assert!(after.grants.is_empty());
+        }
+        let original = fixture.vault.gateway_inventory().unwrap();
+        apply_remote_vault(
+            &fixture.store,
+            &same,
+            same.vault.clone(),
+            remote,
+            Some(original),
+        )
+        .unwrap();
+        assert!(fixture.store.load().unwrap().grants.is_empty());
+    }
 
     #[tokio::test]
     async fn incompatible_remote_preserves_both_vaults_and_cleans_download_sidecars() {

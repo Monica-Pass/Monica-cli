@@ -45,33 +45,7 @@ pub(crate) async fn execute(
         Arguments::Api(args) => args.url(&binding.api_base)?,
         _ => request_url(binding, arguments)?,
     };
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        USER_AGENT,
-        HeaderValue::from_static("MonicaPass-CredentialGateway/0.2"),
-    );
-    headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
-    let mut authorization = match binding.provider {
-        Provider::Github => {
-            headers.insert(
-                "x-github-api-version",
-                HeaderValue::from_static("2022-11-28"),
-            );
-            let value = Zeroizing::new(format!("Bearer {}", credential.token.as_str()));
-            HeaderValue::from_str(&value)
-        }
-        Provider::Gitlab => HeaderValue::from_str(&credential.token),
-    }
-    .map_err(|_| GatewayError::CredentialUnavailable)?;
-    authorization.set_sensitive(true);
-    headers.insert(
-        if binding.provider == Provider::Github {
-            AUTHORIZATION
-        } else {
-            reqwest::header::HeaderName::from_static("private-token")
-        },
-        authorization,
-    );
+    let headers = authentication_headers(binding, credential)?;
     if let Arguments::Api(args) = arguments {
         let mut request = client
             .request(
@@ -104,6 +78,7 @@ pub(crate) async fn execute(
             let body = match binding.provider {
                 Provider::Github => json!({"title": args.title, "body": args.body}),
                 Provider::Gitlab => json!({"title": args.title, "description": args.body}),
+                Provider::ApiKey => return Err(GatewayError::PermissionDenied),
             };
             client.post(url).headers(headers).json(&body)
         }
@@ -118,6 +93,62 @@ pub(crate) async fn execute(
     } else {
         result
     }
+}
+
+pub(crate) fn authentication_headers(
+    binding: &Connection,
+    credential: &Credential,
+) -> Result<HeaderMap> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static("MonicaPass-CredentialGateway/0.2"),
+    );
+    headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+    let mut authorization = match binding.provider {
+        Provider::Github => {
+            headers.insert(
+                "x-github-api-version",
+                HeaderValue::from_static("2022-11-28"),
+            );
+            let value = Zeroizing::new(format!("Bearer {}", credential.token.as_str()));
+            HeaderValue::from_str(&value)
+        }
+        Provider::Gitlab => HeaderValue::from_str(&credential.token),
+        Provider::ApiKey => match binding
+            .api_key
+            .as_ref()
+            .ok_or(GatewayError::InvalidConfig)?
+            .auth
+        {
+            crate::api_keys::Authentication::Bearer => {
+                let value = Zeroizing::new(format!("Bearer {}", credential.token.as_str()));
+                HeaderValue::from_str(&value)
+            }
+            crate::api_keys::Authentication::XApiKey => HeaderValue::from_str(&credential.token),
+        },
+    }
+    .map_err(|_| GatewayError::CredentialUnavailable)?;
+    authorization.set_sensitive(true);
+    headers.insert(
+        match binding.provider {
+            Provider::Github => AUTHORIZATION,
+            Provider::Gitlab => reqwest::header::HeaderName::from_static("private-token"),
+            Provider::ApiKey => match binding
+                .api_key
+                .as_ref()
+                .ok_or(GatewayError::InvalidConfig)?
+                .auth
+            {
+                crate::api_keys::Authentication::Bearer => AUTHORIZATION,
+                crate::api_keys::Authentication::XApiKey => {
+                    reqwest::header::HeaderName::from_static("x-api-key")
+                }
+            },
+        },
+        authorization,
+    );
+    Ok(headers)
 }
 
 async fn read_response(
@@ -181,6 +212,7 @@ fn request_url(binding: &Connection, arguments: &Arguments) -> Result<Url> {
             Provider::Gitlab => {
                 segments.push("projects").push(arguments.repository());
             }
+            Provider::ApiKey => return Err(GatewayError::PermissionDenied),
         }
         segments.push("issues");
         if let Arguments::Get(args) = arguments {
@@ -274,6 +306,7 @@ fn project_issue(
     let (number_key, body_key) = match binding.provider {
         Provider::Github => ("number", "body"),
         Provider::Gitlab => ("iid", "description"),
+        Provider::ApiKey => return Err(GatewayError::PermissionDenied),
     };
     let number = raw
         .get(number_key)

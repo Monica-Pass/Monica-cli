@@ -14,6 +14,117 @@ const TOKEN: &str = "synthetic-cli-service-token-42";
 const KEY_MATERIAL: &[&str] = &["PRIVATE KEY", "Proc-Type: 4,ENCRYPTED"];
 
 #[test]
+fn android_key_binding_grant_proxy_config_renewal_and_unbind_work_through_cli() {
+    use mdbx_storage::repo::{
+        CommitContext, OperationCoordinator, ProjectRepo, WriteCommand, WriteOperationRequest,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let dir = directory.path();
+    success(cli(
+        dir,
+        &["init", "--json", "--secrets-stdin"],
+        Some(&password()),
+    ));
+    let store = ConfigStore::new(dir.join("gateway.json"));
+    let config = store.load().unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    {
+        let mut conn = mdbx_storage::connection::VaultConnection::open(&config.vault).unwrap();
+        mdbx_storage::unlock::UnlockService::unlock_with_password(&mut conn, PASSWORD).unwrap();
+        let ctx = CommitContext::new("android-fixture".to_owned());
+        let project = ProjectRepo::create(&conn, &ctx, "Android keys", None, None).unwrap();
+        OperationCoordinator::execute(&conn,&ctx,WriteOperationRequest::new(uuid::Uuid::new_v4().to_string(),"synthetic-key",vec![WriteCommand::CreateEntry {
+            entry_id:id.clone(),project_id:project.project_id,entry_type:"login".to_owned(),title:"Android model".to_owned(),
+            payload_json:json!({"kind":"password","login_type":"API_KEY","password_plain":TOKEN,"custom_fields":[{"title":"monica_api_key_url","value":"https://models.example.test/v1"}]}).to_string(),
+        }])).unwrap();
+    }
+    let bound = success(cli(
+        dir,
+        &[
+            "bind",
+            "work-ai",
+            "--entry",
+            &id,
+            "--protocol",
+            "anthropic",
+            "--json",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    ));
+    assert_eq!(bound["entry_id"], id);
+    let grant = success(cli(
+        dir,
+        &[
+            "grant",
+            "model-client",
+            "--connection",
+            "work-ai",
+            "--repo",
+            "*",
+            "--operation",
+            "model-list",
+            "--operation",
+            "model-invoke",
+            "--json",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    ));
+    assert!(grant.get("mcp").is_none());
+    let next = success(cli(
+        dir,
+        &["next", "--grant", "model-client", "--json"],
+        None,
+    ));
+    assert!(
+        next["commands"][0]
+            .as_str()
+            .unwrap()
+            .contains("proxy-config")
+    );
+    let output = dir.join("model-client.json");
+    let args = [
+        "proxy-config",
+        "model-client",
+        "--output",
+        output.to_str().unwrap(),
+        "--json",
+    ];
+    let saved = success(cli(dir, &args, None));
+    let first: Value = serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
+    assert!(first["api_key"].as_str().unwrap().starts_with("monica-"));
+    assert!(!first.to_string().contains(TOKEN));
+    assert!(
+        !saved
+            .to_string()
+            .contains(first["api_key"].as_str().unwrap())
+    );
+    success(cli(
+        dir,
+        &["renew", "model-client", "--json", "--secrets-stdin"],
+        Some(&password()),
+    ));
+    let mut forced = args.to_vec();
+    forced.push("--force");
+    success(cli(dir, &forced, None));
+    let second: Value = serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
+    assert_ne!(first["api_key"], second["api_key"]);
+    success(cli(
+        dir,
+        &["unbind", "work-ai", "--json", "--secrets-stdin"],
+        Some(&password()),
+    ));
+    assert!(store.load().unwrap().grants.is_empty());
+    let library = success(cli(
+        dir,
+        &["library", "--json", "--secrets-stdin"],
+        Some(&password()),
+    ));
+    assert!(library.to_string().contains(&id));
+}
+
+#[test]
 fn compact_discovery_is_locale_independent_and_cli_errors_offer_safe_recovery() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path();
