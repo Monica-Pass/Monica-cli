@@ -80,12 +80,15 @@ def main():
             shutil.copy2(binary, target)
             target.chmod(0o755)
         (root / 'monica-pass.portable').touch()
-        for name in ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md', 'README.en.md', 'RELEASE-NOTES.md']:
-            shutil.copy2(repo / name, root / name)
+        documents = ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'README.md', 'README.en.md', 'RELEASE-NOTES.md']
+        # Include tracked documentation only, so README links work offline
+        # without pulling local previews, caches or test output into the package.
+        documents.extend(filter(None, command('git', 'ls-files', '-z', '--', 'docs', cwd=repo).split('\0')))
+        for name in documents:
+            destination = root / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(repo / name, destination)
         shutil.copy2(repo / 'docs/release-install.md', root / 'INSTALL.md')
-        (root / 'docs').mkdir()
-        for name in ['direct-config.md', 'model-proxy.md', 'mdbx-compatibility.md', 'token-format.md']:
-            shutil.copy2(repo / 'docs' / name, root / 'docs' / name)
         if windows:
             (root / 'scripts').mkdir()
             shutil.copy2(repo / 'scripts/install.ps1', root / 'scripts/install.ps1')
