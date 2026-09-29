@@ -15,7 +15,7 @@ import zipfile
 
 
 def command(*args, **kwargs):
-    return subprocess.check_output(args, text=True, **kwargs).strip()
+    return subprocess.check_output(args, text=True, encoding='utf-8', **kwargs).strip()
 
 
 def windows_imports(binary):
@@ -107,7 +107,9 @@ def main():
         (root / 'BUILD-INFO.json').write_text(json.dumps(info, indent=2) + '\n')
         archive = args.output / (stem + ('.zip' if windows else '.tar.gz'))
         if windows:
-            with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as output:
+            # Registry archives can preserve 1970 mtimes for license files.
+            # Clamp to ZIP's supported range while retaining their contents.
+            with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=9, strict_timestamps=False) as output:
                 for file in sorted(root.rglob('*')):
                     if file.is_file():
                         output.write(file, file.relative_to(root.parent))
