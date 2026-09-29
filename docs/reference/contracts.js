@@ -2,6 +2,12 @@
 (function (root) {
   'use strict';
   const labels = {
+    secure_token_input: '隐藏提示或可信 stdin 输入原始 Key',
+    explicit_client_file: '显式指定 Codex 或 Claude Code 配置文件',
+    tiga_export_allowed: 'Tiga 同时允许导出和读取凭据',
+    write_direct_client_config: '写入原始 Key 与上游地址；直连不受 Monica 授权期限或撤销限制',
+    backup_client_config: '先保存私有备份，再合并修改客户端配置',
+    changed_existing_file: '已有文件的内容需要改变时',
     existing_api_key_entry: '当前库中受支持的 Android API Key 或原生 API Token',
     bind_existing_api_key: '授权读取指定条目，固定认证方式与来源版本；保留原条目',
     remove_api_key_binding: '解除本地连接绑定，保留 Android 原条目',

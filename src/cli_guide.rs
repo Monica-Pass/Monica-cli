@@ -82,7 +82,7 @@ pub(super) const GROUPS: &[(&str, Message, &[&str])] = &[
     (
         "models",
         Message::HelpGroupModels,
-        &["bind", "proxy-config", "unbind"],
+        &["bind", "proxy-config", "direct-config", "unbind"],
     ),
 ];
 

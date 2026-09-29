@@ -268,6 +268,7 @@ impl Vault {
         expected: Option<&ApiKeyBinding>,
         now: i64,
         lease: Option<(&mdbx_storage::tiga_policy::CredentialUseLease, &str)>,
+        export: bool,
     ) -> Result<Source> {
         let mut conn = self
             .runtime
@@ -300,6 +301,31 @@ impl Vault {
         };
         let limits = ObjectDisclosureLimits::new(MAX_PAYLOAD_BYTES)
             .map_err(|_| GatewayError::StateUnavailable)?;
+        if export {
+            use mdbx_core::tiga::{
+                AuthorizationConstraint, AuthorizationOutcome, TigaOperation, TigaScope,
+            };
+            let decision =
+                mdbx_storage::tiga::TigaService::authorize_operation_with_active_session(
+                    &mut conn,
+                    &TigaScope::Entry {
+                        entry_id: id.to_owned(),
+                    },
+                    TigaOperation::ExportData,
+                    &broker_device(),
+                    now,
+                )
+                .map_err(|_| GatewayError::PermissionDenied)?;
+            if !matches!(
+                decision.outcome,
+                AuthorizationOutcome::Allow | AuthorizationOutcome::AllowWithConstraints
+            ) || decision
+                .constraints
+                .contains(&AuthorizationConstraint::NoPlaintextPersistence)
+            {
+                return Err(GatewayError::PermissionDenied);
+            }
+        }
         let disclosed = if let Some((lease, audience)) = lease {
             if lease.object_id() != id {
                 return Err(GatewayError::PermissionDenied);
@@ -354,11 +380,30 @@ impl Vault {
         now: i64,
         lease: Option<(&mdbx_storage::tiga_policy::CredentialUseLease, &str)>,
     ) -> Result<Credential> {
+        self.bound_api_key_for_use(binding, now, lease, false)
+    }
+
+    pub(crate) fn export_bound_api_key(
+        &self,
+        binding: &Connection,
+        now: i64,
+    ) -> Result<Credential> {
+        self.bound_api_key_for_use(binding, now, None, true)
+    }
+
+    fn bound_api_key_for_use(
+        &self,
+        binding: &Connection,
+        now: i64,
+        lease: Option<(&mdbx_storage::tiga_policy::CredentialUseLease, &str)>,
+        export: bool,
+    ) -> Result<Credential> {
         let expected = binding
             .api_key
             .as_ref()
             .ok_or(GatewayError::InvalidConfig)?;
-        let source = self.api_key_source(&binding.credential_id, Some(expected), now, lease)?;
+        let source =
+            self.api_key_source(&binding.credential_id, Some(expected), now, lease, export)?;
         if !source.endpoint.is_empty() && normalized_base(&source.endpoint)? != binding.api_base {
             return Err(GatewayError::ObjectChanged);
         }
@@ -391,8 +436,13 @@ pub fn bind(
             return Err(GatewayError::NotFound);
         }
         let vault = Vault::open(&config.vault, password)?;
-        let source =
-            vault.api_key_source(&options.entry, None, chrono::Utc::now().timestamp(), None);
+        let source = vault.api_key_source(
+            &options.entry,
+            None,
+            chrono::Utc::now().timestamp(),
+            None,
+            false,
+        );
         vault.lock()?;
         let source = source?;
         let stored_base = (!source.endpoint.is_empty())

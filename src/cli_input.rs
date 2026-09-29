@@ -14,6 +14,8 @@ pub fn required_fields(command: &str) -> &'static [SecretField] {
     use SecretField::*;
     match command {
         "add" | "connect" | "token" => &[Password, Token],
+        "direct-config manual" => &[Token],
+        "direct-config saved" => &[Password],
         "bind" | "unbind" | "init" | "note" | "open" | "grant" | "refresh" | "renew" | "serve"
         | "library" | "category" | "move" | "delete" | "delete-category" | "rename-category"
         | "rename-entry" | "use" | "keys" | "keys ssh" | "keys gpg" | "keys edit"

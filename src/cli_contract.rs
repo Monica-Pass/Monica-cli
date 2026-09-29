@@ -140,6 +140,30 @@ pub fn describe(name: &str) -> Option<Value> {
             &["configured_vault", "existing_grant"],
             &[("always", "write_proxy_client_config")],
         ),
+        "direct-config" => ("subcommand", &[], &[]),
+        "direct-config manual" => (
+            "client_file",
+            &["secure_token_input", "explicit_client_file"],
+            &[
+                ("always", "write_direct_client_config"),
+                ("changed_existing_file", "backup_client_config"),
+            ],
+        ),
+        "direct-config saved" => (
+            "connection",
+            &[
+                "configured_vault",
+                "existing_connection",
+                "secure_password_input",
+                "tiga_export_allowed",
+                "explicit_client_file",
+            ],
+            &[
+                ("always", "lock_broker"),
+                ("always", "write_direct_client_config"),
+                ("changed_existing_file", "backup_client_config"),
+            ],
+        ),
         "unbind" => (
             "connection",
             &[
@@ -478,7 +502,7 @@ pub fn describe(name: &str) -> Option<Value> {
         | "mdbx check" | "mdbx files" | "webdav status" => "public_local_inspection",
         "call" | "check" | "mcp" => "grant_scoped_broker",
         "tui" => "human_terminal",
-        "tiga" | "mdbx" | "webdav" => "command_group",
+        "tiga" | "mdbx" | "webdav" | "direct-config" => "command_group",
         _ => "trusted_local_management",
     };
     let retry = match name {

@@ -226,6 +226,11 @@ pub enum Command {
         #[arg(long)]
         force: bool,
     },
+    /// Write the raw upstream Key into Codex or Claude Code settings, bypassing Monica's proxy.
+    DirectConfig {
+        #[command(subcommand)]
+        command: monica_pass_cli::direct_config::Command,
+    },
     /// Authorize exact repositories and operations. Requires the vault password.
     #[command(visible_alias = "g")]
     Grant(GrantOptions),
@@ -465,6 +470,10 @@ impl Command {
             Self::Bind(_) => "bind",
             Self::Unbind { .. } => "unbind",
             Self::ProxyConfig { .. } => "proxy-config",
+            Self::DirectConfig { command } => match command {
+                monica_pass_cli::direct_config::Command::Manual { .. } => "direct-config manual",
+                monica_pass_cli::direct_config::Command::Saved { .. } => "direct-config saved",
+            },
             Self::Grant(_) => "grant",
             Self::Refresh(_) => "refresh",
             Self::Revoke { .. } => "revoke",

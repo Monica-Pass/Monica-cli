@@ -11,6 +11,7 @@ pub mod config;
 mod contract_tests;
 pub mod credstore;
 pub mod databases;
+pub mod direct_config;
 pub mod error;
 pub mod gateway;
 pub mod i18n;

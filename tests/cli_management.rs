@@ -14,6 +14,49 @@ const TOKEN: &str = "synthetic-cli-service-token-42";
 const KEY_MATERIAL: &[&str] = &["PRIVATE KEY", "Proc-Type: 4,ENCRYPTED"];
 
 #[test]
+fn direct_manual_uses_only_secret_stdin_and_needs_no_vault() {
+    let directory = tempfile::tempdir().unwrap();
+    let dir = directory.path();
+    let path = dir.join("config.toml");
+    let args = [
+        "direct-config",
+        "manual",
+        "--client",
+        "codex",
+        "--api-base",
+        "https://models.example.test",
+        "--model",
+        "test-model",
+        "--output",
+        path.to_str().unwrap(),
+        "--json",
+        "--secrets-stdin",
+    ];
+    let result = success(cli(
+        dir,
+        &args,
+        Some(json!({"token":TOKEN}).to_string().as_bytes()),
+    ));
+    assert_eq!(result["mode"], "direct");
+    assert!(std::fs::read_to_string(&path).unwrap().contains(TOKEN));
+    assert!(!dir.join("gateway.json").exists());
+    let before = std::fs::read(&path).unwrap();
+    let rejected = cli(
+        dir,
+        &args,
+        Some(
+            json!({"token":TOKEN,"password":PASSWORD})
+                .to_string()
+                .as_bytes(),
+        ),
+    );
+    assert!(!rejected.status.success());
+    assert!(!String::from_utf8_lossy(&rejected.stdout).contains(TOKEN));
+    assert!(!String::from_utf8_lossy(&rejected.stderr).contains(PASSWORD));
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+#[test]
 fn android_key_binding_grant_proxy_config_renewal_and_unbind_work_through_cli() {
     use mdbx_storage::repo::{
         CommitContext, OperationCoordinator, ProjectRepo, WriteCommand, WriteOperationRequest,
@@ -53,6 +96,27 @@ fn android_key_binding_grant_proxy_config_renewal_and_unbind_work_through_cli() 
         Some(&password()),
     ));
     assert_eq!(bound["entry_id"], id);
+    let direct_file = dir.join("settings.json");
+    let direct = success(cli(
+        dir,
+        &[
+            "direct-config",
+            "saved",
+            "work-ai",
+            "--client",
+            "claude",
+            "--model",
+            "test-model",
+            "--output",
+            direct_file.to_str().unwrap(),
+            "--json",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    ));
+    assert_eq!(direct["contains_upstream_key"], true);
+    let direct: Value = serde_json::from_slice(&std::fs::read(direct_file).unwrap()).unwrap();
+    assert_eq!(direct["env"]["ANTHROPIC_API_KEY"], TOKEN);
     let grant = success(cli(
         dir,
         &[

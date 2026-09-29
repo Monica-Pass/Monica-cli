@@ -1585,6 +1585,48 @@
           "reason": "此处使用说明性名称与 UUID；功能由临时 MDBX 和模拟上游回归覆盖，未为这条展示命令采集输出。"
         }
       ]
+    },
+    "direct-config": {
+      "group": "models",
+      "summaryZh": "选择手动输入或已保存的 Key，生成客户端直连配置。",
+      "whenToUse": "选择手动输入或已保存的 Key，生成客户端直连配置。",
+      "examples": [
+        {
+          "cmd": "monica direct-config",
+          "note": "需选择 manual 或 saved 子命令；直连文件包含原始 Key，不受 Monica 代理授权限制。",
+          "teachesError": true,
+          "tested": false,
+          "reason": "示例使用说明性连接名和模型名；自动测试使用临时保险库和合成凭据。"
+        }
+      ]
+    },
+    "direct-config manual": {
+      "group": "models",
+      "summaryZh": "手动输入原始 Key 和 HTTPS 地址，不需要保险库。",
+      "whenToUse": "手动输入原始 Key 和 HTTPS 地址，不需要保险库。",
+      "examples": [
+        {
+          "cmd": "monica direct-config manual --client codex --api-base https://models.example.test --model YOUR_MODEL --output ./codex-direct/config.toml",
+          "note": "Key 通过隐藏提示或可信 stdin 的 token 字段注入，不能写在参数中。",
+          "secrets": "{\"token\":\"<原始 Key>\"}",
+          "tested": false,
+          "reason": "示例使用说明性连接名和模型名；自动测试使用临时保险库和合成凭据。"
+        }
+      ]
+    },
+    "direct-config saved": {
+      "group": "models",
+      "summaryZh": "验证主密码和 Tiga 导出权限后使用已绑定的 API Key。",
+      "whenToUse": "验证主密码和 Tiga 导出权限后使用已绑定的 API Key。",
+      "examples": [
+        {
+          "cmd": "monica direct-config saved work-ai --client claude --model YOUR_MODEL --output ./claude-direct/settings.json",
+          "note": "连接须绑定为 anthropic；stdin 只需要 password。原条目保持不变，配置包含真实 Key。",
+          "secrets": "{\"password\":\"<主密码>\"}",
+          "tested": false,
+          "reason": "示例使用说明性连接名和模型名；自动测试使用临时保险库和合成凭据。"
+        }
+      ]
     }
   },
   "drills": [

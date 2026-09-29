@@ -450,6 +450,34 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             let data = monica_pass_cli::ai_proxy::write_client_config(&store, &name, &path, force)?;
             output.result("proxy-config", data, None)?;
         }
+        Command::DirectConfig { command } => {
+            use monica_pass_cli::direct_config::{self, Command as Direct};
+            let (action, data) = match command {
+                Direct::Manual {
+                    options,
+                    api_base,
+                    auth,
+                } => {
+                    if direct_config::same_file(&absolute(&options.output)?, &store.path) {
+                        return Err(GatewayError::InvalidRequest);
+                    }
+                    let token = input.take(SecretField::Token, tr!(lang, PromptToken))?;
+                    (
+                        "direct-config manual",
+                        direct_config::manual(&options, &api_base, auth, &token)?,
+                    )
+                }
+                Direct::Saved { name, options } => {
+                    let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+                    admin::lock_broker(&store).await?;
+                    (
+                        "direct-config saved",
+                        direct_config::saved(&store, &name, &options, &password)?,
+                    )
+                }
+            };
+            output.result(action, data, None)?;
+        }
         Command::Unbind { name } => {
             let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;

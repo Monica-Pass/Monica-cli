@@ -6,7 +6,7 @@ window.MONICA_TEACH = {
   "version": "monica 0.5.0",
   "grammarVersion": 1,
   "generatedFrom": "monica commands --json",
-  "commandCount": 54,
+  "commandCount": 57,
   "groups": [
    {
     "id": "start",
@@ -7123,6 +7123,442 @@ window.MONICA_TEACH = {
      "reason": "此处使用说明性名称与 UUID；功能由临时 MDBX 和模拟上游回归覆盖，未为这条展示命令采集输出。"
     }
    ]
+  },
+  {
+   "key": "direct-config",
+   "path": [
+    "direct-config"
+   ],
+   "name": "direct-config",
+   "parent": "",
+   "summary": "Write the raw upstream Key to client settings; Monica proxy limits do not apply",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [],
+    "mcp_tool": false,
+    "prerequisites": [],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "subcommand",
+    "trust_boundary": "command_group"
+   },
+   "executionCommand": "direct-config",
+   "aliases": [],
+   "args": [
+    {
+     "id": "help",
+     "role": null,
+     "long": "help",
+     "short": "h",
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Print help"
+    }
+   ],
+   "jsonSupported": true,
+   "longRunning": false,
+   "subcommandRequired": true,
+   "argGroups": [],
+   "secretRequired": [],
+   "group": "models",
+   "summaryZh": "选择手动输入或已保存的 Key，生成客户端直连配置。",
+   "whenToUse": "选择手动输入或已保存的 Key，生成客户端直连配置。",
+   "handAuthored": false,
+   "pitfalls": [],
+   "examples": [
+    {
+     "cmd": "monica direct-config",
+     "note": "需选择 manual 或 saved 子命令；直连文件包含原始 Key，不受 Monica 代理授权限制。",
+     "teachesError": true,
+     "tested": false,
+     "reason": "示例使用说明性连接名和模型名；自动测试使用临时保险库和合成凭据。"
+    }
+   ]
+  },
+  {
+   "key": "direct-config manual",
+   "path": [
+    "direct-config",
+    "manual"
+   ],
+   "name": "manual",
+   "parent": "direct-config",
+   "summary": "Configure a client with a manually supplied Key and HTTPS base",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "write_direct_client_config",
+      "when": "always"
+     },
+     {
+      "effect": "backup_client_config",
+      "when": "changed_existing_file"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "secure_token_input",
+     "explicit_client_file"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "client_file",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "direct-config manual",
+   "aliases": [],
+   "args": [
+    {
+     "id": "client",
+     "role": "client",
+     "long": "client",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "CLIENT"
+     ],
+     "choices": [
+      "codex",
+      "claude"
+     ],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Generated client capability file"
+    },
+    {
+     "id": "model",
+     "role": "model",
+     "long": "model",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "MODEL"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Exact upstream model ID. Monica does not infer or translate model names"
+    },
+    {
+     "id": "output",
+     "role": "file",
+     "long": "output",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "FILE"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "File to write; an existing file needs --force"
+    },
+    {
+     "id": "force",
+     "role": null,
+     "long": "force",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [
+      "FORCE"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [
+      "false"
+     ],
+     "help": "Replace an existing output file"
+    },
+    {
+     "id": "api_base",
+     "role": "api_base",
+     "long": "api-base",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "API_BASE"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "HTTPS API root; omit for the hosted service"
+    },
+    {
+     "id": "auth",
+     "role": "auth",
+     "long": "auth",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "AUTH"
+     ],
+     "choices": [
+      "bearer",
+      "x-api-key"
+     ],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Upstream auth: bearer for OpenAI, x-api-key for Anthropic by default"
+    },
+    {
+     "id": "help",
+     "role": null,
+     "long": "help",
+     "short": "h",
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Print help"
+    }
+   ],
+   "jsonSupported": true,
+   "longRunning": false,
+   "subcommandRequired": false,
+   "argGroups": [],
+   "secretRequired": [
+    "token"
+   ],
+   "group": "models",
+   "summaryZh": "手动输入原始 Key 和 HTTPS 地址，不需要保险库。",
+   "whenToUse": "手动输入原始 Key 和 HTTPS 地址，不需要保险库。",
+   "handAuthored": false,
+   "pitfalls": [],
+   "examples": [
+    {
+     "cmd": "monica direct-config manual --client codex --api-base https://models.example.test --model YOUR_MODEL --output ./codex-direct/config.toml",
+     "note": "Key 通过隐藏提示或可信 stdin 的 token 字段注入，不能写在参数中。",
+     "secrets": "{\"token\":\"<原始 Key>\"}",
+     "tested": false,
+     "reason": "示例使用说明性连接名和模型名；自动测试使用临时保险库和合成凭据。"
+    }
+   ]
+  },
+  {
+   "key": "direct-config saved",
+   "path": [
+    "direct-config",
+    "saved"
+   ],
+   "name": "saved",
+   "parent": "direct-config",
+   "summary": "Configure a client from a bound API Key after password and Tiga export authorization",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "write_direct_client_config",
+      "when": "always"
+     },
+     {
+      "effect": "backup_client_config",
+      "when": "changed_existing_file"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "existing_connection",
+     "secure_password_input",
+     "tiga_export_allowed",
+     "explicit_client_file"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "connection",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "direct-config saved",
+   "aliases": [],
+   "args": [
+    {
+     "id": "name",
+     "role": "connection",
+     "long": null,
+     "short": null,
+     "aliases": [],
+     "positional": true,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "CONNECTION"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Connection handle (CONNECTION); add also creates a grant with this name"
+    },
+    {
+     "id": "client",
+     "role": "client",
+     "long": "client",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "CLIENT"
+     ],
+     "choices": [
+      "codex",
+      "claude"
+     ],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Generated client capability file"
+    },
+    {
+     "id": "model",
+     "role": "model",
+     "long": "model",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "MODEL"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Exact upstream model ID. Monica does not infer or translate model names"
+    },
+    {
+     "id": "output",
+     "role": "file",
+     "long": "output",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "FILE"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "File to write; an existing file needs --force"
+    },
+    {
+     "id": "force",
+     "role": null,
+     "long": "force",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [
+      "FORCE"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [
+      "false"
+     ],
+     "help": "Replace an existing output file"
+    },
+    {
+     "id": "help",
+     "role": null,
+     "long": "help",
+     "short": "h",
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Print help"
+    }
+   ],
+   "jsonSupported": true,
+   "longRunning": false,
+   "subcommandRequired": false,
+   "argGroups": [],
+   "secretRequired": [
+    "password"
+   ],
+   "group": "models",
+   "summaryZh": "验证主密码和 Tiga 导出权限后使用已绑定的 API Key。",
+   "whenToUse": "验证主密码和 Tiga 导出权限后使用已绑定的 API Key。",
+   "handAuthored": false,
+   "pitfalls": [],
+   "examples": [
+    {
+     "cmd": "monica direct-config saved work-ai --client claude --model YOUR_MODEL --output ./claude-direct/settings.json",
+     "note": "连接须绑定为 anthropic；stdin 只需要 password。原条目保持不变，配置包含真实 Key。",
+     "secrets": "{\"password\":\"<主密码>\"}",
+     "tested": false,
+     "reason": "示例使用说明性连接名和模型名；自动测试使用临时保险库和合成凭据。"
+    }
+   ]
   }
  ],
  "drills": [
@@ -7476,5 +7912,5 @@ window.MONICA_TEACH = {
   "normalised": "示例中的临时目录已替换为 %TEMP%/MonicaGuide 或 %LOCALAPPDATA%\\MonicaPass，可执行文件替换为 <monica-pass>；其余输出保留采集时的内容。",
   "secretInput": "需要密码或 Token 的命令，在真实终端里会隐式提示输入；示例里的「stdin 载荷」是给自动化（--secrets-stdin）看的字段形状，值都是假的。"
  },
- "generatedAt": "2026-09-28"
+ "generatedAt": "2026-09-29"
 };

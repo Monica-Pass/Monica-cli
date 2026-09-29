@@ -1,5 +1,7 @@
 # Android API Key 与本地模型中转
 
+需要客户端直接使用原始 Key 时，另见[直连配置](direct-config.md)：支持手动输入和读取已绑定的 Key，可生成 Codex / Claude Code 原生配置；直连不受 Monica 代理授权期限、撤销或次数限制。
+
 Monica CLI 可以为 Android 已保存的 API Key 生成本地地址和本地 Key。模型客户端向本机 Monica 发请求；Monica 校验授权，再从 MDBX 读取真实 Key，注入认证头并访问已绑定的上游。客户端只需要本地 Key。
 
 ```text
