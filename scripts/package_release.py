@@ -25,6 +25,7 @@ def windows_imports(binary):
     sections, opt_size = struct.unpack_from('<H', data, pe + 6)[0], struct.unpack_from('<H', data, pe + 20)[0]
     opt = pe + 24
     assert struct.unpack_from('<H', data, opt)[0] == 0x20B
+    assert struct.unpack_from('<Q', data, opt + 72)[0] >= 8 * 1024 * 1024, 'CLI stack reserve is too small'
     table = opt + opt_size
 
     def offset(rva):

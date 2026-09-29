@@ -44,7 +44,7 @@ function findBinary() {
         join(REPO, 'target', 'debug', 'monica-pass'),
       ];
   for (const name of names) {
-    if (existsSync(name)) return name;
+    if (existsSync(name)) return resolve(name);
   }
   throw new Error('no monica-pass binary found; build it first or pass --bin <path>');
 }
