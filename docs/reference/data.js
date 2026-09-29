@@ -3,7 +3,7 @@
 window.MONICA_TEACH = {
  "meta": {
   "cli": "monica",
-  "version": "monica 0.5.0",
+  "version": "monica 1.0.101",
   "grammarVersion": 1,
   "generatedFrom": "monica commands --json",
   "commandCount": 57,

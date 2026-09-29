@@ -1,5 +1,9 @@
 <h1 align="center">Monica CLI</h1>
 
+**1.0.101: [Download Linux / Windows x86_64 packages](https://github.com/Monica-Pass/Monica-cli/releases/tag/v1.0.101)** · [Installation](docs/release-install.md) · [Release notes](RELEASE-NOTES.md). No Rust installation is required for binary packages. Portable data stays in the adjacent `data/` directory.
+
+[Direct mode](docs/direct-config.md) can also write a manually supplied or vault-bound upstream Key into Codex / Claude Code settings. Direct requests are outside Monica grant expiry, revocation and call limits.
+
 Android API Keys stored in MDBX can now be bound to a local OpenAI / Anthropic proxy. Each scoped local key selects one upstream; JSON and SSE are supported. See the [model proxy guide](docs/model-proxy.md) for setup, Tiga reauthentication limits and supported endpoints.
 
 <div align="center">
@@ -21,7 +25,7 @@ Part of the <a href="https://github.com/Monica-Pass/Monica"><strong>Monica local
 
 [![Monica main repository](https://img.shields.io/badge/Monica-main%20repository-2f6feb?style=flat-square&logo=github&logoColor=white)](https://github.com/Monica-Pass/Monica)
 [![Android](https://img.shields.io/badge/Android-APK%20downloads-3DDC84?style=flat-square&logo=android&logoColor=white)](https://github.com/Monica-Pass/Monica/releases)
-[![Version](https://img.shields.io/badge/version-0.5.0-8a2be2?style=flat-square)](docs/redesign-progress.md)
+[![Version](https://img.shields.io/badge/version-1.0.101-8a2be2?style=flat-square)](https://github.com/Monica-Pass/Monica-cli/releases/tag/v1.0.101)
 [![Rust](https://img.shields.io/badge/rust-1.97-000000?style=flat-square&logo=rust&logoColor=white)](#build-from-source)
 [![Platform](https://img.shields.io/badge/platform-Windows%20verified-0078d4?style=flat-square&logo=windows&logoColor=white)](#build-from-source)
 <br>

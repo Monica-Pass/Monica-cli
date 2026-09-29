@@ -1,0 +1,82 @@
+name: Build and verify release packages
+
+on:
+  push:
+    branches: [main, codex/cli-android-api-keys]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            rustflags: ''
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            rustflags: '-C target-feature=+crt-static'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      MDBX_REVISION: f81d3f1f08589670e534473ab8e0030b796dfdf4
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    defaults:
+      run:
+        working-directory: monica-pass-cli
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: monica-pass-cli
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: Monica-Pass/Mdbx
+          ref: ${{ env.MDBX_REVISION }}
+          path: mdbx
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.97.0
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check format and tests
+        run: |
+          cargo fmt --check
+          cargo test --locked --all-targets --target ${{ matrix.target }}
+          cargo clippy --locked --all-targets --target ${{ matrix.target }} -- -D warnings
+      - name: Build release
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package and verify extracted binaries
+        run: python scripts/package_release.py --target ${{ matrix.target }} --engine-revision "$MDBX_REVISION" --output ../dist
+      - name: Verify command documentation
+        run: |
+          if [[ "${{ runner.os }}" == Windows ]]; then suffix=.exe; else suffix=; fi
+          node docs/reference/build.mjs --check --bin "target/${{ matrix.target }}/release/monica-pass$suffix"
+      - name: Bundle corresponding source and locked dependencies
+        if: runner.os == 'Linux'
+        run: python scripts/package_source.py --engine-revision "$MDBX_REVISION" --output ../dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
