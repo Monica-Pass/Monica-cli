@@ -6,7 +6,7 @@ CLI 以 [Monica 跨端存储契约](https://github.com/Monica-Pass/Monica/blob/m
 
 库列表保留所有原生类型、UUID 和 Collection 层级；未知对象不转换为 `login`，不进入 Gateway 或自动填充。通用详情显示原始类型、版本和所属 Collection。
 
-CLI 可编辑的 Adapter 是原生 v1 `api-token` + `monica.gateway.credential.v1`，以及原生 v1 `login` 中受支持的 SSH/GPG 子类型。SSH 内部未来 schema 同样只读。普通移动、删除入口在写入层重新验证 Adapter；未知类型、更高版本及不理解的关键字段都会拒绝。
+CLI 可编辑的 Adapter 是原生 v1 `api-token` + `monica.gateway.credential.v1`，以及原生 v1 `login` 中受支持的 SSH/GPG 子类型和符合 Android 身份约定的 `kind=password`（PASSWORD/WIFI/SSO）。普通密码的本地创建、字段编辑、目录一致性及附件移动限制见 [Android 密码互通](android-passwords.md)。SSH 内部未来 schema 同样只读。普通移动、删除入口在写入层重新验证 Adapter；未知类型、更高版本及不理解的关键字段都会拒绝。
 
 编辑从授权读取的原始 payload 修改指定字段。重命名不重建 payload；SSH 注释保留 `ssh_key_data` / `sshKeyData` 的选择及字符串/对象形状。未知嵌套字段、数组元数据、空字符串、`null`、布尔值和大整数保留。提交事务内核对对象的 head commit、类型、版本与 Collection，过时修改返回 `object_changed`，不会覆盖其他端刚写入的数据。
 

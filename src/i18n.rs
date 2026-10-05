@@ -210,6 +210,7 @@ impl Language {
             GatewayError::ProtectedCollection => Message::ErrorProtectedCollection,
             GatewayError::ObjectReadOnly => Message::ErrorObjectReadOnly,
             GatewayError::ObjectChanged => Message::ErrorObjectChanged,
+            GatewayError::AttachmentMoveUnsupported => Message::ErrorAttachmentMoveUnsupported,
             GatewayError::ObjectPayloadTooLarge => Message::ErrorObjectPayloadTooLarge,
             GatewayError::PasswordRequirements => Message::ErrorPasswordRequirements,
             GatewayError::ListenUnavailable => Message::ErrorListenUnavailable,

@@ -58,6 +58,48 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
     let path = cli.config.map(Ok).unwrap_or_else(default_config)?;
     let store = ConfigStore::new(absolute(&path)?);
     match command {
+        Command::Passwords { command } => {
+            use crate::cli::PasswordCommand;
+            use monica_pass_cli::passwords::with_vault;
+            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            let fields = if matches!(command, PasswordCommand::Info { .. }) {
+                None
+            } else {
+                Some(input.take(
+                    SecretField::PasswordFields,
+                    if lang == Language::En {
+                        "Password fields as JSON (hidden): "
+                    } else {
+                        "密码字段 JSON（隐藏输入）："
+                    },
+                )?)
+            };
+            admin::lock_broker(&store).await?;
+            let summary = with_vault(&store, &password, |vault| match &command {
+                PasswordCommand::Create {
+                    id,
+                    title,
+                    category,
+                } => vault.create_password(
+                    *id,
+                    category.as_deref(),
+                    title,
+                    fields.as_deref().unwrap(),
+                ),
+                PasswordCommand::Info { id } => vault.password_summary(id),
+                PasswordCommand::Edit {
+                    id,
+                    expected_head,
+                    title,
+                } => vault.edit_password(
+                    id,
+                    expected_head,
+                    title.as_deref(),
+                    fields.as_deref().unwrap(),
+                ),
+            })?;
+            output.result("passwords", json!(summary), None)?;
+        }
         Command::Call { name, request } => {
             let client = admin::grant_client(&store, &name)?;
             let call = read_json(

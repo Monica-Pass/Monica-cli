@@ -93,12 +93,13 @@ pub(crate) struct GatewayInventory {
 pub(crate) enum RevealPurpose {
     GatewayToken,
     KeyAdmin,
+    PasswordAdmin,
 }
 
-struct Disclosed {
-    payload: Zeroizing<Vec<u8>>,
-    project_id: String,
-    snapshot: ObjectSummary,
+pub(crate) struct Disclosed {
+    pub(crate) payload: Zeroizing<Vec<u8>>,
+    pub(crate) project_id: String,
+    pub(crate) snapshot: ObjectSummary,
 }
 
 /// What a person may see about one key entry. Carries public metadata only, never key text.
@@ -427,7 +428,12 @@ impl Vault {
     /// The only path that turns stored ciphertext into plaintext. Every caller must state which
     /// kind of record it expects, and a record of another kind is refused before any bytes of it
     /// leave this function.
-    fn reveal(&self, entry_id: &str, purpose: RevealPurpose, now: i64) -> Result<Disclosed> {
+    pub(crate) fn reveal(
+        &self,
+        entry_id: &str,
+        purpose: RevealPurpose,
+        now: i64,
+    ) -> Result<Disclosed> {
         let (device_id, limit, expected_type) = match purpose {
             RevealPurpose::GatewayToken => (
                 "monica-pass-gateway",
@@ -437,6 +443,11 @@ impl Vault {
             RevealPurpose::KeyAdmin => (
                 "monica-pass-admin",
                 KEY_DISCLOSURE_LIMIT_BYTES as u64,
+                ObjectTypeId::Login,
+            ),
+            RevealPurpose::PasswordAdmin => (
+                "monica-pass-admin",
+                crate::passwords::MAX_PAYLOAD_BYTES as u64,
                 ObjectTypeId::Login,
             ),
         };
@@ -475,12 +486,16 @@ impl Vault {
             (StorageError::ResourceLimit { .. }, RevealPurpose::GatewayToken) => {
                 GatewayError::CredentialUnavailable
             }
+            (StorageError::ResourceLimit { .. }, RevealPurpose::PasswordAdmin) => {
+                GatewayError::ObjectPayloadTooLarge
+            }
             _ => GatewayError::UnlockRequired,
         })?;
         if disclosed.object.entry_type != expected_type {
             return Err(match purpose {
                 RevealPurpose::GatewayToken => GatewayError::CredentialUnavailable,
                 RevealPurpose::KeyAdmin => GatewayError::KeyEntryTypeMismatch,
+                RevealPurpose::PasswordAdmin => GatewayError::ObjectReadOnly,
             });
         }
         if disclosed.object.payload_schema_version != 1
@@ -574,7 +589,7 @@ impl Vault {
 
     /// Local management of SSH and GPG entries. Nothing here is reachable from the broker: the
     /// gateway inventory only ever discloses API tokens.
-    fn vault_id(&self) -> Result<String> {
+    pub(crate) fn vault_id(&self) -> Result<String> {
         let connection = self
             .runtime
             .read()
@@ -681,19 +696,24 @@ impl Vault {
                 }
                 Ok(disclosed.snapshot)
             }
-            ObjectTypeId::Login => self
-                .key_document(entry_id, None)
-                .map(|(_, document)| document.snapshot)
-                .map_err(|error| {
-                    if matches!(
-                        error,
-                        GatewayError::KeyEntryTypeMismatch | GatewayError::InvalidKeyMaterial
-                    ) {
-                        GatewayError::ObjectReadOnly
-                    } else {
-                        error
-                    }
-                }),
+            ObjectTypeId::Login => match self.password_document(entry_id) {
+                Ok(document) if document.android_identity => Ok(document.summary.clone()),
+                Ok(_) => Err(GatewayError::ObjectReadOnly),
+                Err(GatewayError::ObjectReadOnly) => self
+                    .key_document(entry_id, None)
+                    .map(|(_, document)| document.snapshot)
+                    .map_err(|error| {
+                        if matches!(
+                            error,
+                            GatewayError::KeyEntryTypeMismatch | GatewayError::InvalidKeyMaterial
+                        ) {
+                            GatewayError::ObjectReadOnly
+                        } else {
+                            error
+                        }
+                    }),
+                Err(error) => Err(error),
+            },
             _ => Err(GatewayError::ObjectReadOnly),
         }
     }

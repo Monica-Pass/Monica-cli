@@ -66,6 +66,12 @@ pub enum Command {
         #[command(subcommand)]
         command: Option<KeysCommand>,
     },
+    /// Manage Android-compatible passwords locally. Values use secret stdin; viewing stays in the TUI.
+    #[command(hide = true)]
+    Passwords {
+        #[command(subcommand)]
+        command: PasswordCommand,
+    },
     /// Browse database categories and entry summaries after unlocking.
     #[command(visible_alias = "tree")]
     Library,
@@ -395,10 +401,38 @@ pub enum WebDavCommand {
     Sync,
 }
 
+#[derive(Subcommand)]
+pub enum PasswordCommand {
+    /// Create a password. Reuse the same --id UUID on retries; fields arrive through secret stdin.
+    Create {
+        #[arg(long, value_name = "UUID")]
+        id: uuid::Uuid,
+        #[arg(long)]
+        title: String,
+        #[arg(long, value_name = "CATEGORY_ID")]
+        category: Option<String>,
+    },
+    /// Show native identity, version and Android roundtrip status, without password fields.
+    Info { id: String },
+    /// Merge supplied fields into a password at the expected native head; preserve all other fields.
+    Edit {
+        id: String,
+        #[arg(long, value_name = "COMMIT_ID")]
+        expected_head: String,
+        #[arg(long)]
+        title: Option<String>,
+    },
+}
+
 impl Command {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Call { .. } => "call",
+            Self::Passwords { command } => match command {
+                PasswordCommand::Create { .. } => "passwords create",
+                PasswordCommand::Info { .. } => "passwords info",
+                PasswordCommand::Edit { .. } => "passwords edit",
+            },
             Self::Databases => "databases",
             Self::Use { .. } => "use",
             Self::Token { .. } => "token",

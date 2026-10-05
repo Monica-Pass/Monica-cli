@@ -2,8 +2,8 @@
 use mdbx_core::model::ObjectSummary;
 use mdbx_storage::error::StorageError;
 use mdbx_storage::repo::{
-    CommitContext, CommitOperation, ObjectSummaryRepo, OperationCoordinator, WriteCommand,
-    WriteOperationRequest,
+    AttachmentSummaryRepo, CommitContext, CommitOperation, ObjectSummaryRepo, OperationCoordinator,
+    WriteCommand, WriteOperationRequest,
 };
 use sha2::{Digest, Sha256};
 
@@ -108,17 +108,32 @@ impl Vault {
         intent: &str,
         command: WriteCommand,
     ) -> Result<()> {
+        self.write_objects(original, intent, vec![command])
+    }
+
+    pub(crate) fn write_objects(
+        &self,
+        original: &ObjectSummary,
+        intent: &str,
+        commands: Vec<WriteCommand>,
+    ) -> Result<()> {
         if original.payload_schema_version != 1 {
             return Err(GatewayError::ObjectReadOnly);
         }
-        let commit_kind = match &command {
-            WriteCommand::MoveEntry { .. } => "move",
-            WriteCommand::UpdateEntry { .. } | WriteCommand::DeleteEntry { .. } => "change",
+        let commit_kind = match commands.as_slice() {
+            [WriteCommand::MoveEntry { .. }] => "move",
+            [WriteCommand::UpdateEntry { .. }] | [WriteCommand::DeleteEntry { .. }] => "change",
+            [
+                WriteCommand::UpdateEntry { .. },
+                WriteCommand::MoveEntry { .. },
+            ] => "multi",
             _ => return Err(GatewayError::InvalidRequest),
         };
+        let moves_collection = commands.iter().any(|command| matches!(command,
+            WriteCommand::MoveEntry { target_project_id, .. } if target_project_id != &original.collection_id));
         let id = uuid::Uuid::new_v4().to_string();
         let prepared =
-            OperationCoordinator::prepare(WriteOperationRequest::new(&id, intent, vec![command]))
+            OperationCoordinator::prepare(WriteOperationRequest::new(&id, intent, commands))
                 .map_err(|_| GatewayError::StateUnavailable)?;
         let mut hash = Sha256::new();
         hash.update(prepared.intent_hash());
@@ -137,6 +152,7 @@ impl Vault {
             .write()
             .map_err(|_| GatewayError::StateUnavailable)?;
         let mut stale = false;
+        let mut attachments_block_move = false;
         let result = CommitContext::new("monica-pass-admin".to_owned()).run_operation(
             &conn,
             operation,
@@ -148,12 +164,45 @@ impl Vault {
                         "stale local object edit".to_owned(),
                     ));
                 }
+                // The current engine moves only the entry row. Refuse rather than
+                // strand attachment ownership; check inside the write transaction
+                // so a concurrent attachment addition cannot race the guard.
+                if moves_collection {
+                    attachments_block_move = !AttachmentSummaryRepo::list_by_object(
+                        &conn,
+                        &original.collection_id,
+                        &original.object_id,
+                        1,
+                        None,
+                    )?
+                    .items
+                    .is_empty();
+                    let mut cursor = None;
+                    while !attachments_block_move {
+                        let page =
+                            AttachmentSummaryRepo::list_deleted(&conn, 200, cursor.as_deref())?;
+                        attachments_block_move = page.items.iter().any(|item| {
+                            item.object_id.as_deref() == Some(original.object_id.as_str())
+                        });
+                        cursor = page.next_cursor;
+                        if cursor.is_none() {
+                            break;
+                        }
+                    }
+                    if attachments_block_move {
+                        return Err(StorageError::ConstraintViolation(
+                            "attachment move unsupported".into(),
+                        ));
+                    }
+                }
                 prepared.apply(&conn, ctx)
             },
         );
         result.map(|_| ()).map_err(|_| {
             if stale {
                 GatewayError::ObjectChanged
+            } else if attachments_block_move {
+                GatewayError::AttachmentMoveUnsupported
             } else {
                 GatewayError::StateUnavailable
             }

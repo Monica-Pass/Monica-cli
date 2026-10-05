@@ -10,7 +10,7 @@
 
 **Monica 的本地凭据代理端：让 AI 在你的授权范围内使用服务 Token。**
 
-<p>日常密码管理在 Monica for Android，这一端只管 AI 与凭据之间的边界 · 服务 Token 留在本地 MDBX3 加密保险库 · 授权一律会到期 · 解锁与撤销由你执行</p>
+<p>日常密码管理在 Monica for Android，CLI 提供 AI 凭据网关与本地管理入口 · 服务 Token 留在本地 MDBX3 加密保险库 · 授权一律会到期 · 解锁与撤销由你执行</p>
 
 <p>
 隶属 <a href="https://github.com/Monica-Pass/Monica"><strong>Monica 本地密码库</strong></a> 生态 ·
@@ -44,15 +44,17 @@ Monica CLI 将服务 Token 保存在本地 MDBX3 加密保险库中。AI 通过 
 
 ## 先说清楚它是什么
 
-**Monica 是密码管理器，Monica CLI 不是。** 日常管账号、密码、2FA 的是 [Monica for Android](https://github.com/Monica-Pass/Monica)，那边有 TOTP、自动填充、卡片与身份条目、浏览器联动。本工具只做一件事：**站在 AI 和远端服务之间，替你保管并授权使用服务 Token。**
+**Monica CLI 以 AI 凭据网关为核心，也提供同一保险库的本地管理入口。** 日常管理账号、密码、2FA 使用 [Monica for Android](https://github.com/Monica-Pass/Monica)，那边有 TOTP、自动填充、卡片与身份条目、浏览器联动。CLI **站在 AI 和远端服务之间，替你保管并授权使用服务 Token**，并支持本人管理兼容的密码与密钥条目。
 
 具体一点：
 
-- **它管的是"要交给 AI 去办事"的那批凭据**，例如 GitHub / GitLab 的 API Token，不是你全部的密码。
+- **AI 网关只使用明确绑定的服务 Token**，例如 GitHub / GitLab 的 API Token；普通密码与 SSH/GPG 条目属于本地管理范围。
 - **它把 Token 挡在 AI 之外**：AI 只能提出"列出这个仓库的 Issue"这样的请求；校验授权、注入凭据、发送请求、检查响应是否回泄都由本地代理完成，原始 Token 从不出现在模型上下文里。
 - **它给权限上了时间**：每一份 AI 授权都会到期、可以设调用次数上限、只能由人在本地 `renew` 续期，**不存在永久授权**；而存在保险库里的凭据本身不过期，也不会因为授权到期被删。
 - **它可以让每次写入先问你一句**：授权设 `--approval write` 后写操作、设 `--approval all` 后每一次调用，都要等你本人在终端里按 `y` 才会发出，最多等 15 秒，没人应答就返回 `approval_timeout`。提示只出现在你自己的终端（TUI 弹窗或 `serve` 终端），AI 侧没有应答通道也读不到它，`monica approve` 这样的命令**故意不存在**；被拒的调用不消耗次数预算。
 - **它顺带能管理这份数据库**：内置 TUI 与命令行，是因为配授权、看状态、同步 WebDAV 不必为此打开手机。
+
+本地管理也支持 [Android 密码条目互通](docs/android-passwords.md)：创建与部分编辑普通 login、保持 Android ID 和目录约定。命令只返回摘要，完整字段通过本人 TUI 查看；这些条目没有 MCP 取密入口。
 
 它和手机 Monica **读写同一份 MDBX3 数据库**，所以是同一个保险库的两个入口，不是两套互不相干的存储。它明确不做的部分：不生成 TOTP、不做自动填充、没有浏览器扩展、不导入 KeePass / Bitwarden、不提供附件明文导出；外置 `.blobs` 密文随托管副本与 WebDAV 分段保留。
 
@@ -85,6 +87,7 @@ Monica 是聚合 **Bitwarden** 与 **KeePass** 的本地优先密码库，本仓
 | 多语言界面 | 简体中文和 English，覆盖 TUI、表单、CLI 帮助和人工提示；自动选择语言，也可手动切换并保存。 |
 | WebDAV 保险库 | 登录 WebDAV、浏览远端 MDBX 文件、打开本地副本，并手动同步加密保险库。 |
 | SSH / GPG 密钥条目 | 在同一份加密保险库里保存 SSH 私钥与 OpenPGP 证书，存储格式与 Monica for Android 一致；可生成 Ed25519 与 RSA、导入 PEM 与 armor、显式导出到文件。AI 侧完全看不到这些条目。 |
+| Android 密码互通 | 本地创建、编辑普通密码，保持 Android ID 与目录约定；命令只返回摘要，详情和已知限制见 [使用说明](docs/android-passwords.md)。 |
 
 **支持 GitHub / GitLab 通用 API 代理，以及按仓库限制的 Issue 工具。** 完整服务授权后，分支、提交、MR/PR、评论、流水线等接口无需修改 Monica 即可调用；详见[通用 API 使用说明](docs/service-api.md)。 支持官方服务，也支持人工配置自托管服务的 HTTPS API 地址。
 

@@ -415,6 +415,11 @@ impl Vault {
             return Err(GatewayError::ProtectedCollection);
         }
         let command = if inventory.entries.iter().any(|e| e.id == id) {
+            match self.password_document(id) {
+                Ok(document) => return self.move_password(document, target),
+                Err(GatewayError::ObjectReadOnly) => {}
+                Err(error) => return Err(error),
+            }
             let original = self.editable_object(id)?;
             return self.write_object(
                 &original,

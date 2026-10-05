@@ -44,6 +44,10 @@ pub enum GatewayError {
         "The object changed after it was read. Reload it before editing; no changes were saved."
     )]
     ObjectChanged,
+    #[error(
+        "This entry has attachments. The current engine cannot move their ownership with the entry, so nothing was moved."
+    )]
+    AttachmentMoveUnsupported,
     #[error("This object's payload exceeds the viewer limit. It was not truncated or changed.")]
     ObjectPayloadTooLarge,
     #[error("The new password must not be empty or whitespace-only, and both entries must match.")]

@@ -668,6 +668,7 @@ catalog! {
     ErrorBlobUnavailable => ["An encrypted attachment is missing, corrupt or exceeds the transfer limit. Sync has not been acknowledged.", "加密附件缺失、损坏或超过传输上限，同步尚未确认完成。"],
     ErrorObjectReadOnly => ["This object type, payload version or schema has no compatible writer here. Inspect it in the human-only viewer; the object was not changed.", "本机没有兼容此对象类型、载荷版本或 schema 的写入器。可在人工查看器中检查；对象未被修改。"],
     ErrorObjectChanged => ["The object changed after it was read. Reload it before editing; no changes were saved.", "对象在读取后已发生变化，请重新加载再编辑；本次未保存修改。"],
+    ErrorAttachmentMoveUnsupported => ["This entry has attachments. The current engine cannot move their ownership with the entry, so nothing was moved.", "此条目关联附件，当前引擎无法随条目迁移附件归属；本次未移动任何数据。"],
     ErrorObjectPayloadTooLarge => ["This object's payload exceeds the viewer limit. It was not truncated or changed.", "对象载荷超过查看器上限；未截断或修改原始数据。"],
     ErrorVaultConnectionsInvalid => ["This vault has too many or ambiguous gateway connections. Resolve them in Monica before importing.", "此保险库中的网关连接过多或存在歧义，请先在 Monica 中处理后再导入。"],
     ErrorTigaReasonRequired => ["Lowering the security profile is recorded in the vault as an exception, so it needs a reason. Repeat the command with --reason and say why.", "降低安全等级会作为例外写入保险库，因此必须说明原因。请带 --reason 重新执行并写明理由。"],

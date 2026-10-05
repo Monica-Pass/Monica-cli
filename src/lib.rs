@@ -14,6 +14,7 @@ pub mod install;
 pub mod keys;
 pub mod model;
 mod object;
+pub mod passwords;
 pub mod protocol;
 pub mod segment;
 pub mod service_api;

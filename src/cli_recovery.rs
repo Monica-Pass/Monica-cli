@@ -66,7 +66,7 @@ pub fn recovery(error: GatewayError, command: &str) -> (Value, Message) {
             vec![format!("monica {command} --help")],
             Message::RecoveryConfirm,
         ),
-        ObjectReadOnly | ObjectPayloadTooLarge => (
+        ObjectReadOnly | ObjectPayloadTooLarge | AttachmentMoveUnsupported => (
             "requires_compatible_client",
             vec![],
             Message::RecoveryInspect,
