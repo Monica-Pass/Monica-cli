@@ -415,6 +415,11 @@ impl Vault {
             return Err(GatewayError::ProtectedCollection);
         }
         let command = if inventory.entries.iter().any(|e| e.id == id) {
+            match self.password_document(id) {
+                Ok(document) => return self.move_password(document, target),
+                Err(GatewayError::ObjectReadOnly) => {}
+                Err(error) => return Err(error),
+            }
             let original = self.editable_object(id)?;
             return self.write_object(
                 &original,
@@ -524,7 +529,10 @@ impl Vault {
     }
 }
 
-pub fn read(store: &ConfigStore, password: &str) -> Result<Library> {
+pub fn read(
+    store: &ConfigStore,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
+) -> Result<Library> {
     let _guard = store.acquire_broker_lock()?;
     let vault = Vault::open(&store.load()?.vault, password)?;
     let result = vault.library();
@@ -536,7 +544,7 @@ pub fn read(store: &ConfigStore, password: &str) -> Result<Library> {
 /// payload, so a `login` row cannot be told apart from a key entry without this second pass.
 pub fn read_with_keys(
     store: &ConfigStore,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
 ) -> Result<(Library, Vec<crate::vault::KeyEntrySummary>)> {
     let _guard = store.acquire_broker_lock()?;
     let vault = Vault::open(&store.load()?.vault, password)?;
@@ -548,8 +556,13 @@ pub fn read_with_keys(
     result
 }
 
-pub fn rename_category(store: &ConfigStore, password: &str, id: &str, title: &str) -> Result<()> {
-    crate::upstream::reject_secret_value(&serde_json::json!([title]), password)
+pub fn rename_category(
+    store: &ConfigStore,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
+    id: &str,
+    title: &str,
+) -> Result<()> {
+    crate::upstream::reject_secret_value(&serde_json::json!([title]), password.as_ref())
         .map_err(|_| GatewayError::SensitiveMetadata)?;
     let _guard = store.acquire_broker_lock()?;
     let vault = Vault::open(&store.load()?.vault, password)?;
@@ -560,11 +573,11 @@ pub fn rename_category(store: &ConfigStore, password: &str, id: &str, title: &st
 
 pub fn create_category(
     store: &ConfigStore,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     title: &str,
     parent: Option<&str>,
 ) -> Result<String> {
-    crate::upstream::reject_secret_value(&serde_json::json!([title]), password)
+    crate::upstream::reject_secret_value(&serde_json::json!([title]), password.as_ref())
         .map_err(|_| GatewayError::SensitiveMetadata)?;
     let _guard = store.acquire_broker_lock()?;
     let vault = Vault::open(&store.load()?.vault, password)?;
@@ -573,7 +586,12 @@ pub fn create_category(
     result
 }
 
-pub fn move_item(store: &ConfigStore, password: &str, id: &str, target: &str) -> Result<()> {
+pub fn move_item(
+    store: &ConfigStore,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
+    id: &str,
+    target: &str,
+) -> Result<()> {
     let _guard = store.acquire_broker_lock()?;
     let vault = Vault::open(&store.load()?.vault, password)?;
     let result = vault.move_library_item(id, target);
@@ -581,7 +599,11 @@ pub fn move_item(store: &ConfigStore, password: &str, id: &str, target: &str) ->
     result
 }
 
-pub fn delete_entry(store: &ConfigStore, password: &str, id: &str) -> Result<()> {
+pub fn delete_entry(
+    store: &ConfigStore,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
+    id: &str,
+) -> Result<()> {
     let _guard = store.acquire_broker_lock()?;
     let vault = Vault::open(&store.load()?.vault, password)?;
     let result = vault.delete_entry(id);
@@ -591,7 +613,7 @@ pub fn delete_entry(store: &ConfigStore, password: &str, id: &str) -> Result<()>
 
 pub fn delete_category(
     store: &ConfigStore,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     id: &str,
 ) -> std::result::Result<Category, DeleteBlocked> {
     let _guard = store.acquire_broker_lock().map_err(DeleteBlocked::Failed)?;

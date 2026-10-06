@@ -33,6 +33,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 rmcp = { version = "=3.3.0", default-features = false, features = ["server", "transport-io"] }
 rpassword = "7.4"
 rsa = "=0.9.10"
+# Already used by mdbx-storage; read-only, bounded header hints only. Never unlocks or migrates.
+rusqlite = { version = "0.31", features = ["bundled"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision", "raw_value"] }

@@ -24,6 +24,10 @@ use crate::error::{GatewayError, Result};
 /// for writing.
 #[derive(Debug, Serialize)]
 pub struct Check {
+    /// Deny-only public header hint, not authenticated vault state or proof of unlock support.
+    pub declared_tiga_profile: Option<String>,
+    pub terminal_support: &'static str,
+    pub header_authenticated: bool,
     pub path: PathBuf,
     pub size_bytes: u64,
     pub modified_unix: i64,
@@ -66,9 +70,17 @@ const MAX_WALK_ENTRIES: usize = 20_000;
 pub fn check(store: &ConfigStore, given: Option<PathBuf>) -> Result<Check> {
     let path = vault_file(store, given)?;
     let (size_bytes, modified_unix) = facts(&path)?;
+    let hint = crate::glitter::inspect_header(&path)?;
     let info = mdbx_storage::migration::inspect_migration_path(&path)
         .map_err(|_| GatewayError::VaultFileUnreadable)?;
     Ok(Check {
+        declared_tiga_profile: hint.declared_profile,
+        terminal_support: if hint.is_glitter {
+            "unsupported"
+        } else {
+            "not_evaluated"
+        },
+        header_authenticated: false,
         path,
         size_bytes,
         modified_unix,

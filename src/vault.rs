@@ -93,12 +93,13 @@ pub(crate) struct GatewayInventory {
 pub(crate) enum RevealPurpose {
     GatewayToken,
     KeyAdmin,
+    PasswordAdmin,
 }
 
-struct Disclosed {
-    payload: Zeroizing<Vec<u8>>,
-    project_id: String,
-    snapshot: ObjectSummary,
+pub(crate) struct Disclosed {
+    pub(crate) payload: Zeroizing<Vec<u8>>,
+    pub(crate) project_id: String,
+    pub(crate) snapshot: ObjectSummary,
 }
 
 /// What a person may see about one key entry. Carries public metadata only, never key text.
@@ -139,8 +140,19 @@ pub struct KeyExportText {
 }
 
 impl Vault {
-    pub fn create(path: &Path, password: &str, mode: TigaMode) -> Result<Self> {
-        if password.is_empty() || path.exists() {
+    /// Read-only client compatibility preflight, independent of supplied unlock factors.
+    /// Success is not authentication and must not authorize any credential disclosure.
+    pub fn check_terminal_support(path: &Path) -> Result<()> {
+        crate::glitter::require_terminal_file(path)
+    }
+
+    pub fn create(
+        path: &Path,
+        password: &(impl crate::credentials::VaultPassword + ?Sized),
+        mode: TigaMode,
+    ) -> Result<Self> {
+        crate::glitter::require_terminal_mode(mode)?;
+        if password.as_ref().is_empty() || path.exists() {
             return Err(GatewayError::InvalidRequest);
         }
         let mut pending =
@@ -154,8 +166,21 @@ impl Vault {
             },
         )
         .map_err(|_| GatewayError::StateUnavailable)?;
-        UnlockService::setup_password_with_mode(pending.connection_mut(), password, mode)
-            .map_err(|_| GatewayError::UnlockRequired)?;
+        if let Some(key) = password.security_key() {
+            UnlockService::setup_password_security_key(
+                pending.connection_mut(),
+                password.as_ref(),
+                key,
+                mode,
+            )
+        } else {
+            UnlockService::setup_password_with_mode(
+                pending.connection_mut(),
+                password.as_ref(),
+                mode,
+            )
+        }
+        .map_err(|_| GatewayError::UnlockRequired)?;
         let vault = Self {
             runtime: VaultRuntime::from_connection(pending.commit()),
         };
@@ -163,10 +188,14 @@ impl Vault {
         Ok(vault)
     }
 
-    pub fn open(path: &Path, password: &str) -> Result<Self> {
-        if !path.is_file() || password.is_empty() {
+    pub fn open(
+        path: &Path,
+        password: &(impl crate::credentials::VaultPassword + ?Sized),
+    ) -> Result<Self> {
+        if !path.is_file() || password.as_ref().is_empty() {
             return Err(GatewayError::UnlockRequired);
         }
+        crate::glitter::require_terminal_file(path)?;
         let mut connection = VaultConnection::open(path).map_err(|error| match error {
             // The early Android MDBX-1 variant stores PBKDF2/AES metadata in
             // vault_meta instead of the native unlock table. Never synthesize
@@ -179,8 +208,20 @@ impl Vault {
             StorageError::Validation(_) => GatewayError::InvalidVault,
             _ => GatewayError::StateUnavailable,
         })?;
-        UnlockService::unlock_with_password(&mut connection, password)
-            .map_err(|_| GatewayError::UnlockRequired)?;
+        // Recheck after open; a public header hint is never authentication.
+        if UnlockService::is_glitter(&connection).map_err(|_| GatewayError::InvalidVault)? {
+            return Err(GatewayError::GlitterUnavailable);
+        }
+        if let Some(key) = password.security_key() {
+            UnlockService::unlock_with_password_security_key(
+                &mut connection,
+                password.as_ref(),
+                key,
+            )
+        } else {
+            UnlockService::unlock_with_password(&mut connection, password.as_ref())
+        }
+        .map_err(|_| GatewayError::UnlockRequired)?;
         if connection.keyring().is_none() || connection.active_session().is_none() {
             return Err(GatewayError::UnlockRequired);
         }
@@ -216,6 +257,7 @@ impl Vault {
     /// exception until someone raises it back. This mirrors the path the Android
     /// app takes through the same engine, so both clients read the same state.
     pub fn set_tiga_policy(&self, target: TigaMode, reason: Option<&str>) -> Result<()> {
+        crate::glitter::require_terminal_mode(target)?;
         let connection = self
             .runtime
             .write()
@@ -427,7 +469,12 @@ impl Vault {
     /// The only path that turns stored ciphertext into plaintext. Every caller must state which
     /// kind of record it expects, and a record of another kind is refused before any bytes of it
     /// leave this function.
-    fn reveal(&self, entry_id: &str, purpose: RevealPurpose, now: i64) -> Result<Disclosed> {
+    pub(crate) fn reveal(
+        &self,
+        entry_id: &str,
+        purpose: RevealPurpose,
+        now: i64,
+    ) -> Result<Disclosed> {
         let (device_id, limit, expected_type) = match purpose {
             RevealPurpose::GatewayToken => (
                 "monica-pass-gateway",
@@ -437,6 +484,11 @@ impl Vault {
             RevealPurpose::KeyAdmin => (
                 "monica-pass-admin",
                 KEY_DISCLOSURE_LIMIT_BYTES as u64,
+                ObjectTypeId::Login,
+            ),
+            RevealPurpose::PasswordAdmin => (
+                "monica-pass-admin",
+                crate::passwords::MAX_PAYLOAD_BYTES as u64,
                 ObjectTypeId::Login,
             ),
         };
@@ -475,12 +527,16 @@ impl Vault {
             (StorageError::ResourceLimit { .. }, RevealPurpose::GatewayToken) => {
                 GatewayError::CredentialUnavailable
             }
+            (StorageError::ResourceLimit { .. }, RevealPurpose::PasswordAdmin) => {
+                GatewayError::ObjectPayloadTooLarge
+            }
             _ => GatewayError::UnlockRequired,
         })?;
         if disclosed.object.entry_type != expected_type {
             return Err(match purpose {
                 RevealPurpose::GatewayToken => GatewayError::CredentialUnavailable,
                 RevealPurpose::KeyAdmin => GatewayError::KeyEntryTypeMismatch,
+                RevealPurpose::PasswordAdmin => GatewayError::ObjectReadOnly,
             });
         }
         if disclosed.object.payload_schema_version != 1
@@ -517,7 +573,7 @@ impl Vault {
         validate_note(note)?;
         let (stored, disclosed) =
             self.credential_document(binding, chrono::Utc::now().timestamp())?;
-        let mut document: Value = serde_json::from_slice(&disclosed.payload)
+        let mut document: Value = mdbx_core::json::from_slice(&disclosed.payload)
             .map_err(|_| GatewayError::CredentialUnavailable)?;
         reject_secret_value(&serde_json::json!([name, note]), &stored.token)
             .map_err(|_| GatewayError::SensitiveMetadata)?;
@@ -574,7 +630,7 @@ impl Vault {
 
     /// Local management of SSH and GPG entries. Nothing here is reachable from the broker: the
     /// gateway inventory only ever discloses API tokens.
-    fn vault_id(&self) -> Result<String> {
+    pub(crate) fn vault_id(&self) -> Result<String> {
         let connection = self
             .runtime
             .read()
@@ -639,7 +695,7 @@ impl Vault {
         let text = std::str::from_utf8(&disclosed.payload)
             .map_err(|_| GatewayError::KeyEntryTypeMismatch)?;
         let value: Value =
-            serde_json::from_str(text).map_err(|_| GatewayError::KeyEntryTypeMismatch)?;
+            mdbx_core::json::from_str(text).map_err(|_| GatewayError::KeyEntryTypeMismatch)?;
         let stored = payload::read_login_type(&value);
         let known = matches!(stored.as_str(), LOGIN_TYPE_SSH | LOGIN_TYPE_GPG);
         if !known || login_type.is_some_and(|wanted| wanted != stored) {
@@ -681,19 +737,24 @@ impl Vault {
                 }
                 Ok(disclosed.snapshot)
             }
-            ObjectTypeId::Login => self
-                .key_document(entry_id, None)
-                .map(|(_, document)| document.snapshot)
-                .map_err(|error| {
-                    if matches!(
-                        error,
-                        GatewayError::KeyEntryTypeMismatch | GatewayError::InvalidKeyMaterial
-                    ) {
-                        GatewayError::ObjectReadOnly
-                    } else {
-                        error
-                    }
-                }),
+            ObjectTypeId::Login => match self.password_document(entry_id) {
+                Ok(document) if document.android_identity => Ok(document.summary.clone()),
+                Ok(_) => Err(GatewayError::ObjectReadOnly),
+                Err(GatewayError::ObjectReadOnly) => self
+                    .key_document(entry_id, None)
+                    .map(|(_, document)| document.snapshot)
+                    .map_err(|error| {
+                        if matches!(
+                            error,
+                            GatewayError::KeyEntryTypeMismatch | GatewayError::InvalidKeyMaterial
+                        ) {
+                            GatewayError::ObjectReadOnly
+                        } else {
+                            error
+                        }
+                    }),
+                Err(error) => Err(error),
+            },
             _ => Err(GatewayError::ObjectReadOnly),
         }
     }
@@ -942,6 +1003,7 @@ impl Vault {
     /// The private text a person asked to write to a file they named. Reached only by the export
     /// command, which is outside the broker, the MCP tool list and command discovery.
     pub fn key_export_text(&self, entry_id: &str) -> Result<KeyExportText> {
+        self.require_key_export_allowed()?;
         let (value, collection_id, title) = self.load_key(entry_id, None)?;
         let summary = Self::summarize_key(entry_id, &collection_id, &title, &value)?;
         let (private_text, mut public_text) = match summary.login_type.as_str() {
@@ -973,13 +1035,37 @@ impl Vault {
         })
     }
 
+    pub(crate) fn require_key_export_allowed(&self) -> Result<()> {
+        // Human-only access is not permission to bypass Glitter's egress policy. Keep
+        // the existing legacy-mode path unchanged even if a future client admits Glitter.
+        let policy = self.tiga_policy()?.policy;
+        if policy.profile == TigaMode::Glitter && !policy.egress.export_allowed {
+            return Err(GatewayError::PermissionDenied);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn require_remote_sync_allowed(&self) -> Result<()> {
+        // Resolve the native policy, never the mutable application configuration.
+        if self.tiga_policy()?.policy.profile == TigaMode::Glitter {
+            return Err(GatewayError::GlitterUnavailable);
+        }
+        Ok(())
+    }
+
     pub fn lock(&self) -> Result<()> {
-        self.runtime
-            .with_write(|connection| {
+        match self.runtime.write() {
+            Ok(mut connection) => {
                 connection.clear_session();
                 Ok(())
-            })
-            .map_err(|_| GatewayError::StateUnavailable)
+            }
+            // The native runtime clears all keyrings before reporting this state. Lock is
+            // idempotent during broker drain, expiry, and the final shutdown cleanup.
+            Err(mdbx_storage::runtime::RuntimeLockPoisoned::AuthenticationRequired) => Ok(()),
+            Err(mdbx_storage::runtime::RuntimeLockPoisoned::Poisoned) => {
+                Err(GatewayError::StateUnavailable)
+            }
+        }
     }
 
     /// Which vault this file is, without disclosing a single secret.

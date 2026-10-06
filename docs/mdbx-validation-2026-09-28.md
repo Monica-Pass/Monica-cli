@@ -1,5 +1,7 @@
 # MDBX 兼容对齐验证（2026-09-28）
 
+> 本文保留首次对齐的历史结果。后续原生库、补丁、默认测试入口及回读预期已修正；当前结果和复跑方法见 [审查修正记录](mdbx-review-fixes-2026-09-28.md)。下方旧运行时哈希不代表当前库。
+
 本次范围是 Monica CLI 的对象适配、本人通用查看、原生提交与附件同步，以及验证过程中发现的 Android FFI 数值精度问题。依据 [跨端兼容契约](https://github.com/Monica-Pass/Monica/blob/main/docs/storage/MDBX-CROSS-CLIENT-CONTRACT.zh-CN.md)。以下结果不代表所有 Android 历史业务 Adapter 都已无损验收。
 
 ## 已验证行为
@@ -65,13 +67,6 @@
 
 首次主版应用构建在已有 `AppLauncherIconSettings.kt` 引用的五个缺失资源上失败：`launcher_icon_selection_description`、`launcher_icon_default`、`launcher_icon_blue_star`、`launcher_icon_language_hint`、`launcher_icon_refresh_hint`。随后工作区资源已补齐，本次未修改这些无关界面文件。最终两套工程重新运行 `:app:assembleDebugAndroidTest :app:testDebugUnitTest --tests takagi.ru.monica.*Mdbx* --tests takagi.ru.monica.webdav.*`，均通过，各 210 项 JVM 回归。随后主版和 F-Droid 的 debug APK 及测试包安装成功，各运行 5 项实际应用设备测试，均通过，UI 截图已检查。两端实际 APK 生成的便携输出再次由 CLI 独立回读通过。
 
-## 复跑
+## 当前复跑入口
 
-CLI 常规回归直接运行上述 Cargo 和 Node 命令。独立跨端测试需要 Android 设备及两端工程：
-
-1. 设置非秘密路径 `MONICA_CONTRACT_FIXTURE_DIR` 为一个新目录，执行 `cargo test --lib synthetic_cross_client_fixture_and_portable_copy`。输出仅为合成 fixture；路径已存在时拒绝覆盖。
-2. 构建/安装 Android 测试包，把该目录复制到目标测试应用的 `files/mdbx-cli-contract-input`。执行 `takagi.ru.monica.repository.MdbxCliContractInstrumentedTest`；输出目录必须为新目录。
-3. 以二进制安全方式取回 `files/mdbx-cli-contract-output`，并放入原始 `manifest.json`。不要用 PowerShell 文本重定向传输数据库或 tar。
-4. 设置 `MONICA_CONTRACT_RETURN_DIR` 为取回目录，执行 `cargo test --lib android_returned_contract -- --ignored`。主版和 F-Droid 输出各执行一次。
-
-具体操作边界、错误码、传输上限与恢复方式见 [MDBX 跨端兼容](mdbx-compatibility.md)。
+普通 Android 设备测试使用已提交的合成 fixture，无需手动准备私有目录；工作目录每次独立并自动清理。完整动态往返使用 CLI `scripts/check_android_contract.py`；当前命令、输入来源和验证边界见 [审查修正记录](mdbx-review-fixes-2026-09-28.md)。

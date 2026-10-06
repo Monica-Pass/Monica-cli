@@ -45,7 +45,10 @@ fn report(vault: &Vault) -> Result<Report> {
     })
 }
 
-pub fn show(store: &ConfigStore, password: &str) -> Result<Report> {
+pub fn show(
+    store: &ConfigStore,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
+) -> Result<Report> {
     let _guard = store.acquire_broker_lock()?;
     let vault = Vault::open(&store.load()?.vault, password)?;
     let result = report(&vault);
@@ -60,12 +63,13 @@ pub fn show(store: &ConfigStore, password: &str) -> Result<Report> {
 /// read later as if it had been recorded, so that is refused too.
 pub fn set(
     store: &ConfigStore,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     level: TigaLevel,
     reason: Option<&str>,
 ) -> Result<Report> {
+    level.require_terminal_support()?;
     if let Some(reason) = reason {
-        reject_secret_value(&serde_json::json!([reason]), password)?;
+        reject_secret_value(&serde_json::json!([reason]), password.as_ref())?;
     }
     let _guard = store.acquire_broker_lock()?;
     let vault = Vault::open(&store.load()?.vault, password)?;

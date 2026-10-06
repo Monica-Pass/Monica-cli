@@ -886,7 +886,7 @@ pub fn render_mdbx_check(data: &Value, lang: Language) -> String {
     let writer = string(data, "min_writer_version");
     let schema = data["schema_version"].as_u64();
     let target_schema = data["target_schema_version"].as_u64().unwrap_or(0);
-    let fields: Vec<(&str, String)> = vec![
+    let mut fields: Vec<(&str, String)> = vec![
         (tr!(lang, MdbxSettingFile), string(data, "path")),
         (
             tr!(lang, MdbxSettingSize),
@@ -939,6 +939,9 @@ pub fn render_mdbx_check(data: &Value, lang: Language) -> String {
             },
         ),
     ];
+    if let Some(profile) = data["declared_tiga_profile"].as_str() {
+        fields.push((tr!(lang, MdbxDeclaredTiga), profile.to_owned()));
+    }
     let label_width = fields
         .iter()
         .map(|(label, _)| width(label))

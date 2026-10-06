@@ -187,8 +187,11 @@ pub enum TigaLevel {
     /// The balanced default.
     #[default]
     Multi,
-    /// Strongest anti-brute-force settings.
+    /// Stronger anti-brute-force settings for password-based vaults.
     Power,
+    /// Known engine profile, currently unavailable in this client.
+    #[value(hide = true)]
+    Glitter,
 }
 
 impl TigaLevel {
@@ -197,6 +200,7 @@ impl TigaLevel {
             Self::Sky => TigaMode::Sky,
             Self::Multi => TigaMode::Multi,
             Self::Power => TigaMode::Power,
+            Self::Glitter => TigaMode::Glitter,
         }
     }
 
@@ -206,7 +210,13 @@ impl TigaLevel {
             Self::Sky => "sky",
             Self::Multi => "multi",
             Self::Power => "power",
+            Self::Glitter => "glitter",
         }
+    }
+
+    /// Validate before collecting secrets, taking locks or changing any local state.
+    pub fn require_terminal_support(self) -> Result<()> {
+        crate::glitter::require_terminal_mode(self.mode())
     }
 }
 
@@ -223,7 +233,7 @@ pub fn initialize(
     store: &ConfigStore,
     path: &Path,
     port: u16,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     confirmation: &str,
 ) -> Result<()> {
     initialize_with(
@@ -247,11 +257,12 @@ pub fn initialize_with(
     store: &ConfigStore,
     path: &Path,
     port: u16,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     confirmation: &str,
     options: &NewVault<'_>,
 ) -> Result<String> {
-    validate_new_password(password, confirmation)?;
+    options.tiga.require_terminal_support()?;
+    validate_new_password(password.as_ref(), confirmation)?;
     let name = options.name.map(str::trim);
     if let Some(name) = name {
         validate_database_name(name)?;
@@ -299,7 +310,7 @@ pub fn add_connection(
     provider: Provider,
     base: &str,
     note: &str,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     token: Zeroizing<String>,
 ) -> Result<()> {
     add_connection_in_category(
@@ -320,7 +331,7 @@ pub fn add_connection(
 pub fn add_connection_in_category(
     store: &ConfigStore,
     options: NewConnection<'_>,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     token: Zeroizing<String>,
 ) -> Result<()> {
     let NewConnection {
@@ -337,7 +348,10 @@ pub fn add_connection_in_category(
     }
     validate_note(note)?;
     let base = validate_api_base(base, provider)?.to_string();
-    check_public(&json!([name, title, &base, note]), &[password, &token])?;
+    check_public(
+        &json!([name, title, &base, note]),
+        &[password.as_ref(), &token],
+    )?;
     let _guard = store.acquire_broker_lock()?;
     store.update(|config| {
         let mut config = config.ok_or(GatewayError::NotFound)?;
@@ -384,7 +398,7 @@ fn check_public(value: &Value, secrets: &[&str]) -> Result<()> {
 pub fn quick_add(
     store: &ConfigStore,
     options: &AddOptions,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     confirmation: Option<&str>,
     token: Zeroizing<String>,
 ) -> Result<PathBuf> {
@@ -406,7 +420,7 @@ pub fn quick_add(
             &base,
             &options.repositories
         ]),
-        &[password, &token],
+        &[password.as_ref(), &token],
     )?;
     let output = client_path(store, &options.name)?;
     let settings_path = output.with_extension("mcp.json");
@@ -422,7 +436,7 @@ pub fn quick_add(
         let creating = previous.is_none();
         if creating {
             validate_new_password(
-                password,
+                password.as_ref(),
                 confirmation.ok_or(GatewayError::PasswordRequirements)?,
             )?;
         }
@@ -474,10 +488,15 @@ pub fn quick_add(
     Ok(output)
 }
 
-pub fn update_note(store: &ConfigStore, name: &str, note: &str, password: &str) -> Result<()> {
+pub fn update_note(
+    store: &ConfigStore,
+    name: &str,
+    note: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
+) -> Result<()> {
     validate_name(name)?;
     validate_note(note)?;
-    check_public(&json!([name, note]), &[password])?;
+    check_public(&json!([name, note]), &[password.as_ref()])?;
     let _guard = store.acquire_broker_lock()?;
     store.update(|config| {
         let mut config = config.ok_or(GatewayError::NotFound)?;
@@ -492,10 +511,15 @@ pub fn update_note(store: &ConfigStore, name: &str, note: &str, password: &str) 
 
 /// Retitle an existing entry's display title (Chinese allowed). The connection handle and the
 /// encrypted payload stay unchanged; the title lives only in the shared MDBX entry.
-pub fn rename_entry(store: &ConfigStore, name: &str, title: &str, password: &str) -> Result<()> {
+pub fn rename_entry(
+    store: &ConfigStore,
+    name: &str,
+    title: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
+) -> Result<()> {
     validate_name(name)?;
     validate_title(title)?;
-    check_public(&json!([name, title]), &[password])?;
+    check_public(&json!([name, title]), &[password.as_ref()])?;
     let _guard = store.acquire_broker_lock()?;
     let config = store.load()?;
     let binding = config.connections.get(name).ok_or(GatewayError::NotFound)?;
@@ -520,7 +544,7 @@ pub enum EntryDelete {
 pub fn delete_connection(
     store: &ConfigStore,
     name: &str,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
 ) -> Result<(EntryDelete, usize)> {
     validate_name(name)?;
     let _guard = store.acquire_broker_lock()?;
@@ -551,7 +575,7 @@ pub fn delete_connection(
 pub fn update_token(
     store: &ConfigStore,
     name: &str,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     token: Zeroizing<String>,
 ) -> Result<()> {
     validate_name(name)?;
@@ -562,7 +586,7 @@ pub fn update_token(
         let binding = config.connections.get(name).ok_or(GatewayError::NotFound)?;
         check_public(
             &json!([name, &binding.note, &binding.api_base]),
-            &[password, &token],
+            &[password.as_ref(), &token],
         )?;
         let vault = Vault::open(&config.vault, password)?;
         // Persist revocation before replacing the encrypted payload. A failed
@@ -594,14 +618,14 @@ fn confirm_scope<R: serde::Serialize>(
     name: &str,
     connection: &str,
     repositories: &R,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
 ) -> Result<()> {
     let vault = Vault::open(&config.vault, password)?;
     // A human must prove that this binding is an available credential.
     let credential = vault.credential(binding, chrono::Utc::now().timestamp())?;
     check_public(
         &json!([name, connection, repositories]),
-        &[password, &credential.token],
+        &[password.as_ref(), &credential.token],
     )?;
     drop(credential);
     vault.lock()
@@ -649,7 +673,11 @@ fn prepare_grant(
     Ok(client)
 }
 
-pub fn issue_grant(store: &ConfigStore, options: &GrantOptions, password: &str) -> Result<PathBuf> {
+pub fn issue_grant(
+    store: &ConfigStore,
+    options: &GrantOptions,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
+) -> Result<PathBuf> {
     validate_name(&options.name)?;
     if !(0..=1440).contains(&options.ttl_minutes)
         || !(1..=600).contains(&options.requests_per_minute)
@@ -709,7 +737,7 @@ pub fn issue_grant(store: &ConfigStore, options: &GrantOptions, password: &str) 
 pub fn refresh_grant(
     store: &ConfigStore,
     options: &RefreshOptions,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
 ) -> Result<PathBuf> {
     validate_name(&options.name)?;
     if options.window.is_some_and(|ttl| !(1..=1440).contains(&ttl))
@@ -1009,17 +1037,20 @@ pub struct BrokerSession {
 }
 
 impl BrokerSession {
-    pub async fn start(store: ConfigStore, password: Zeroizing<String>) -> Result<Self> {
-        Self::start_using(store, password, Gateway::new).await
+    pub async fn start(
+        store: ConfigStore,
+        password: impl Into<crate::credentials::VaultCredentials>,
+    ) -> Result<Self> {
+        Self::start_using(store, password.into(), Gateway::new).await
     }
 
     #[cfg(test)]
     pub(crate) async fn start_for_test(
         store: ConfigStore,
-        password: Zeroizing<String>,
+        password: impl Into<crate::credentials::VaultCredentials>,
         http: reqwest::Client,
     ) -> Result<Self> {
-        Self::start_using(store, password, move |store, vault| {
+        Self::start_using(store, password.into(), move |store, vault| {
             Gateway::with_client(store, vault, http)
         })
         .await
@@ -1027,7 +1058,7 @@ impl BrokerSession {
 
     async fn start_using(
         store: ConfigStore,
-        password: Zeroizing<String>,
+        password: crate::credentials::VaultCredentials,
         build: impl FnOnce(ConfigStore, Vault) -> Result<Gateway> + Send + 'static,
     ) -> Result<Self> {
         let guard = store.acquire_broker_lock()?;

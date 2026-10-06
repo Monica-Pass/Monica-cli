@@ -92,7 +92,11 @@ pub fn list(store: &ConfigStore) -> Result<Vec<Database>> {
     Ok(result)
 }
 
-pub fn switch(store: &ConfigStore, id: &str, password: &str) -> Result<()> {
+pub fn switch(
+    store: &ConfigStore,
+    id: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
+) -> Result<()> {
     if uuid::Uuid::parse_str(id).is_err() {
         return Err(GatewayError::InvalidRequest);
     }

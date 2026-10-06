@@ -120,6 +120,7 @@ pub(crate) async fn publish(
     client: &WebDavClient,
     root: &str,
 ) -> Result<()> {
+    vault.require_remote_sync_allowed()?;
     let (provider, references) = references(vault)?;
     let mut total = 0_u64;
     for (id, limit) in references {
@@ -160,6 +161,7 @@ pub(crate) async fn receive(
     client: &WebDavClient,
     root: &str,
 ) -> Result<()> {
+    vault.require_remote_sync_allowed()?;
     let (provider, references) = references(vault)?;
     let mut total = 0_u64;
     for (id, limit) in references {

@@ -156,6 +156,25 @@ window.MONICA_TEACH = {
      "false"
     ],
     "help": "Read secret fields as one UTF-8 JSON object from a trusted producer on stdin (max 16 KiB)"
+   },
+   {
+    "id": "key_file",
+    "role": null,
+    "long": "key-file",
+    "short": null,
+    "aliases": [],
+    "positional": false,
+    "required": false,
+    "repeatable": false,
+    "takesValue": true,
+    "valueNames": [
+     "FILE"
+    ],
+    "choices": [],
+    "choiceAliases": [],
+    "ignoreCase": false,
+    "defaults": [],
+    "help": "Public path to a supported vault's key file. Key bytes are bounded to 1 MiB and never persisted."
    }
   ]
  },
@@ -192,7 +211,8 @@ window.MONICA_TEACH = {
     "prerequisites": [
      "new_vault_path",
      "broker_stopped",
-     "secure_password_input"
+     "secure_password_input",
+     "cli_supported_tiga_profile"
     ],
     "retry": "inspect_state_before_retry",
     "schema_version": 1,
@@ -286,7 +306,7 @@ window.MONICA_TEACH = {
      "defaults": [
       "multi"
      ],
-     "help": "Security profile the vault starts on; `power` is slowest to unlock but hardest to brute force"
+     "help": "Security profile: sky, multi or power. MDBX supports Glitter, but this client does not integrate it yet."
     },
     {
      "id": "help",
@@ -349,7 +369,7 @@ window.MONICA_TEACH = {
     },
     {
      "cmd": "monica init --tiga power",
-     "note": "最严的一档：解锁要两个要素、导出和打印全关。建库本身 release 实测 1.9 秒，但这份库此后每次解锁都要按 power 的 Argon2id 参数算一遍——release 实测 1.4 秒，debug 构建实测 31 秒。",
+     "note": "Power 档位：解锁要两个要素、导出和打印全关。建库本身 release 实测 1.9 秒，但这份库此后每次解锁都要按 power 的 Argon2id 参数算一遍——release 实测 1.4 秒，debug 构建实测 31 秒。这些是旧样本数据；CLI 目前仅接入 Sky / Multi / Power，暂不接入 Glitter。",
      "secrets": "{\"password\":\"<新主密码>\"}",
      "tested": true,
      "out": "Created MDBX3 vault: %LOCALAPPDATA%\\MonicaPass\\gateway.mdbx\nConfiguration: %LOCALAPPDATA%\\MonicaPass\\gateway.json\nDatabase name: gateway · Tiga: power",
@@ -884,7 +904,7 @@ window.MONICA_TEACH = {
    "handAuthored": false,
    "pitfalls": [
     "子命令只有 show 和 set，也没有别名。",
-    "等级值是小写：sky / multi / power。写成 MULTI 会被取值校验挡掉（实测 exit 2）。",
+    "可用等级值是小写：sky / multi / power。MDBX 引擎保留 Glitter，但 CLI 暂不接入，不能创建、打开或转换为 Glitter。写成 MULTI 会被取值校验挡掉（实测 exit 2）。",
     "这几条命令只在本地命令面出现：AI 通过 MCP 看不到 tiga，改等级只能由人在终端里做。"
    ],
    "examples": [
@@ -1029,6 +1049,7 @@ window.MONICA_TEACH = {
      "configured_vault",
      "secure_password_input",
      "vault_policy_allows_change",
+     "cli_supported_tiga_profile",
      "reason_when_lowering"
     ],
     "retry": "inspect_state_before_retry",
@@ -1060,7 +1081,7 @@ window.MONICA_TEACH = {
      "choiceAliases": [],
      "ignoreCase": false,
      "defaults": [],
-     "help": ""
+     "help": "Security profile: sky, multi or power. MDBX supports Glitter, but this client does not integrate it yet."
     },
     {
      "id": "reason",
@@ -6944,5 +6965,5 @@ window.MONICA_TEACH = {
   "normalised": "示例中的临时目录已替换为 %TEMP%/MonicaGuide 或 %LOCALAPPDATA%\\MonicaPass，可执行文件替换为 <monica-pass>；其余输出保留采集时的内容。",
   "secretInput": "需要密码或 Token 的命令，在真实终端里会隐式提示输入；示例里的「stdin 载荷」是给自动化（--secrets-stdin）看的字段形状，值都是假的。"
  },
- "generatedAt": "2026-09-28"
+ "generatedAt": "2026-10-06"
 };

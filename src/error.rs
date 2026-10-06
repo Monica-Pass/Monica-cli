@@ -44,6 +44,10 @@ pub enum GatewayError {
         "The object changed after it was read. Reload it before editing; no changes were saved."
     )]
     ObjectChanged,
+    #[error(
+        "This entry has attachments. The current engine cannot move their ownership with the entry, so nothing was moved."
+    )]
+    AttachmentMoveUnsupported,
     #[error("This object's payload exceeds the viewer limit. It was not truncated or changed.")]
     ObjectPayloadTooLarge,
     #[error("The new password must not be empty or whitespace-only, and both entries must match.")]
@@ -194,6 +198,14 @@ pub enum GatewayError {
         "The vault's own security policy refused this profile change. The profile you are leaving requires more assurance than a password-unlocked terminal can give, so raise or lower it in Monica for Android."
     )]
     TigaChangeDenied,
+    #[error(
+        "MDBX supports Glitter, but Monica CLI does not integrate this profile yet. Keep the database for a client that explicitly supports Glitter; this client will not create or open it."
+    )]
+    GlitterUnavailable,
+    #[error("This database requires the master password and its key file")]
+    KeyFileRequired,
+    #[error("The key file must be a readable regular file containing 1 byte to 1 MiB")]
+    InvalidKeyFile,
     #[error(
         "No WebDAV vault is connected. Open a remote MDBX file or publish the local vault first."
     )]

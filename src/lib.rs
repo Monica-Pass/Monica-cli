@@ -5,15 +5,18 @@ pub mod clipboard;
 pub mod config;
 #[cfg(test)]
 mod contract_tests;
+pub mod credentials;
 pub mod credstore;
 pub mod databases;
 pub mod error;
 pub mod gateway;
+mod glitter;
 pub mod i18n;
 pub mod install;
 pub mod keys;
 pub mod model;
 mod object;
+pub mod passwords;
 pub mod protocol;
 pub mod segment;
 pub mod service_api;

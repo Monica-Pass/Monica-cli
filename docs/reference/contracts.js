@@ -28,6 +28,7 @@
     unlocked_broker_for_calls: '调用时代理须已解锁', usable_grant_for_calls: '调用时授权须可用',
     available_loopback_port: '本地 loopback 端口可用', human_terminal: '本人使用的交互终端',
     subcommand_required: '需要指定子命令', vault_policy_allows_change: '库内安全策略允许变更',
+    cli_supported_tiga_profile: 'CLI 仅接入 Sky / Multi / Power；MDBX 引擎保留 Glitter，但此客户端暂不接入',
     reason_when_lowering: '降低等级时给出理由', explicit_file_or_configured_vault: '指定文件或已有当前数据库',
     valid_https_webdav_url: '有效的 HTTPS WebDAV 地址', remote_mdbx_vault: '远端存在 MDBX 保险库',
     webdav_sync_binding: '已绑定远端保险库', nonconflicting_revisions: '两端版本无冲突',

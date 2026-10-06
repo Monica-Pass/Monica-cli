@@ -14,6 +14,88 @@ const TOKEN: &str = "synthetic-cli-service-token-42";
 const KEY_MATERIAL: &[&str] = &["PRIVATE KEY", "Proc-Type: 4,ENCRYPTED"];
 
 #[test]
+fn android_password_management_is_metadata_only_and_not_an_ai_disclosure_tool() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let unlock = serde_json::to_vec(&json!({"password":PASSWORD})).unwrap();
+    success(cli(
+        root,
+        &["init", "--json", "--secrets-stdin"],
+        Some(&unlock),
+    ));
+    let secret_value = "  MDK|literal-entry-secret\n密码  ";
+    let fields = serde_json::to_vec(&json!({"password":PASSWORD,"fields":json!({"password_plain":secret_value,"notes":"private-notes-sentinel"}).to_string()})).unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    let args = [
+        "passwords",
+        "create",
+        "--id",
+        &id,
+        "--title",
+        "Synthetic login",
+        "--json",
+        "--secrets-stdin",
+    ];
+    let output = cli(root, &args, Some(&fields));
+    for stream in [&output.stdout, &output.stderr] {
+        let text = String::from_utf8_lossy(stream);
+        assert!(!text.contains("literal-entry-secret"));
+        assert!(!text.contains("private-notes-sentinel"));
+    }
+    let created = success(output);
+    let retry = success(cli(root, &args, Some(&fields)));
+    assert_eq!(retry, created);
+    let native = created["id"].as_str().unwrap();
+    let head = created["head_commit_id"].as_str().unwrap();
+    let info = success(cli(
+        root,
+        &["passwords", "info", native, "--json", "--secrets-stdin"],
+        Some(&unlock),
+    ));
+    assert_eq!(created, info);
+    assert_eq!(info["android_roundtrip_identity"], true);
+    let changes = serde_json::to_vec(
+        &json!({"password":PASSWORD,"fields":"{\"password_plain\":\"\",\"custom_fields\":[]}"}),
+    )
+    .unwrap();
+    let edit = [
+        "passwords",
+        "edit",
+        native,
+        "--expected-head",
+        head,
+        "--json",
+        "--secrets-stdin",
+    ];
+    success(cli(root, &edit, Some(&changes)));
+    failure(cli(root, &edit, Some(&changes)), "object_changed");
+    failure(
+        cli(root, &["commands", "passwords", "--json"], None),
+        "invalid_request",
+    );
+    failure(
+        cli(root, &["passwords", "info", native, "--json"], None),
+        "secret_input_required",
+    );
+    failure(
+        cli(
+            root,
+            &["passwords", "info", native, "--json", "--secrets-stdin"],
+            Some(&fields),
+        ),
+        "invalid_secret_input",
+    );
+    let library = success(cli(
+        root,
+        &["library", "--json", "--secrets-stdin"],
+        Some(&unlock),
+    ));
+    assert_eq!(library["entries"].as_array().unwrap().len(), 1);
+    let all = success(cli(root, &["commands", "--summary", "--json"], None));
+    assert!(!all.to_string().contains("passwords create"));
+}
+
+#[test]
 fn compact_discovery_is_locale_independent_and_cli_errors_offer_safe_recovery() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path();

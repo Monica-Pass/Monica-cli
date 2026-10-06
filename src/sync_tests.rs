@@ -11,6 +11,261 @@ use crate::sync::{self, SyncResult};
 use crate::test_support::{PASSWORD, TOKEN};
 use crate::webdav_tests::{DAV_PASSWORD, FakeWebDav, WriteFault};
 
+#[tokio::test]
+async fn unsupported_glitter_refuses_local_broker_and_remote_access_without_mutations() {
+    use crate::credentials::VaultCredentials;
+    use sha2::Digest;
+    let directory = tempfile::tempdir().unwrap();
+    let key = directory.path().join("synthetic.key");
+    std::fs::write(&key, [0x73; 32]).unwrap();
+    let credentials =
+        VaultCredentials::from_key_file(Zeroizing::new(PASSWORD.to_owned()), Some(&key)).unwrap();
+    let writer = ConfigStore::new(directory.path().join("writer/gateway.json"));
+    let reserved = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = reserved.local_addr().unwrap().port();
+    drop(reserved);
+    // The engine still creates genuine Glitter; do not use the disabled CLI constructor.
+    let vault_path = writer.path.with_extension("mdbx");
+    std::fs::create_dir_all(vault_path.parent().unwrap()).unwrap();
+    let vault_id = {
+        use mdbx_storage::{
+            connection::VaultConnection,
+            init::{VaultInitParams, initialize_vault},
+            unlock::UnlockService,
+        };
+        let mut native = VaultConnection::create(&vault_path).unwrap();
+        initialize_vault(
+            &native,
+            &VaultInitParams {
+                default_tiga_mode: "glitter".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        UnlockService::setup_password_security_key(
+            &mut native,
+            PASSWORD,
+            &[0x73; 32],
+            mdbx_core::tiga::TigaMode::Glitter,
+        )
+        .unwrap();
+        let id: String = native
+            .inner()
+            .query_row("SELECT vault_id FROM vault_meta LIMIT 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        native.clear_session();
+        id
+    };
+    writer
+        .update(|_| {
+            let mut config = crate::config::Config::new(vault_path);
+            config.listen.set_port(port);
+            Ok((config, ()))
+        })
+        .unwrap();
+    let remote = FakeWebDav::new(Default::default()).await;
+    let forbidden_output = directory.path().join("must-not-export.key");
+    assert_eq!(
+        crate::keys::manage::export(
+            &writer,
+            &credentials,
+            "not-even-an-existing-key",
+            &forbidden_output,
+            true,
+            false
+        )
+        .err(),
+        Some(GatewayError::GlitterUnavailable)
+    );
+    assert!(!forbidden_output.exists());
+    assert!(matches!(
+        admin::BrokerSession::start_for_test(
+            writer.clone(),
+            credentials.clone(),
+            remote.server.client.clone()
+        )
+        .await,
+        Err(GatewayError::GlitterUnavailable)
+    ));
+    let original = std::fs::read(&writer.path).unwrap();
+    assert_eq!(
+        sync::publish(&writer, &remote.client, "glitter.mdbx", &credentials)
+            .await
+            .err(),
+        Some(GatewayError::GlitterUnavailable)
+    );
+    assert!(remote.server.requests().is_empty());
+    assert!(remote.files.lock().unwrap().is_empty());
+    assert_eq!(std::fs::read(&writer.path).unwrap(), original);
+    assert_eq!(
+        sync::publish(&writer, &remote.client, "without-key.mdbx", PASSWORD)
+            .await
+            .err(),
+        Some(GatewayError::GlitterUnavailable)
+    );
+
+    assert_eq!(
+        crate::vault::Vault::open(&writer.load().unwrap().vault, &credentials).err(),
+        Some(GatewayError::GlitterUnavailable)
+    );
+    // A binding saved by the former sync-capable build must not revive remote access.
+    writer
+        .update(|config| {
+            let mut config = config.unwrap();
+            config.webdav = Some(sync::RemoteBinding {
+                profile: remote.client.profile.clone(),
+                path: "glitter.mdbx".into(),
+                vault_id,
+                etag: Some("\"existing\"".into()),
+                remote_sha256: "0".repeat(64),
+                local_sha256: "0".repeat(64),
+                last_sync: 0,
+            });
+            Ok((config, ()))
+        })
+        .unwrap();
+    let configured = std::fs::read(&writer.path).unwrap();
+    let binding = writer.load().unwrap().webdav.unwrap();
+    assert_eq!(
+        segment::synchronize(
+            &writer,
+            &remote.client,
+            &binding,
+            &credentials,
+            &mut |_| {},
+            &segment::Cancel::default()
+        )
+        .await
+        .err(),
+        Some(GatewayError::GlitterUnavailable)
+    );
+    assert_eq!(
+        segment::bootstrap(
+            &writer,
+            &remote.client,
+            &writer.load().unwrap().vault,
+            &binding,
+            &credentials,
+            &mut |_| {},
+            &segment::Cancel::default()
+        )
+        .await
+        .err(),
+        Some(GatewayError::GlitterUnavailable)
+    );
+    assert_eq!(
+        sync::synchronize(&writer, &remote.client, &credentials)
+            .await
+            .err(),
+        Some(GatewayError::GlitterUnavailable)
+    );
+    assert_eq!(
+        sync::open_remote(&writer, &remote.client, "any.mdbx", &credentials)
+            .await
+            .err(),
+        Some(GatewayError::GlitterUnavailable)
+    );
+    assert!(remote.server.requests().is_empty());
+    assert_eq!(std::fs::read(&writer.path).unwrap(), configured);
+
+    let reader = ConfigStore::new(directory.path().join("local-reader/gateway.json"));
+    assert_eq!(
+        sync::open_local(&reader, &writer.load().unwrap().vault, &credentials).err(),
+        Some(GatewayError::GlitterUnavailable)
+    );
+    assert!(!reader.path.exists());
+    assert!(!reader.path.with_extension("vaults").exists());
+    // An unknown remote requires one ciphertext GET to identify it; no upload, attachment
+    // fetch, segment replay, vault installation, or configured binding may follow.
+    let encrypted = directory.path().join("manual-encrypted-backup.mdbx");
+    mdbx_storage::backup::BackupService::create_portable_copy_path(
+        &writer.load().unwrap().vault,
+        &encrypted,
+    )
+    .unwrap();
+    let remote = FakeWebDav::new(std::collections::BTreeMap::from([(
+        "/dav/glitter.mdbx".into(),
+        std::fs::read(&encrypted).unwrap(),
+    )]))
+    .await;
+    let unknown = ConfigStore::new(directory.path().join("remote-reader/gateway.json"));
+    assert_eq!(
+        sync::open_remote(&unknown, &remote.client, "glitter.mdbx", &credentials)
+            .await
+            .err(),
+        Some(GatewayError::GlitterUnavailable)
+    );
+    assert!(!unknown.path.exists());
+    assert!(!unknown.path.with_extension("vaults").exists());
+    let requests = remote.server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(remote.files.lock().unwrap().len(), 1);
+    assert_eq!(
+        sync::open_remote(&unknown, &remote.client, "glitter.mdbx", PASSWORD)
+            .await
+            .err(),
+        Some(GatewayError::GlitterUnavailable)
+    );
+    assert!(!unknown.path.exists());
+    assert!(!unknown.path.with_extension("vaults").exists());
+    assert_eq!(remote.server.requests().len(), 2);
+    assert!(
+        remote
+            .server
+            .requests()
+            .iter()
+            .all(|request| request.method == "GET")
+    );
+    assert_eq!(remote.files.lock().unwrap().len(), 1);
+
+    // Even a legacy local binding cannot upload over a remote replaced with Glitter.
+    let legacy = initialized(directory.path(), "legacy-writer");
+    let vault = crate::vault::Vault::open(&legacy.load().unwrap().vault, PASSWORD).unwrap();
+    let vault_id = vault.gateway_binding().unwrap();
+    vault.lock().unwrap();
+    drop(vault);
+    legacy
+        .update(|config| {
+            let mut config = config.unwrap();
+            config.webdav = Some(sync::RemoteBinding {
+                profile: remote.client.profile.clone(),
+                path: "glitter.mdbx".into(),
+                vault_id,
+                etag: Some("\"existing\"".into()),
+                remote_sha256: hex::encode(sha2::Sha256::digest(
+                    std::fs::read(&encrypted).unwrap(),
+                )),
+                local_sha256: "0".repeat(64),
+                last_sync: 0,
+            });
+            Ok((config, ()))
+        })
+        .unwrap();
+    let legacy_config = std::fs::read(&legacy.path).unwrap();
+    let encrypted_before = remote.files.lock().unwrap()["/dav/glitter.mdbx"].clone();
+    assert_eq!(
+        sync::synchronize(&legacy, &remote.client, PASSWORD)
+            .await
+            .err(),
+        Some(GatewayError::GlitterUnavailable)
+    );
+    assert_eq!(std::fs::read(&legacy.path).unwrap(), legacy_config);
+    assert_eq!(
+        remote.files.lock().unwrap()["/dav/glitter.mdbx"],
+        encrypted_before
+    );
+    assert!(
+        remote
+            .server
+            .requests()
+            .iter()
+            .all(|request| matches!(request.method.as_str(), "GET" | "PROPFIND"))
+    );
+}
+
 fn initialized(parent: &Path, name: &str) -> ConfigStore {
     let store = ConfigStore::new(parent.join(name).join("gateway.json"));
     admin::initialize(

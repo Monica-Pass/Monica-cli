@@ -32,7 +32,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
     // Stdio belongs exclusively to MCP in this branch. It must never read
     // management secrets, print CLI JSON, or initialize the terminal manager.
     if let Command::Mcp { client } = &command {
-        if cli.json || cli.secrets_stdin {
+        if cli.json || cli.secrets_stdin || cli.key_file.is_some() {
             return Err(GatewayError::InvalidRequest);
         }
         return serve_mcp(&absolute(client)?).await;
@@ -40,11 +40,29 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
     if matches!(command, Command::Tui) && (cli.json || cli.non_interactive || cli.secrets_stdin) {
         return Err(GatewayError::InvalidRequest);
     }
+    // Reject unsupported profiles before consuming stdin or taking the broker lock.
+    // Public header hints only refuse access; the native engine authenticates after open.
+    match &command {
+        Command::Init {
+            tiga: admin::TigaLevel::Glitter,
+            ..
+        } => return Err(GatewayError::GlitterUnavailable),
+        Command::Open { vault } => {
+            monica_pass_cli::vault::Vault::check_terminal_support(vault)?;
+        }
+        Command::Tiga {
+            command: TigaCommand::Set { level, .. },
+        } => {
+            level.require_terminal_support()?;
+        }
+        _ => {}
+    }
     let mut input = SecretInput::new(
         cli.secrets_stdin,
         cli.non_interactive || cli.json,
         required_fields(command.name()),
     )?;
+    input.set_key_file(cli.key_file.clone());
     if let Command::Commands { topic, summary } = &command {
         return crate::cli_discovery::run(topic, *summary, lang, output);
     }
@@ -58,6 +76,48 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
     let path = cli.config.map(Ok).unwrap_or_else(default_config)?;
     let store = ConfigStore::new(absolute(&path)?);
     match command {
+        Command::Passwords { command } => {
+            use crate::cli::PasswordCommand;
+            use monica_pass_cli::passwords::with_vault;
+            let password = input.password(tr!(lang, PromptPassword))?;
+            let fields = if matches!(command, PasswordCommand::Info { .. }) {
+                None
+            } else {
+                Some(input.take(
+                    SecretField::PasswordFields,
+                    if lang == Language::En {
+                        "Password fields as JSON (hidden): "
+                    } else {
+                        "密码字段 JSON（隐藏输入）："
+                    },
+                )?)
+            };
+            admin::lock_broker(&store).await?;
+            let summary = with_vault(&store, &password, |vault| match &command {
+                PasswordCommand::Create {
+                    id,
+                    title,
+                    category,
+                } => vault.create_password(
+                    *id,
+                    category.as_deref(),
+                    title,
+                    fields.as_deref().unwrap(),
+                ),
+                PasswordCommand::Info { id } => vault.password_summary(id),
+                PasswordCommand::Edit {
+                    id,
+                    expected_head,
+                    title,
+                } => vault.edit_password(
+                    id,
+                    expected_head,
+                    title.as_deref(),
+                    fields.as_deref().unwrap(),
+                ),
+            })?;
+            output.result("passwords", json!(summary), None)?;
+        }
         Command::Call { name, request } => {
             let client = admin::grant_client(&store, &name)?;
             let call = read_json(
@@ -75,7 +135,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             output.result_text("databases", data, Some(human))?;
         }
         Command::Use { id } => {
-            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            let password = input.password(tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;
             monica_pass_cli::databases::switch(&store, &id, &password)?;
             let data = json!({"switched":true,"grants_reset":true});
@@ -84,7 +144,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
         }
         Command::Token { name } => {
             validate_name(&name)?;
-            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            let password = input.password(tr!(lang, PromptPassword))?;
             let token = input.take(SecretField::Token, tr!(lang, PromptToken))?;
             admin::lock_broker(&store).await?;
             admin::update_token(&store, &name, &password, token)?;
@@ -93,7 +153,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             output.result("token", data, None)?;
         }
         Command::RenameCategory { id, title } => {
-            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            let password = input.password(tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;
             monica_pass_cli::library::rename_category(&store, &password, &id, &title)?;
             let data = json!({"id":id,"title":title});
@@ -101,7 +161,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             output.result("rename-category", data, None)?;
         }
         Command::RenameEntry { name, title } => {
-            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            let password = input.password(tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;
             admin::rename_entry(&store, &name, &title, &password)?;
             let data = json!({"name":name,"title":title});
@@ -109,7 +169,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             output.result("rename-entry", data, None)?;
         }
         Command::Library => {
-            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            let password = input.password(tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;
             let library = monica_pass_cli::library::read(&store, &password)?;
             let data = json!(library);
@@ -117,7 +177,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             output.result_text("library", data, Some(human))?;
         }
         Command::Category { title, parent } => {
-            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            let password = input.password(tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;
             let id = monica_pass_cli::library::create_category(
                 &store,
@@ -130,7 +190,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             output.result("category", data, None)?;
         }
         Command::Move { id, target } => {
-            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            let password = input.password(tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;
             monica_pass_cli::library::move_item(&store, &password, &id, &target)?;
             let data = json!({"id":id,"target":target});
@@ -138,7 +198,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             output.result("move", data, None)?;
         }
         Command::Delete { target, force } => {
-            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            let password = input.password(tr!(lang, PromptPassword))?;
             if !force {
                 confirm_deletion(&input, lang, output, &target)?;
             }
@@ -148,7 +208,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             output.result("delete", data, None)?;
         }
         Command::DeleteCategory { id, force } => {
-            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            let password = input.password(tr!(lang, PromptPassword))?;
             if !force {
                 confirm_deletion(&input, lang, output, &id)?;
             }
@@ -178,7 +238,9 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
         Command::Keys { command } => {
             return keys_command(store, command, lang, &mut input, output).await;
         }
-        Command::Tui => return monica_pass_cli::tui::run(store, lang).await,
+        Command::Tui => {
+            return monica_pass_cli::tui::run_with_key_file(store, lang, cli.key_file).await;
+        }
         Command::Language { language } => {
             let saved = if let Some(choice) = language {
                 Preferences { language: choice }.save(&store)?;
@@ -213,14 +275,11 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
         Command::Add { options, serve } => {
             options.validate()?;
             let creating = !store.path.exists();
-            let password = input.take(
-                SecretField::Password,
-                if creating {
-                    tr!(lang, PromptNewPassword)
-                } else {
-                    tr!(lang, PromptPassword)
-                },
-            )?;
+            let password = input.password(if creating {
+                tr!(lang, PromptNewPassword)
+            } else {
+                tr!(lang, PromptPassword)
+            })?;
             let confirmation = if creating {
                 Some(input.confirm(&password, tr!(lang, PromptConfirmPassword))?)
             } else {
@@ -272,7 +331,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
         Command::Note { name, note } => {
             validate_name(&name)?;
             validate_note(&note)?;
-            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            let password = input.password(tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;
             admin::update_note(&store, &name, &note, &password)?;
             output.result("note", json!({"name":name, "note":note}), None)?;
@@ -280,7 +339,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
         }
         Command::Open { vault } => {
             output.note(tr!(lang, CliOpeningLocal));
-            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            let password = input.password(tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;
             let count = monica_pass_cli::sync::open_local(&store, &absolute(&vault)?, &password)?;
             output.result(
@@ -335,7 +394,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             if path.exists() {
                 return Err(GatewayError::AlreadyExists);
             }
-            let password = input.take(SecretField::Password, tr!(lang, PromptNewPassword))?;
+            let password = input.password(tr!(lang, PromptNewPassword))?;
             let confirmation = input.confirm(&password, tr!(lang, PromptConfirmPassword))?;
             let label = admin::initialize_with(
                 &store,
@@ -368,7 +427,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             ));
         }
         Command::Tiga { command } => {
-            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            let password = input.password(tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;
             let (label, report) = match command {
                 TigaCommand::Show => ("tiga show", monica_pass_cli::tiga::show(&store, &password)?),
@@ -401,6 +460,9 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
                 let data = json!(report);
                 let human = (!output.json).then(|| cli_table::render_mdbx_check(&data, lang));
                 output.result_text("mdbx check", data, human)?;
+                if report.terminal_support == "unsupported" {
+                    output.note(tr!(lang, ErrorGlitterUnavailable));
+                }
                 if report.unknown_critical_extensions {
                     output.note(tr!(lang, MdbxUnknownExtensions));
                 } else if report.requires_upgrade {
@@ -448,7 +510,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
                 provider,
             )?
             .to_string();
-            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            let password = input.password(tr!(lang, PromptPassword))?;
             let token = input.take(SecretField::Token, tr!(lang, PromptToken))?;
             admin::lock_broker(&store).await?;
             admin::add_connection_in_category(
@@ -483,7 +545,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
                 &options.operations,
                 connection.provider,
             )?;
-            let password = input.take(SecretField::Password, tr!(lang, PromptGrantPassword))?;
+            let password = input.password(tr!(lang, PromptGrantPassword))?;
             admin::lock_broker(&store).await?;
             let path = admin::issue_grant(&store, &options, &password)?;
             drop(password);
@@ -497,7 +559,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
         }
         Command::Refresh(options) => {
             validate_name(&options.name)?;
-            let password = input.take(SecretField::Password, tr!(lang, PromptGrantPassword))?;
+            let password = input.password(tr!(lang, PromptGrantPassword))?;
             admin::lock_broker(&store).await?;
             let path = admin::refresh_grant(&store, &options, &password)?;
             drop(password);
@@ -515,7 +577,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             output.note(tr!(lang, CliGrantRevoked, name = name));
         }
         Command::Serve => {
-            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            let password = input.password(tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;
             return run_broker(store, password, lang, output).await;
         }
@@ -571,7 +633,7 @@ async fn check(path: PathBuf, output: Output) -> Result<()> {
 
 async fn run_broker(
     store: ConfigStore,
-    password: Zeroizing<String>,
+    password: monica_pass_cli::credentials::VaultCredentials,
     lang: Language,
     output: Output,
 ) -> Result<()> {
@@ -753,7 +815,7 @@ async fn webdav_command(
             output.result_text("webdav list", data, Some(human))?;
         }
         WebDavCommand::Open { path } => {
-            let password = input.take(SecretField::Password, tr!(lang, PromptRemotePassword))?;
+            let password = input.password(tr!(lang, PromptRemotePassword))?;
             admin::lock_broker(&store).await?;
             let cancel = segment::Cancel::default();
             let mut sink = |event: &segment::Event| output.note(lang.segment_progress(event));
@@ -776,7 +838,7 @@ async fn webdav_command(
             }
         }
         WebDavCommand::Publish { path } => {
-            let password = input.take(SecretField::Password, tr!(lang, PromptLocalPassword))?;
+            let password = input.password(tr!(lang, PromptLocalPassword))?;
             admin::lock_broker(&store).await?;
             let result = monica_pass_cli::sync::publish(&store, &client, &path, &password).await?;
             output.result("webdav publish", json!({"result":result}), None)?;
@@ -785,7 +847,7 @@ async fn webdav_command(
             }
         }
         WebDavCommand::Sync => {
-            let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+            let password = input.password(tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;
             let cancel = segment::Cancel::default();
             let mut sink = |event: &segment::Event| output.note(lang.segment_progress(event));
@@ -893,7 +955,7 @@ fn confirm_deletion(
 fn delete_target(
     store: &ConfigStore,
     target: &str,
-    password: &str,
+    password: &(impl monica_pass_cli::credentials::VaultPassword + ?Sized),
     lang: Language,
     output: Output,
 ) -> Result<Value> {
@@ -935,7 +997,7 @@ async fn keys_command(
     output: Output,
 ) -> Result<()> {
     use monica_pass_cli::keys::manage;
-    let password = input.take(SecretField::Password, tr!(lang, PromptPassword))?;
+    let password = input.password(tr!(lang, PromptPassword))?;
     // Confirmed before the broker is stopped: declining a delete should not cost a session.
     if let Some(KeysCommand::Delete {
         entry,

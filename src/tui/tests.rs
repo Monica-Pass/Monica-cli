@@ -1,4 +1,34 @@
 use super::*;
+
+#[test]
+fn tui_vault_forms_carry_the_explicit_key_file_without_storing_it_in_config() {
+    use crate::credentials::VaultPassword;
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = manager_fixture(directory.path());
+    let key = directory.path().join("synthetic.key");
+    std::fs::write(&key, [0x67; 32]).unwrap();
+    app.key_file = Some(key);
+    let mut form = Form::new(Kind::Library, &app);
+    form.fields[0].input = Input::new("synthetic-vault-password", 4096);
+    let Action::Library(credentials) = form.action(&app).unwrap() else {
+        panic!("wrong action")
+    };
+    assert_eq!(credentials.security_key(), Some([0x67; 32].as_slice()));
+    assert_eq!(credentials.as_ref(), "synthetic-vault-password");
+    assert!(form.fields[0].input.value.is_empty());
+    assert!(
+        !serde_json::to_string(&app.config)
+            .unwrap()
+            .contains("synthetic.key")
+    );
+    app.key_file = Some(directory.path().join("missing.key"));
+    let mut form = Form::new(Kind::Unlock, &app);
+    form.fields[0].input = Input::new("synthetic-vault-password", 4096);
+    assert!(matches!(
+        form.action(&app),
+        Err(GatewayError::InvalidKeyFile)
+    ));
+}
 use home::public_field;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;

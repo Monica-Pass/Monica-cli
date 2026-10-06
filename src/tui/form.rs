@@ -787,26 +787,37 @@ impl Form {
         )
     }
 
+    fn vault_password(
+        &mut self,
+        app: &App,
+        index: usize,
+    ) -> Result<crate::credentials::VaultCredentials> {
+        crate::credentials::VaultCredentials::from_key_file(
+            self.secret(index),
+            app.key_file.as_deref(),
+        )
+    }
+
     pub fn action(&mut self, app: &App) -> Result<Action> {
         Ok(match &self.kind {
             Kind::SwitchDatabase { id, .. } => Action::SwitchDatabase {
                 id: id.clone(),
-                password: self.secret(0),
+                password: self.vault_password(app, 0)?,
             },
             Kind::Token(name) => Action::Token {
                 name: name.clone(),
                 token: self.secret(0),
-                password: self.secret(1),
+                password: self.vault_password(app, 1)?,
             },
             Kind::RenameCategory { id, .. } => Action::RenameCategory {
                 id: id.clone(),
                 title: self.text(0).to_owned(),
-                password: self.secret(1),
+                password: self.vault_password(app, 1)?,
             },
             Kind::RenameEntry { name, .. } => Action::RenameEntry {
                 name: name.clone(),
                 title: self.text(0).to_owned(),
-                password: self.secret(1),
+                password: self.vault_password(app, 1)?,
             },
             Kind::Delete { target, expect } => {
                 if self.text(0) != expect {
@@ -814,13 +825,13 @@ impl Form {
                 }
                 Action::Delete {
                     target: target.clone(),
-                    password: self.secret(1),
+                    password: self.vault_password(app, 1)?,
                 }
             }
             Kind::Category(parent) => Action::Category {
                 title: self.text(0).to_owned(),
                 parent: parent.clone(),
-                password: self.secret(1),
+                password: self.vault_password(app, 1)?,
             },
             Kind::Move(id) => {
                 let library = app.library.as_ref().ok_or(GatewayError::UnlockRequired)?;
@@ -835,13 +846,13 @@ impl Form {
                 Action::Move {
                     id: id.clone(),
                     target: matches[0].id.clone(),
-                    password: self.secret(1),
+                    password: self.vault_password(app, 1)?,
                 }
             }
-            Kind::Library => Action::Library(self.secret(0)),
+            Kind::Library => Action::Library(self.vault_password(app, 0)?),
             Kind::Inspect(id) => Action::Inspect {
                 id: id.clone(),
-                password: self.secret(0),
+                password: self.vault_password(app, 0)?,
             },
             Kind::Add { new_vault } => {
                 let creating = *new_vault;
@@ -875,7 +886,7 @@ impl Form {
                 Action::Add {
                     options,
                     token: self.secret(6),
-                    password: self.secret(7),
+                    password: self.vault_password(app, 7)?,
                     confirmation: if creating { Some(self.secret(8)) } else { None },
                 }
             }
@@ -885,7 +896,7 @@ impl Form {
                 Action::Note {
                     name: self.text(0).to_owned(),
                     note: self.text(1).to_owned(),
-                    password: self.secret(2),
+                    password: self.vault_password(app, 2)?,
                 }
             }
             Kind::Init => {
@@ -900,13 +911,13 @@ impl Form {
                 Action::Init {
                     path,
                     port,
-                    password: self.secret(2),
+                    password: self.vault_password(app, 2)?,
                     confirmation: self.secret(3),
                 }
             }
             Kind::OpenLocal => Action::OpenLocal {
                 path: PathBuf::from(self.text(0)),
-                password: self.secret(1),
+                password: self.vault_password(app, 1)?,
             },
             Kind::Connect => {
                 validate_name(self.text(0))?;
@@ -932,7 +943,7 @@ impl Form {
                     base,
                     note: self.text(4).to_owned(),
                     token: self.secret(5),
-                    password: self.secret(6),
+                    password: self.vault_password(app, 6)?,
                 }
             }
             Kind::Grant => {
@@ -999,7 +1010,7 @@ impl Form {
                 };
                 Action::Grant {
                     options,
-                    password: self.secret(7),
+                    password: self.vault_password(app, 7)?,
                 }
             }
             Kind::Login => Action::Login {
@@ -1008,14 +1019,14 @@ impl Form {
             },
             Kind::OpenRemote(path) => Action::OpenRemote {
                 path: path.clone(),
-                password: self.secret(0),
+                password: self.vault_password(app, 0)?,
             },
             Kind::Publish => Action::Publish {
                 path: normalize_path(self.text(0))?,
-                password: self.secret(1),
+                password: self.vault_password(app, 1)?,
             },
-            Kind::Unlock => Action::Unlock(self.secret(0)),
-            Kind::Sync => Action::Sync(self.secret(0)),
+            Kind::Unlock => Action::Unlock(self.vault_password(app, 0)?),
+            Kind::Sync => Action::Sync(self.vault_password(app, 0)?),
             Kind::Revoke => {
                 validate_name(self.text(0))?;
                 Action::Revoke(self.text(0).to_owned())
@@ -1031,7 +1042,7 @@ impl Form {
                         algorithm: self.text(1).to_owned(),
                         comment: self.text(2).to_owned(),
                         note: self.text(3).to_owned(),
-                        password: self.secret(4),
+                        password: self.vault_password(app, 4)?,
                     }
                 } else {
                     validate_note(self.text(2))?;
@@ -1040,7 +1051,7 @@ impl Form {
                         title: self.text(0).to_owned(),
                         note: self.text(2).to_owned(),
                         material: self.secret(1),
-                        password: self.secret(3),
+                        password: self.vault_password(app, 3)?,
                     }
                 }
             }
@@ -1052,7 +1063,7 @@ impl Form {
                     title: self.text(0).to_owned(),
                     note: self.text(2).to_owned(),
                     material: self.secret(1),
-                    password: self.secret(3),
+                    password: self.vault_password(app, 3)?,
                 }
             }
             Kind::EditKey {
@@ -1069,7 +1080,7 @@ impl Form {
                     title: self.text(0).to_owned(),
                     comment: ssh.then(|| self.text(1).to_owned()),
                     note: self.text(note).to_owned(),
-                    password: self.secret(if ssh { 3 } else { 2 }),
+                    password: self.vault_password(app, if ssh { 3 } else { 2 })?,
                 }
             }
         })

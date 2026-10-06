@@ -23,18 +23,25 @@ pub struct ExportedKey {
     pub private: bool,
 }
 
-pub fn list(store: &ConfigStore, password: &str) -> Result<Vec<KeyEntrySummary>> {
+pub fn list(
+    store: &ConfigStore,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
+) -> Result<Vec<KeyEntrySummary>> {
     with_vault(store, password, |vault| vault.key_entries())
 }
 
-pub fn find(store: &ConfigStore, password: &str, name: &str) -> Result<KeyEntrySummary> {
+pub fn find(
+    store: &ConfigStore,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
+    name: &str,
+) -> Result<KeyEntrySummary> {
     with_vault(store, password, |vault| vault.key_entry_by_title(name))
 }
 
 /// Creates a key entry from a freshly generated pair. RSA sizes are the ones Android offers.
 pub fn generate_ssh(
     store: &ConfigStore,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     title: &str,
     note: &str,
     category: Option<&str>,
@@ -48,7 +55,7 @@ pub fn generate_ssh(
 /// Imports an OpenSSH or PKCS#1 PEM file as a new key entry.
 pub fn import_ssh(
     store: &ConfigStore,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     title: &str,
     note: &str,
     category: Option<&str>,
@@ -69,7 +76,7 @@ pub fn import_ssh(
 /// Imports key text a person pasted at the terminal. Same bytes, minus the file.
 pub fn import_ssh_text(
     store: &ConfigStore,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     title: &str,
     note: &str,
     category: Option<&str>,
@@ -87,7 +94,7 @@ pub fn import_ssh_text(
 
 fn add_ssh(
     store: &ConfigStore,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     title: &str,
     note: &str,
     category: Option<&str>,
@@ -102,7 +109,7 @@ fn add_ssh(
 /// Imports an OpenPGP ring. Either armor alone is enough; with both, the two must be one key.
 pub fn import_gpg(
     store: &ConfigStore,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     title: &str,
     note: &str,
     category: Option<&str>,
@@ -154,7 +161,7 @@ pub fn import_gpg(
 /// Imports pasted OpenPGP armor: a secret ring keeps both halves, a public one its certificate.
 pub fn import_gpg_text(
     store: &ConfigStore,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     title: &str,
     note: &str,
     category: Option<&str>,
@@ -178,7 +185,7 @@ pub fn import_gpg_text(
 
 fn add_gpg(
     store: &ConfigStore,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     title: &str,
     note: &str,
     category: Option<&str>,
@@ -201,7 +208,7 @@ fn add_gpg(
 /// Renames, re-notes or re-comments one key entry, addressed by its title.
 pub fn edit(
     store: &ConfigStore,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     name: &str,
     title: Option<&str>,
     note: Option<&str>,
@@ -217,7 +224,7 @@ pub fn edit(
 /// may be the very thing being changed.
 pub fn edit_entry(
     store: &ConfigStore,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     entry_id: &str,
     title: Option<&str>,
     note: Option<&str>,
@@ -230,7 +237,11 @@ pub fn edit_entry(
 
 /// Tombstones one key entry addressed by its title, and hands back what was removed.
 /// Text a person already exported keeps living on disk; only the vault stops carrying it.
-pub fn delete(store: &ConfigStore, password: &str, name: &str) -> Result<KeyEntrySummary> {
+pub fn delete(
+    store: &ConfigStore,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
+    name: &str,
+) -> Result<KeyEntrySummary> {
     with_vault(store, password, |vault| {
         let found = vault.key_entry_by_title(name)?;
         vault.delete_entry(&found.entry_id)?;
@@ -241,13 +252,16 @@ pub fn delete(store: &ConfigStore, password: &str, name: &str) -> Result<KeyEntr
 /// Writes the half a person asked for to the file they named. The only path out of the vault.
 pub fn export(
     store: &ConfigStore,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     name: &str,
     output: &Path,
     with_private: bool,
     force: bool,
 ) -> Result<ExportedKey> {
     let text = with_vault(store, password, |vault| {
+        // Listing keys itself discloses payloads, so enforce egress before even resolving
+        // the requested name, not only in the final text-building helper.
+        vault.require_key_export_allowed()?;
         let found = vault.key_entry_by_title(name)?;
         vault.key_export_text(&found.entry_id)
     })?;
@@ -306,7 +320,7 @@ fn write_key_file(path: &Path, bytes: &[u8], force: bool) -> Result<()> {
 
 fn with_vault<T>(
     store: &ConfigStore,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     act: impl FnOnce(&Vault) -> Result<T>,
 ) -> Result<T> {
     let _guard = store.acquire_broker_lock()?;

@@ -2,13 +2,15 @@
 
 CLI 以 [Monica 跨端存储契约](https://github.com/Monica-Pass/Monica/blob/main/docs/storage/MDBX-CROSS-CLIENT-CONTRACT.zh-CN.md) 为接入要求。MDBX3 是运行时名称，当前可写文件格式为 MDBX-2；对象的 `payload_schema_version` 独立于文件版本。文件打开、加密、提交、删除和同步均使用 MDBX 引擎。
 
+MDBX 引擎保留 Glitter 格式与加密能力，但 Monica CLI 暂不接入。CLI、TUI 和 broker 均拒绝 Glitter 的创建、打开、管理、导出和同步，包括提供正确主密码与密钥的情况；不自动降档、转换或删除已有库。仅保留 `mdbx check` 的只读公开头识别，结果为 `terminal_support: "unsupported"`、`header_authenticated: false`。Sky / Multi / Power 与通用密钥文件能力不变。详见 [Glitter 客户端兼容边界](glitter-compatibility.md)。
+
 ## 对象与编辑
 
 库列表保留所有原生类型、UUID 和 Collection 层级；未知对象不转换为 `login`，不进入 Gateway 或自动填充。通用详情显示原始类型、版本和所属 Collection。
 
-CLI 可编辑的 Adapter 是原生 v1 `api-token` + `monica.gateway.credential.v1`，以及原生 v1 `login` 中受支持的 SSH/GPG 子类型。SSH 内部未来 schema 同样只读。普通移动、删除入口在写入层重新验证 Adapter；未知类型、更高版本及不理解的关键字段都会拒绝。
+CLI 可编辑的 Adapter 是原生 v1 `api-token` + `monica.gateway.credential.v1`，以及原生 v1 `login` 中受支持的 SSH/GPG 子类型和符合 Android 身份约定的 `kind=password`（PASSWORD/WIFI/SSO）。普通密码的本地创建、字段编辑、目录一致性及附件移动限制见 [Android 密码互通](android-passwords.md)。SSH 内部未来 schema 同样只读。普通移动、删除入口在写入层重新验证 Adapter；未知类型、更高版本及不理解的关键字段都会拒绝。
 
-编辑从授权读取的原始 payload 修改指定字段。重命名不重建 payload；SSH 注释保留 `ssh_key_data` / `sshKeyData` 的选择及字符串/对象形状。未知嵌套字段、数组元数据、空字符串、`null`、布尔值和大整数保留。提交事务内核对对象的 head commit、类型、版本与 Collection，过时修改返回 `object_changed`，不会覆盖其他端刚写入的数据。
+编辑从授权读取的原始 payload 修改指定字段。业务 JSON 使用共享核心 `mdbx_core::json`，同时保留精确数字与字面对象键（包括 serde 的特殊内部标记名称），不能直接以 `serde_json::Value` 反序列化替代。重命名不重建 payload；SSH 注释保留 `ssh_key_data` / `sshKeyData` 的选择及字符串/对象形状。未知嵌套字段、数组元数据、空字符串、`null`、布尔值和大整数保留。提交事务内核对对象的 head commit、类型、版本与 Collection，过时修改返回 `object_changed`，不会覆盖其他端刚写入的数据。
 
 ## 本人查看完整字段
 
@@ -40,3 +42,5 @@ Blob 只传密文，校验内容摘要；分段应用后若附件尚未齐全，
 ## 验证
 
 合成回归覆盖未知类型、未来版本、精确数值、失效编辑、策略拒绝、详情隐藏与完整滚动、本地副本、外置附件往返、缺附件后恢复、分段依赖、取消和 HTTP 退避。跨端 fixture 由 CLI 生成，Android 使用其打包的原生库独立读取，再由 CLI 回读 Android 输出。执行结果与尚未通过的环境检查见 [本次验证记录](mdbx-validation-2026-09-28.md)。要求本身不代表某个客户端的全部 Adapter 已通过验收。
+
+2026-09-28 审查修正与复跑方式见 [无损 JSON 与跨端测试修正](mdbx-review-fixes-2026-09-28.md)。

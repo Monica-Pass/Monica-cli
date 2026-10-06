@@ -14,6 +14,8 @@ pub fn required_fields(command: &str) -> &'static [SecretField] {
     use SecretField::*;
     match command {
         "add" | "connect" | "token" => &[Password, Token],
+        "passwords create" | "passwords edit" => &[Password, PasswordFields],
+        "passwords info" => &[Password],
         "init" | "note" | "open" | "grant" | "refresh" | "renew" | "serve" | "library"
         | "category" | "move" | "delete" | "delete-category" | "rename-category"
         | "rename-entry" | "use" | "keys" | "keys ssh" | "keys gpg" | "keys edit"
@@ -29,6 +31,7 @@ pub enum SecretField {
     Password,
     Token,
     WebDavPassword,
+    PasswordFields,
 }
 
 impl SecretField {
@@ -37,6 +40,7 @@ impl SecretField {
             Self::Password => "password",
             Self::Token => "token",
             Self::WebDavPassword => "webdav_password",
+            Self::PasswordFields => "fields",
         }
     }
 }
@@ -52,6 +56,8 @@ struct Secrets {
     token: Option<Zeroizing<String>>,
     #[serde(default, deserialize_with = "secret")]
     webdav_password: Option<Zeroizing<String>>,
+    #[serde(default, deserialize_with = "secret")]
+    fields: Option<Zeroizing<String>>,
 }
 
 fn secret<'de, D: Deserializer<'de>>(
@@ -66,6 +72,7 @@ impl Secrets {
             SecretField::Password => &mut self.password,
             SecretField::Token => &mut self.token,
             SecretField::WebDavPassword => &mut self.webdav_password,
+            SecretField::PasswordFields => &mut self.fields,
         }
     }
 
@@ -86,6 +93,7 @@ impl Secrets {
             SecretField::Password,
             SecretField::Token,
             SecretField::WebDavPassword,
+            SecretField::PasswordFields,
         ] {
             let supplied = secrets.field(field);
             if required.contains(&field) {
@@ -103,6 +111,7 @@ impl Secrets {
 pub struct SecretInput {
     pipe: Option<Secrets>,
     non_interactive: bool,
+    key_file: Option<std::path::PathBuf>,
 }
 
 impl SecretInput {
@@ -124,7 +133,23 @@ impl SecretInput {
         Ok(Self {
             pipe,
             non_interactive,
+            key_file: None,
         })
+    }
+
+    pub fn set_key_file(&mut self, path: Option<std::path::PathBuf>) {
+        self.key_file = path;
+    }
+
+    pub fn password(
+        &mut self,
+        prompt: &str,
+    ) -> Result<monica_pass_cli::credentials::VaultCredentials> {
+        let password = self.take(SecretField::Password, prompt)?;
+        monica_pass_cli::credentials::VaultCredentials::from_key_file(
+            password,
+            self.key_file.as_deref(),
+        )
     }
 
     /// True when secrets arrived through a trusted producer's pipe rather than

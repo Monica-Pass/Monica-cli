@@ -263,6 +263,8 @@ enum Mode {
 }
 
 struct App {
+    // Explicit launch-time public path; key bytes are loaded only for each submitted action.
+    key_file: Option<std::path::PathBuf>,
     inspection: Option<inspector::Viewer>,
     inspection_requested: bool,
     databases: Vec<crate::databases::Database>,
@@ -311,6 +313,7 @@ impl App {
     fn new(store: ConfigStore, language: Language) -> Self {
         let lang = language;
         let mut app = Self {
+            key_file: None,
             inspection: None,
             inspection_requested: false,
             databases: Vec::new(),
@@ -1357,6 +1360,14 @@ impl Drop for ScreenGuard {
 }
 
 pub async fn run(store: ConfigStore, lang: Language) -> Result<()> {
+    run_with_key_file(store, lang, None).await
+}
+
+pub async fn run_with_key_file(
+    store: ConfigStore,
+    lang: Language,
+    key_file: Option<std::path::PathBuf>,
+) -> Result<()> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return Err(GatewayError::HumanTerminalRequired);
     }
@@ -1371,6 +1382,7 @@ pub async fn run(store: ConfigStore, lang: Language) -> Result<()> {
         .clear()
         .map_err(|_| GatewayError::HumanTerminalRequired)?;
     let mut app = App::new(store, lang);
+    app.key_file = key_file;
     let result = event_loop(&mut terminal, &mut app).await;
     let shutdown = app.finish().await;
     result.and(shutdown)

@@ -48,7 +48,12 @@ pub fn describe(name: &str) -> Option<Value> {
         "databases" => ("database", &[], &[("always", "read_public_metadata")]),
         "init" => (
             "database",
-            &["new_vault_path", "broker_stopped", "secure_password_input"],
+            &[
+                "new_vault_path",
+                "broker_stopped",
+                "secure_password_input",
+                "cli_supported_tiga_profile",
+            ],
             &[
                 ("always", "create_vault"),
                 ("always", "write_local_config"),
@@ -351,6 +356,7 @@ pub fn describe(name: &str) -> Option<Value> {
                 "configured_vault",
                 "secure_password_input",
                 "vault_policy_allows_change",
+                "cli_supported_tiga_profile",
                 "reason_when_lowering",
             ],
             &[

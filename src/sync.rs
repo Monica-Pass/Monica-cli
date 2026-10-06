@@ -148,7 +148,10 @@ impl Snapshot {
         Ok(validation)
     }
 
-    fn inspect(&self, password: &str) -> Result<GatewayInventory> {
+    fn inspect(
+        &self,
+        password: &(impl crate::credentials::VaultPassword + ?Sized),
+    ) -> Result<GatewayInventory> {
         let validation = self.validation_path()?;
         let vault = Vault::open(&validation, password)?;
         let inventory = vault.gateway_inventory()?;
@@ -157,12 +160,25 @@ impl Snapshot {
         Ok(inventory)
     }
 
+    fn require_remote_sync_allowed(
+        &self,
+        password: &(impl crate::credentials::VaultPassword + ?Sized),
+    ) -> Result<()> {
+        // Public markers may only deny. The native policy is always checked after unlock.
+        crate::glitter::require_remote_file(&self.path)?;
+        let validation = self.validation_path()?;
+        let vault = Vault::open(&validation, password)?;
+        let allowed = vault.require_remote_sync_allowed();
+        vault.lock()?;
+        allowed
+    }
+
     async fn receive_blobs(
         &self,
         store: &ConfigStore,
         client: &WebDavClient,
         path: &str,
-        password: &str,
+        password: &(impl crate::credentials::VaultPassword + ?Sized),
     ) -> Result<()> {
         let validation = self.validation_path()?;
         let vault = Vault::open(&validation, password)?;
@@ -177,7 +193,7 @@ impl Snapshot {
         store: &ConfigStore,
         client: &WebDavClient,
         path: &str,
-        password: &str,
+        password: &(impl crate::credentials::VaultPassword + ?Sized),
     ) -> Result<()> {
         let validation = self.validation_path()?;
         let vault = Vault::open(&validation, password)?;
@@ -284,7 +300,12 @@ fn replace_vault(
 }
 
 /// Copies an existing vault into managed local storage; the original stays untouched.
-pub fn open_local(store: &ConfigStore, source: &Path, password: &str) -> Result<usize> {
+pub fn open_local(
+    store: &ConfigStore,
+    source: &Path,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
+) -> Result<usize> {
+    crate::glitter::require_terminal_file(source)?;
     let _guard = store.acquire_broker_lock()?;
     let snapshot = Snapshot::new(store, source)?;
     let inventory = snapshot.inspect(password)?;
@@ -307,7 +328,7 @@ pub async fn open_remote(
     store: &ConfigStore,
     client: &WebDavClient,
     path: &str,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
 ) -> Result<usize> {
     open_remote_with_progress(
         store,
@@ -327,16 +348,26 @@ pub async fn open_remote_with_progress(
     store: &ConfigStore,
     client: &WebDavClient,
     path: &str,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     progress: &mut crate::segment::Progress<'_>,
     cancel: &crate::segment::Cancel,
 ) -> Result<usize> {
     let cancellable_client = client.with_cancel(cancel);
     let client = &cancellable_client;
     let _guard = store.acquire_broker_lock()?;
+    // Remote credentials can differ from those of the current vault. Use a deny-only
+    // header hint here rather than authenticating the old vault with a new password.
+    // Unreadable/missing old state must still permit legacy recovery via remote open.
+    if store.load().ok().is_some_and(|config| {
+        crate::glitter::inspect_header(&config.vault).is_ok_and(|hint| hint.is_glitter)
+    }) {
+        return Err(GatewayError::GlitterUnavailable);
+    }
     let mut download = download_file(store)?;
     let revision = client.download(path, &mut download.file).await?;
+    crate::glitter::require_remote_file(download.path())?;
     let snapshot = Snapshot::new(store, download.path())?;
+    snapshot.require_remote_sync_allowed(password)?;
     snapshot
         .receive_blobs(store, client, path, password)
         .await?;
@@ -378,11 +409,12 @@ pub async fn publish(
     store: &ConfigStore,
     client: &WebDavClient,
     path: &str,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
 ) -> Result<SyncResult> {
     let _guard = store.acquire_broker_lock()?;
     let config = store.load()?;
     let snapshot = Snapshot::new(store, &config.vault)?;
+    snapshot.require_remote_sync_allowed(password)?;
     let inventory = snapshot.inspect(password)?;
     snapshot
         .publish_blobs(store, client, path, password)
@@ -494,7 +526,7 @@ async fn segment_sync_managed(client: &WebDavClient, path: &str) -> Result<bool>
 pub async fn synchronize(
     store: &ConfigStore,
     client: &WebDavClient,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
 ) -> Result<SyncOutcome> {
     synchronize_with_progress(
         store,
@@ -511,7 +543,7 @@ pub async fn synchronize(
 pub async fn synchronize_with_progress(
     store: &ConfigStore,
     client: &WebDavClient,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     progress: &mut crate::segment::Progress<'_>,
     cancel: &crate::segment::Cancel,
 ) -> Result<SyncOutcome> {
@@ -521,6 +553,9 @@ pub async fn synchronize_with_progress(
     // Revocation remains allowed; every final config update preserves it.
     let _guard = store.acquire_broker_lock()?;
     let config = store.load()?;
+    // Gate before even listing remote segments, including bindings saved by older builds.
+    let local = Snapshot::new(store, &config.vault)?;
+    local.require_remote_sync_allowed(password)?;
     let mut binding = config
         .webdav
         .clone()
@@ -552,7 +587,6 @@ pub async fn synchronize_with_progress(
             segments: active.then_some(report),
         });
     }
-    let local = Snapshot::new(store, &config.vault)?;
     let local_inventory = local.inspect(password)?;
     if local_inventory.vault_id != binding.vault_id {
         return Err(GatewayError::SyncConflict);
@@ -560,6 +594,9 @@ pub async fn synchronize_with_progress(
     let local_changed = local.sha256 != binding.local_sha256;
     let mut incoming = download_file(store)?;
     let remote = client.download(&binding.path, &mut incoming.file).await?;
+    // A remote file may have been replaced out of band. Never overwrite a detected
+    // Glitter file, even when the configured local vault is a legacy profile.
+    crate::glitter::require_remote_file(incoming.path())?;
     let remote_changed = remote.sha256 != binding.remote_sha256;
     binding.etag = remote.etag.clone();
     binding.last_sync = chrono::Utc::now().timestamp();
@@ -592,6 +629,7 @@ pub async fn synchronize_with_progress(
     }
 
     let incoming = Snapshot::new(store, incoming.path())?;
+    incoming.require_remote_sync_allowed(password)?;
     incoming
         .receive_blobs(store, client, &binding.path, password)
         .await?;

@@ -123,7 +123,11 @@ fn single_entry(entry: &Value) -> Result<(String, Value)> {
 }
 
 fn merge_json(path: &Path, key: &str, name: &str, body: Value) -> Result<Outcome> {
-    let mut root = match read_json::<Value>(path, MAX_CLIENT_FILE_BYTES) {
+    let decoded = read_json::<Box<serde_json::value::RawValue>>(path, MAX_CLIENT_FILE_BYTES)
+        .and_then(|raw| {
+            mdbx_core::json::from_str(raw.get()).map_err(|_| GatewayError::InvalidConfig)
+        });
+    let mut root = match decoded {
         Ok(root) if root.is_object() => root,
         // A file that is not there yet is the easy case: it starts empty.
         Err(GatewayError::StateUnavailable) if !path.exists() => json!({}),
@@ -361,6 +365,8 @@ mod tests {
         let original = serde_json::to_vec_pretty(&json!({
             "theme": "dark",
             "numStartups": 41,
+            "literal": {"$serde_json::private::Number": "123"},
+            "raw": {"$serde_json::private::RawValue": "null"},
             "mcpServers": {"other": {"command": "other-server", "args": []}},
             "projects": {"/srv/app": {"allowedTools": ["Bash"]}}
         }))
@@ -385,7 +391,9 @@ mod tests {
                 .to_string_lossy()
                 .starts_with(".claude.json.monica-")
         );
-        let root: Value = serde_json::from_str(&read(&path)).unwrap();
+        let root: Value = mdbx_core::json::from_str(&read(&path)).unwrap();
+        assert_eq!(root["literal"]["$serde_json::private::Number"], "123");
+        assert_eq!(root["raw"]["$serde_json::private::RawValue"], "null");
         assert_eq!(root["theme"], "dark");
         assert_eq!(root["numStartups"], 41);
         assert_eq!(root["projects"]["/srv/app"]["allowedTools"][0], "Bash");

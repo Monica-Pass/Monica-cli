@@ -237,14 +237,14 @@ pub(crate) async fn synchronize(
     store: &ConfigStore,
     client: &WebDavClient,
     binding: &RemoteBinding,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     progress: &mut Progress<'_>,
     cancel: &Cancel,
 ) -> Result<(Report, Option<crate::vault::GatewayInventory>)> {
     let root = sync_root(binding)?;
-    let device_id = device_id(store)?;
     let vault_path = store.load()?.vault;
     let vault = open_vault(&vault_path, binding, password)?;
+    let device_id = device_id(store)?;
     let mut cursor = load_cursor(store, &binding.vault_id)?.unwrap_or(Cursor {
         vault_id: binding.vault_id.clone(),
         ..Cursor::default()
@@ -286,13 +286,13 @@ pub(crate) async fn bootstrap(
     client: &WebDavClient,
     path: &Path,
     binding: &RemoteBinding,
-    password: &str,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
     progress: &mut Progress<'_>,
     cancel: &Cancel,
 ) -> Result<(Report, crate::vault::GatewayInventory)> {
     let root = sync_root(binding)?;
-    let device_id = device_id(store)?;
     let vault = open_vault(path, binding, password)?;
+    let device_id = device_id(store)?;
     let mut cursor = Cursor {
         vault_id: binding.vault_id.clone(),
         export_base: Some(current_checkpoint(&vault)?),
@@ -324,8 +324,13 @@ pub(crate) async fn bootstrap(
     Ok((report, merged))
 }
 
-fn open_vault(path: &Path, binding: &RemoteBinding, password: &str) -> Result<Vault> {
+fn open_vault(
+    path: &Path,
+    binding: &RemoteBinding,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
+) -> Result<Vault> {
     let vault = Vault::open(path, password)?;
+    vault.require_remote_sync_allowed()?;
     // Also refuses a vault whose attachments live outside the database.
     if vault.gateway_binding()? != binding.vault_id {
         return Err(GatewayError::SyncConflict);

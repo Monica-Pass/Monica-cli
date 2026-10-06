@@ -29,6 +29,9 @@ pub struct Cli {
     /// Read secret fields from one bounded JSON object on stdin, supplied by a trusted process.
     #[arg(long, global = true)]
     pub secrets_stdin: bool,
+    /// Public path to a supported vault's key file; bytes are never stored in configuration.
+    #[arg(long, global = true, value_name = "FILE")]
+    pub key_file: Option<PathBuf>,
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -65,6 +68,12 @@ pub enum Command {
     Keys {
         #[command(subcommand)]
         command: Option<KeysCommand>,
+    },
+    /// Manage Android-compatible passwords locally. Values use secret stdin; viewing stays in the TUI.
+    #[command(hide = true)]
+    Passwords {
+        #[command(subcommand)]
+        command: PasswordCommand,
     },
     /// Browse database categories and entry summaries after unlocking.
     #[command(visible_alias = "tree")]
@@ -185,7 +194,7 @@ pub enum Command {
         /// Label shown by `monica databases`; the file keeps the name you gave it.
         #[arg(long, value_name = "LABEL")]
         name: Option<String>,
-        /// Security profile the vault starts on; `power` is slowest to unlock but hardest to brute force.
+        /// Security profile: sky, multi or power. This client does not support Glitter yet.
         #[arg(long, value_enum, default_value = "multi")]
         tiga: TigaLevel,
     },
@@ -395,10 +404,38 @@ pub enum WebDavCommand {
     Sync,
 }
 
+#[derive(Subcommand)]
+pub enum PasswordCommand {
+    /// Create a password. Reuse the same --id UUID on retries; fields arrive through secret stdin.
+    Create {
+        #[arg(long, value_name = "UUID")]
+        id: uuid::Uuid,
+        #[arg(long)]
+        title: String,
+        #[arg(long, value_name = "CATEGORY_ID")]
+        category: Option<String>,
+    },
+    /// Show native identity, version and Android roundtrip status, without password fields.
+    Info { id: String },
+    /// Merge supplied fields into a password at the expected native head; preserve all other fields.
+    Edit {
+        id: String,
+        #[arg(long, value_name = "COMMIT_ID")]
+        expected_head: String,
+        #[arg(long)]
+        title: Option<String>,
+    },
+}
+
 impl Command {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Call { .. } => "call",
+            Self::Passwords { command } => match command {
+                PasswordCommand::Create { .. } => "passwords create",
+                PasswordCommand::Info { .. } => "passwords info",
+                PasswordCommand::Edit { .. } => "passwords edit",
+            },
             Self::Databases => "databases",
             Self::Use { .. } => "use",
             Self::Token { .. } => "token",

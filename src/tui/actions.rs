@@ -24,62 +24,62 @@ pub(super) enum DeleteTarget {
 pub(super) enum Action {
     Inspect {
         id: String,
-        password: Zeroizing<String>,
+        password: crate::credentials::VaultCredentials,
     },
     SwitchDatabase {
         id: String,
-        password: Zeroizing<String>,
+        password: crate::credentials::VaultCredentials,
     },
     Token {
         name: String,
-        password: Zeroizing<String>,
+        password: crate::credentials::VaultCredentials,
         token: Zeroizing<String>,
     },
     RenameCategory {
         id: String,
         title: String,
-        password: Zeroizing<String>,
+        password: crate::credentials::VaultCredentials,
     },
     RenameEntry {
         name: String,
         title: String,
-        password: Zeroizing<String>,
+        password: crate::credentials::VaultCredentials,
     },
     Category {
         title: String,
         parent: Option<String>,
-        password: Zeroizing<String>,
+        password: crate::credentials::VaultCredentials,
     },
     Move {
         id: String,
         target: String,
-        password: Zeroizing<String>,
+        password: crate::credentials::VaultCredentials,
     },
     Delete {
         target: DeleteTarget,
-        password: Zeroizing<String>,
+        password: crate::credentials::VaultCredentials,
     },
-    Library(Zeroizing<String>),
+    Library(crate::credentials::VaultCredentials),
     Add {
         options: AddOptions,
-        password: Zeroizing<String>,
+        password: crate::credentials::VaultCredentials,
         confirmation: Option<Zeroizing<String>>,
         token: Zeroizing<String>,
     },
     Note {
         name: String,
         note: String,
-        password: Zeroizing<String>,
+        password: crate::credentials::VaultCredentials,
     },
     Init {
         path: PathBuf,
         port: u16,
-        password: Zeroizing<String>,
+        password: crate::credentials::VaultCredentials,
         confirmation: Zeroizing<String>,
     },
     OpenLocal {
         path: PathBuf,
-        password: Zeroizing<String>,
+        password: crate::credentials::VaultCredentials,
     },
     Connect {
         category: Option<String>,
@@ -89,11 +89,11 @@ pub(super) enum Action {
         base: String,
         note: String,
         token: Zeroizing<String>,
-        password: Zeroizing<String>,
+        password: crate::credentials::VaultCredentials,
     },
     Grant {
         options: GrantOptions,
-        password: Zeroizing<String>,
+        password: crate::credentials::VaultCredentials,
     },
     GenerateSsh {
         category: Option<String>,
@@ -101,31 +101,31 @@ pub(super) enum Action {
         algorithm: String,
         comment: String,
         note: String,
-        password: Zeroizing<String>,
+        password: crate::credentials::VaultCredentials,
     },
     ImportSsh {
         category: Option<String>,
         title: String,
         note: String,
         material: Zeroizing<String>,
-        password: Zeroizing<String>,
+        password: crate::credentials::VaultCredentials,
     },
     ImportGpg {
         category: Option<String>,
         title: String,
         note: String,
         material: Zeroizing<String>,
-        password: Zeroizing<String>,
+        password: crate::credentials::VaultCredentials,
     },
     EditKey {
         entry_id: String,
         title: String,
         comment: Option<String>,
         note: String,
-        password: Zeroizing<String>,
+        password: crate::credentials::VaultCredentials,
     },
     Revoke(String),
-    Unlock(Zeroizing<String>),
+    Unlock(crate::credentials::VaultCredentials),
     Lock,
     Login {
         profile: WebDavProfile,
@@ -134,13 +134,13 @@ pub(super) enum Action {
     Browse(String),
     OpenRemote {
         path: String,
-        password: Zeroizing<String>,
+        password: crate::credentials::VaultCredentials,
     },
     Publish {
         path: String,
-        password: Zeroizing<String>,
+        password: crate::credentials::VaultCredentials,
     },
-    Sync(Zeroizing<String>),
+    Sync(crate::credentials::VaultCredentials),
     Probe(PathBuf),
 }
 
@@ -600,7 +600,10 @@ fn opened(count: usize) -> Outcome {
 
 /// The tree and its key rows always travel together: `login_type` lives inside the encrypted
 /// payload, so a plain summary cannot say whether a `login` row is a key.
-fn browse(store: &ConfigStore, password: &str) -> Result<Outcome> {
+fn browse(
+    store: &ConfigStore,
+    password: &(impl crate::credentials::VaultPassword + ?Sized),
+) -> Result<Outcome> {
     let (library, keys) = crate::library::read_with_keys(store, password)?;
     Ok(Outcome::Library {
         library,
@@ -613,12 +616,17 @@ fn browse(store: &ConfigStore, password: &str) -> Result<Outcome> {
 /// row the person just created is already there when the form closes.
 async fn keyed<F>(
     store: ConfigStore,
-    password: Zeroizing<String>,
+    password: crate::credentials::VaultCredentials,
     created: bool,
     act: F,
 ) -> Result<Outcome>
 where
-    F: FnOnce(&ConfigStore, &str) -> Result<crate::vault::KeyEntrySummary> + Send + 'static,
+    F: FnOnce(
+            &ConfigStore,
+            &crate::credentials::VaultCredentials,
+        ) -> Result<crate::vault::KeyEntrySummary>
+        + Send
+        + 'static,
 {
     let (summary, library, keys) = tokio::task::spawn_blocking(move || {
         let summary = act(&store, &password)?;

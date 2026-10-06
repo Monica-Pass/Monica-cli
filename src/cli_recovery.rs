@@ -39,6 +39,21 @@ pub fn recovery(error: GatewayError, command: &str) -> (Value, Message) {
             Message::RecoveryAuthority,
         ),
         ApprovalDenied => ("do_not_retry", vec![], Message::RecoveryDenied),
+        GlitterUnavailable => (
+            "use_compatible_client",
+            vec![],
+            Message::ErrorGlitterUnavailable,
+        ),
+        KeyFileRequired => (
+            "after_key_file_input",
+            vec![format!("monica {command} --help")],
+            Message::ErrorKeyFileRequired,
+        ),
+        InvalidKeyFile => (
+            "after_valid_key_file_input",
+            vec![],
+            Message::ErrorInvalidKeyFile,
+        ),
         ApprovalTimeout => (
             "after_human_approval_same_request",
             vec![],
@@ -66,7 +81,7 @@ pub fn recovery(error: GatewayError, command: &str) -> (Value, Message) {
             vec![format!("monica {command} --help")],
             Message::RecoveryConfirm,
         ),
-        ObjectReadOnly | ObjectPayloadTooLarge => (
+        ObjectReadOnly | ObjectPayloadTooLarge | AttachmentMoveUnsupported => (
             "requires_compatible_client",
             vec![],
             Message::RecoveryInspect,
@@ -135,5 +150,26 @@ mod tests {
         assert_eq!(value["commands"], json!([]));
         let (value, _) = recovery(GatewayError::ConfirmationRequired, "delete");
         assert!(!value["commands"].to_string().contains("--force"));
+    }
+
+    #[test]
+    fn glitter_refusal_never_recommends_creation_or_opening_in_this_client() {
+        let (value, message) = recovery(GatewayError::GlitterUnavailable, "webdav sync");
+        assert_eq!(value["retry"], "use_compatible_client");
+        assert_eq!(value["automatic_retry"], false);
+        assert_eq!(value["commands"], json!([]));
+        assert_eq!(
+            serde_json::to_value(GatewayError::GlitterUnavailable).unwrap(),
+            "glitter_unavailable"
+        );
+        let english = render(&value, message, Language::En);
+        let chinese = render(&value, message, Language::ZhCn);
+        assert!(english.contains("client that explicitly supports Glitter"));
+        assert!(chinese.contains("明确支持 Glitter 的客户端"));
+        for rendered in [&english, &chinese] {
+            assert!(!rendered.contains("Monica for Android"));
+            assert!(!rendered.contains("monica open"));
+            assert!(!rendered.contains("monica init"));
+        }
     }
 }

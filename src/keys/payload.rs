@@ -138,7 +138,7 @@ pub fn edit_ssh_comment(payload: &mut Value, comment: &str) -> Result<()> {
         .ok_or(GatewayError::InvalidKeyMaterial)?;
     let is_string = payload[key].is_string();
     let mut inner = if let Some(raw) = payload[key].as_str() {
-        serde_json::from_str(raw).map_err(|_| GatewayError::InvalidKeyMaterial)?
+        mdbx_core::json::from_str(raw).map_err(|_| GatewayError::InvalidKeyMaterial)?
     } else {
         payload[key].clone()
     };
@@ -278,7 +278,7 @@ impl SshKeyData {
             return Ok(None);
         }
         let value: Value =
-            serde_json::from_str(raw).map_err(|_| GatewayError::InvalidKeyMaterial)?;
+            mdbx_core::json::from_str(raw).map_err(|_| GatewayError::InvalidKeyMaterial)?;
         let data = Self::from_value(&value)?;
         Ok((!data.is_empty()).then_some(data))
     }
@@ -672,7 +672,7 @@ mod tests {
         .unwrap();
         for key in [SSH_KEY_FIELD, SSH_KEY_FIELD_ALIAS] {
             for string_shape in [false, true] {
-                let mut inner: Value = serde_json::from_str(r#"{"keySize":null,"future":{"big":123456789012345678901234567890,"items":[false,"",null]}}"#).unwrap();
+                let mut inner: Value = mdbx_core::json::from_str(r#"{"keySize":null,"future":{"literal":{"$serde_json::private::Number":"123"},"big":123456789012345678901234567890,"items":[false,"",null]}}"#).unwrap();
                 inner["publicKeyOpenSsh"] = json!(pair.public_key_openssh);
                 let original = inner.clone();
                 let mut outer = json!({"unrelated": null});
@@ -684,7 +684,7 @@ mod tests {
                 edit_ssh_comment(&mut outer, "new").unwrap();
                 assert_eq!(outer[key].is_string(), string_shape);
                 let patched: Value = if string_shape {
-                    serde_json::from_str(outer[key].as_str().unwrap()).unwrap()
+                    mdbx_core::json::from_str(outer[key].as_str().unwrap()).unwrap()
                 } else {
                     outer[key].clone()
                 };

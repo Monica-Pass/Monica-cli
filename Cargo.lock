@@ -1591,6 +1591,7 @@ dependencies = [
  "roxmltree",
  "rpassword",
  "rsa",
+ "rusqlite",
  "schemars",
  "serde",
  "serde_json",
