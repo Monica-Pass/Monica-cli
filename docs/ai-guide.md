@@ -1,5 +1,7 @@
 # Monica CLI 使用说明（AI 侧）
 
+模型客户端可使用 [OpenAI / Anthropic 本地中转](model-proxy.md)：bind → grant model-list/model-invoke → proxy-config → serve。本地 Key 只访问绑定的模型接口；受信客户端读取私有配置文件，上游 Key 不进入模型上下文。
+
 **简体中文** · 人工手册见 [human-guide.md](human-guide.md)
 
 MDBX 兼容边界：未知类型和未来版本仍保存在库中，但没有通用 payload 的 JSON/MCP 读取入口。普通编辑、移动和删除可能返回 `object_read_only`；`object_changed` 要求重新读取摘要并由人重新核对。`blob_unavailable` / `sync_cancelled` 表示同步没有全部确认，先检查 `webdav status`，不要删除同步游标或强制覆盖。完整规则见 [跨端兼容](mdbx-compatibility.md)。

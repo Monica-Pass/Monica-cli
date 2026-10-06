@@ -1,5 +1,7 @@
 # Monica CLI 人工使用手册
 
+使用 Android 已保存的 API Key 代理模型请求，请按 [本地模型中转](model-proxy.md) 绑定条目、生成本地地址和 Key。代理时长可显式设置，Tiga 的新鲜认证要求仍独立生效。
+
 **简体中文** · 概览见 [README](../README.md) · AI 侧文档见 [给 AI 的使用说明](ai-guide.md)
 
 本手册面向**使用 Monica CLI 的人**：如何建库、如何存 Token、如何设计一份授权、如何把它接到 AI 客户端、出错时该做什么。第 4 节专门讲 AI 接入，第 11 节是排障对照表。

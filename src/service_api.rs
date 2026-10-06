@@ -181,6 +181,8 @@ impl ApiArgs {
             if matches!(
                 lower,
                 "authorization"
+                    | "x-api-key"
+                    | "api-key"
                     | "private-token"
                     | "job-token"
                     | "deploy-token"

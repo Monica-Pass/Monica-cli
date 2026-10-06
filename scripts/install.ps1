@@ -17,7 +17,12 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if ($env:OS -ne 'Windows_NT') { throw 'This installer requires Windows.' }
 if ([string]::IsNullOrWhiteSpace($Source)) {
-    $Source = Join-Path $PSScriptRoot '..\target\release\monica-pass.exe'
+    $bundledSource = Join-Path $PSScriptRoot '..\monica-pass.exe'
+    $Source = if (Test-Path -LiteralPath $bundledSource -PathType Leaf) {
+        $bundledSource
+    } else {
+        Join-Path $PSScriptRoot '..\target\release\monica-pass.exe'
+    }
 }
 if (-not [System.IO.Path]::IsPathRooted($InstallDir)) {
     throw 'InstallDir must be an absolute path.'

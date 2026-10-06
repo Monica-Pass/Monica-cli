@@ -136,8 +136,36 @@ fn cli_rejects_glitter_create_open_and_management_without_secret_or_file_changes
     let key = dir.path().join("synthetic.key");
     std::fs::write(&key, [0x75; 32]).unwrap();
     let store = ConfigStore::new(dir.path().join("gateway.json"));
+    let entry_id = uuid::Uuid::new_v4().to_string();
     store
-        .update(|_| Ok((Config::new(path.clone()), ())))
+        .update(|_| {
+            use monica_pass_cli::api_keys::{
+                ApiKeyBinding, ApiProtocol, Authentication, SourceFormat,
+            };
+            use monica_pass_cli::config::Connection;
+            use monica_pass_cli::model::Provider;
+            let mut config = Config::new(path.clone());
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            config
+                .listen
+                .set_port(listener.local_addr().unwrap().port());
+            config.connections.insert(
+                "synthetic-model".into(),
+                Connection {
+                    provider: Provider::ApiKey,
+                    credential_id: entry_id.clone(),
+                    api_base: "https://models.example.test/v1/".into(),
+                    note: String::new(),
+                    api_key: Some(ApiKeyBinding {
+                        format: SourceFormat::AndroidApiKey,
+                        protocol: ApiProtocol::Anthropic,
+                        auth: Authentication::XApiKey,
+                        head_commit_id: "synthetic-head".into(),
+                    }),
+                },
+            );
+            Ok((config, ()))
+        })
         .unwrap();
     let config_before = std::fs::read(&store.path).unwrap();
     let file_before = std::fs::read(&path).unwrap();
@@ -151,6 +179,26 @@ fn cli_rejects_glitter_create_open_and_management_without_secret_or_file_changes
         ],
         vec!["open", "native.mdbx"],
         vec!["library"],
+        vec!["bind", "new-binding", "--entry", &entry_id],
+        vec!["unbind", "synthetic-model"],
+        vec![
+            "direct-config",
+            "saved",
+            "synthetic-model",
+            "--client",
+            "claude",
+            "--model",
+            "synthetic-model",
+            "--output",
+            "must-not-configure.json",
+        ],
+        vec![
+            "serve",
+            "--proxy-grant",
+            "synthetic-grant",
+            "--session-minutes",
+            "1",
+        ],
         vec!["tiga", "show"],
         vec!["tiga", "set", "multi", "--reason", "must not downgrade"],
         vec![
@@ -196,4 +244,5 @@ fn cli_rejects_glitter_create_open_and_management_without_secret_or_file_changes
     }
     assert!(!dir.path().join("not-created").exists());
     assert!(!dir.path().join("must-not-export.key").exists());
+    assert!(!dir.path().join("must-not-configure.json").exists());
 }

@@ -2,6 +2,20 @@
 (function (root) {
   'use strict';
   const labels = {
+    secure_token_input: '隐藏提示或可信 stdin 输入原始 Key',
+    explicit_client_file: '显式指定 Codex 或 Claude Code 配置文件',
+    tiga_export_allowed: 'Tiga 同时允许导出和读取凭据',
+    write_direct_client_config: '写入原始 Key 与上游地址；直连不受 Monica 授权期限或撤销限制',
+    backup_client_config: '先保存私有备份，再合并修改客户端配置',
+    changed_existing_file: '已有文件的内容需要改变时',
+    existing_api_key_entry: '当前库中受支持的 Android API Key 或原生 API Token',
+    bind_existing_api_key: '授权读取指定条目，固定认证方式与来源版本；保留原条目',
+    remove_api_key_binding: '解除本地连接绑定，保留 Android 原条目',
+    write_proxy_client_config: '保存本地代理地址和有期限的本地 Key；不包含上游 Key',
+    bounded_broker_session: '代理默认 5 分钟，可显式设置 1–1440 分钟；Tiga 和授权期限独立生效',
+    authorize_local_model_session: '本人明确批准指定模型授权的本机会话；保留 Tiga 绝对期限、锁库和撤销限制',
+    service_tool_grant: '授权为服务工具', model_proxy_grant: '授权为模型中转',
+    print_proxy_config_hint: '提示用 proxy-config 生成本地地址和 Key 文件',
     command: '命令路径', grant: 'AI 授权名 GRANT', vault: '当前保险库', connection: '连接标识 CONNECTION',
     database: '已登记数据库', database_id: '数据库 ID', vault_file: '数据库文件',
     connection_and_same_named_grant: '连接与同名授权（add 的快捷规则）',

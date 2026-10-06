@@ -41,6 +41,11 @@
       "id": "sync",
       "label": "WebDAV 同步",
       "hint": "和手机上的 Monica 共用一份库"
+    },
+    {
+      "id": "models",
+      "label": "本地模型中转",
+      "hint": "用 Android 已存 Key 代理 OpenAI / Anthropic"
     }
   ],
   "commands": {
@@ -466,7 +471,7 @@
     },
     "serve": {
       "group": "start",
-      "summaryZh": "解锁并在前台跑起本地网关：AI 的每一次调用都要经过它。",
+      "summaryZh": "解锁并运行代理，默认 5 分钟；Tiga 和授权期限独立生效。",
       "whenToUse": "要让已接入的 AI 客户端真的能调用时。",
       "examples": [
         {
@@ -475,11 +480,18 @@
           "tested": true,
           "out": "Gateway ready at http://127.0.0.1:47831/. Keep this human terminal open.\nThe session locks after five minutes. Ctrl+C or 'monica-pass lock' also stops the gateway.",
           "capturedAt": "此前版本快照"
+        },
+        {
+          "cmd": "monica serve --proxy-grant my-model-client --session-minutes 60",
+          "note": "明确批准指定模型授权的一小时代理；不延长普通秘密读取，Multi 默认仍有两小时绝对上限。",
+          "secrets": "{\"password\":\"<主密码>\"}",
+          "tested": false,
+          "reason": "此处使用说明性名称与 UUID；功能由临时 MDBX 和模拟上游回归覆盖，未为这条展示命令采集输出。"
         }
       ],
       "pitfalls": [
         "先用 mcp-config GRANT --install CLIENT 配置 AI，再执行 serve；在另一个终端运行 check GRANT。",
-        "会话最长 5 分钟，到期需由人重新解锁，不改变授权窗口。",
+        "默认时长 5 分钟；模型代理用 --proxy-grant 与 --session-minutes 显式批准，受 Tiga 绝对期限和授权预算约束。",
         "需要访问保险库的管理操作会先停止并排空代理；完成后重新 serve。端口被其他进程占用时先检查。",
         "旧别名 s / u / unlock 保持兼容。"
       ]
@@ -780,6 +792,13 @@
           "tested": true,
           "out": "Grant  Handle  Scope  Operations  Expires           Calls      Gate\napi-ro  work    *      api_read    2026-09-23 09:57  unlimited  off",
           "capturedAt": "此前版本快照"
+        },
+        {
+          "cmd": "monica grant my-model-client --connection work-ai --repo \"*\" --operation model-list --operation model-invoke --ttl-minutes 240 --max-calls 1000",
+          "note": "模型专用权限；无法调用通用 API 或 Issue 工具。接着运行 proxy-config。",
+          "secrets": "{\"password\":\"<主密码>\"}",
+          "tested": false,
+          "reason": "此处使用说明性名称与 UUID；功能由临时 MDBX 和模拟上游回归覆盖，未为这条展示命令采集输出。"
         }
       ],
       "pitfalls": [
@@ -1518,6 +1537,95 @@
       "pitfalls": [
         "没绑定过就直接拒。分段同步的进度与中断规则见 docs/segment-sync.md。别名 s。",
         "分段和引用 Blob 都确认后才推进游标；缺附件可在恢复后重试。429/503 最多尝试 3 次，等待预算 30 秒，取消立即传播。"
+      ]
+    },
+    "bind": {
+      "group": "models",
+      "summaryZh": "绑定 MDBX 中已有的 Android API Key；固定协议和来源版本，保留原条目。",
+      "whenToUse": "模型客户端需要通过 Monica 使用已有 Key 时。",
+      "examples": [
+        {
+          "cmd": "monica bind work-ai --entry 123e4567-e89b-42d3-a456-426614174000 --protocol openai --note \"编程助手\"",
+          "note": "主密码在终端输入；UUID 来自 library，不需重新输入上游 Key。",
+          "secrets": "{\"password\":\"<主密码>\"}",
+          "tested": false,
+          "reason": "此处使用说明性名称与 UUID；功能由临时 MDBX 和模拟上游回归覆盖，未为这条展示命令采集输出。"
+        },
+        {
+          "cmd": "monica bind work-claude --entry 123e4567-e89b-42d3-a456-426614174001 --protocol anthropic",
+          "note": "Anthropic 默认向上游注入 x-api-key。",
+          "tested": false,
+          "reason": "此处使用说明性名称与 UUID；功能由临时 MDBX 和模拟上游回归覆盖，未为这条展示命令采集输出。"
+        }
+      ]
+    },
+    "proxy-config": {
+      "group": "models",
+      "summaryZh": "将本地地址和可撤销的本地 Key 写入私有文件；不输出上游 Key。",
+      "whenToUse": "为模型授权生成客户端配置；renew 后用 --force 更新原文件。",
+      "examples": [
+        {
+          "cmd": "monica proxy-config my-model-client --output ./model-client.json",
+          "note": "先 grant model-list/model-invoke；客户端读取 base_url/api_key，文件应放在版本库外。",
+          "tested": false,
+          "reason": "此处使用说明性名称与 UUID；功能由临时 MDBX 和模拟上游回归覆盖，未为这条展示命令采集输出。"
+        }
+      ]
+    },
+    "unbind": {
+      "group": "models",
+      "summaryZh": "解除本地 API Key 连接并撤销相关授权，保留 Android 原条目。",
+      "whenToUse": "不再用这个连接中转模型请求时。",
+      "examples": [
+        {
+          "cmd": "monica unbind work-ai",
+          "note": "只移除本地绑定和授权。",
+          "secrets": "{\"password\":\"<主密码>\"}",
+          "tested": false,
+          "reason": "此处使用说明性名称与 UUID；功能由临时 MDBX 和模拟上游回归覆盖，未为这条展示命令采集输出。"
+        }
+      ]
+    },
+    "direct-config": {
+      "group": "models",
+      "summaryZh": "选择手动输入或已保存的 Key，生成客户端直连配置。",
+      "whenToUse": "选择手动输入或已保存的 Key，生成客户端直连配置。",
+      "examples": [
+        {
+          "cmd": "monica direct-config",
+          "note": "需选择 manual 或 saved 子命令；直连文件包含原始 Key，不受 Monica 代理授权限制。",
+          "teachesError": true,
+          "tested": false,
+          "reason": "示例使用说明性连接名和模型名；自动测试使用临时保险库和合成凭据。"
+        }
+      ]
+    },
+    "direct-config manual": {
+      "group": "models",
+      "summaryZh": "手动输入原始 Key 和 HTTPS 地址，不需要保险库。",
+      "whenToUse": "手动输入原始 Key 和 HTTPS 地址，不需要保险库。",
+      "examples": [
+        {
+          "cmd": "monica direct-config manual --client codex --api-base https://models.example.test --model YOUR_MODEL --output ./codex-direct/config.toml",
+          "note": "Key 通过隐藏提示或可信 stdin 的 token 字段注入，不能写在参数中。",
+          "secrets": "{\"token\":\"<原始 Key>\"}",
+          "tested": false,
+          "reason": "示例使用说明性连接名和模型名；自动测试使用临时保险库和合成凭据。"
+        }
+      ]
+    },
+    "direct-config saved": {
+      "group": "models",
+      "summaryZh": "验证主密码和 Tiga 导出权限后使用已绑定的 API Key。",
+      "whenToUse": "验证主密码和 Tiga 导出权限后使用已绑定的 API Key。",
+      "examples": [
+        {
+          "cmd": "monica direct-config saved work-ai --client claude --model YOUR_MODEL --output ./claude-direct/settings.json",
+          "note": "连接须绑定为 anthropic；stdin 只需要 password。原条目保持不变，配置包含真实 Key。",
+          "secrets": "{\"password\":\"<主密码>\"}",
+          "tested": false,
+          "reason": "示例使用说明性连接名和模型名；自动测试使用临时保险库和合成凭据。"
+        }
       ]
     }
   },

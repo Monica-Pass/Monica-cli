@@ -116,6 +116,7 @@ async fn call_tool(
 }
 
 fn router(gateway: Arc<Gateway>, address: SocketAddrV4) -> Router {
+    let proxy = crate::ai_proxy::router(gateway.clone(), address);
     let state = BrokerState {
         gateway,
         host: address.to_string(),
@@ -127,6 +128,7 @@ fn router(gateway: Arc<Gateway>, address: SocketAddrV4) -> Router {
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), boundary))
         .with_state(state)
+        .merge(proxy)
 }
 
 /// A human-owned process is the sole holder of the unlocked vault. The loopback
@@ -174,8 +176,9 @@ pub async fn serve_broker(
 }
 
 fn tools_for(grant: &Grant, binding: &Connection) -> Result<Vec<Tool>> {
-    let mut tools = grant.operations.iter().map(|operation| {
+    let mut tools = grant.operations.iter().filter(|op| !op.is_proxy()).map(|operation| {
         let (schema, description) = match operation {
+            Operation::ModelList | Operation::ModelInvoke => return Err(GatewayError::PermissionDenied),
             Operation::ListIssues => (schemars::schema_for!(ListIssuesArgs), "List issues in an authorized repository. Pull requests are excluded."),
             Operation::GetIssue => (schemars::schema_for!(GetIssueArgs), "Read one issue, including its body, in an authorized repository."),
             Operation::CreateIssue => (schemars::schema_for!(CreateIssueArgs), "Create an issue. This writes to the remote service. Use one UUID request_id per intended write and reuse it for retries. If the outcome is unknown, inspect the repository before attempting a new write."),
@@ -183,6 +186,9 @@ fn tools_for(grant: &Grant, binding: &Connection) -> Result<Vec<Tool>> {
         };
         let mut schema = serde_json::to_value(schema).map_err(|_| GatewayError::StateUnavailable)?;
         if operation.is_api() {
+            if binding.provider == crate::model::Provider::ApiKey {
+                schema["properties"]["api"] = json!({"type":"string", "enum":["rest"], "default":"rest"});
+            }
             schema["properties"]["method"]["enum"] = if operation.is_write() {
                 json!(["POST", "PUT", "PATCH", "DELETE"])
             } else { json!(["GET", "HEAD", "OPTIONS"]) };
@@ -262,6 +268,7 @@ impl McpBridge {
                     && [
                         crate::model::Provider::Github,
                         crate::model::Provider::Gitlab,
+                        crate::model::Provider::ApiKey,
                     ]
                     .into_iter()
                     .any(|provider| op.tool_name(provider) == call.tool)

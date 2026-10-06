@@ -48,6 +48,7 @@ pub struct Reply {
     pub omit_length: bool,
     pub delay: Duration,
     pub headers: Vec<(String, String)>,
+    pub stream_chunks: Vec<(Duration, Vec<u8>)>,
 }
 
 impl Reply {
@@ -60,6 +61,7 @@ impl Reply {
             omit_length: false,
             delay: Duration::ZERO,
             headers: Vec::new(),
+            stream_chunks: Vec::new(),
         }
     }
 
@@ -174,12 +176,25 @@ impl FakeUpstream {
                 if reply.disconnect {
                     continue;
                 }
-                let mut head = format!(
-                    "HTTP/1.1 {} Fixture\r\nContent-Type: application/json\r\nConnection: close\r\n",
-                    reply.status
-                );
+                let mut head =
+                    format!("HTTP/1.1 {} Fixture\r\nConnection: close\r\n", reply.status);
+                if !reply
+                    .headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+                {
+                    head.push_str("Content-Type: application/json\r\n");
+                }
                 if !reply.omit_length {
-                    head.push_str(&format!("Content-Length: {}\r\n", reply.body.len()));
+                    head.push_str(&format!(
+                        "Content-Length: {}\r\n",
+                        reply.body.len()
+                            + reply
+                                .stream_chunks
+                                .iter()
+                                .map(|(_, bytes)| bytes.len())
+                                .sum::<usize>()
+                    ));
                 }
                 if let Some(location) = reply.location {
                     head.push_str(&format!("Location: {location}\r\n"));
@@ -190,6 +205,12 @@ impl FakeUpstream {
                 head.push_str("\r\n");
                 let _ = reader.get_mut().write_all(head.as_bytes()).await;
                 let _ = reader.get_mut().write_all(&reply.body).await;
+                for (delay, bytes) in reply.stream_chunks {
+                    tokio::time::sleep(delay).await;
+                    if reader.get_mut().write_all(&bytes).await.is_err() {
+                        break;
+                    }
+                }
                 let _ = reader.get_mut().shutdown().await;
             }
         });
@@ -328,6 +349,7 @@ impl Fixture {
 
 pub fn issue(provider: Provider, number: u64) -> Value {
     match provider {
+        Provider::ApiKey => panic!("API-key services do not have Issue tools"),
         Provider::Github => {
             json!({"number":number, "title":"Fixture issue", "state":"open", "body":"Private fixture body", "html_url":"https://github.com/example/project/issues/42", "ignored":"not forwarded"})
         }

@@ -313,7 +313,7 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
                 path = path.with_extension("mcp.json").display()
             ));
             if serve {
-                return run_broker(store, password, lang, output).await;
+                return run_broker(store, password, lang, output, 5, vec![]).await;
             }
             output.note(tr!(lang, CliNextServe));
         }
@@ -495,6 +495,61 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
                 }
             }
         },
+        Command::Bind(options) => {
+            let password = input.password(tr!(lang, PromptPassword))?;
+            admin::lock_broker(&store).await?;
+            let (binding, revoked) = monica_pass_cli::api_keys::bind(&store, &options, &password)?;
+            output.result("bind", json!({"name":options.name, "entry_id":binding.credential_id,
+                "provider":binding.provider, "api_base":binding.api_base, "protocol":options.protocol,
+                "authentication":binding.api_key.as_ref().map(|s| s.auth),
+                "note":binding.note, "grants_revoked":revoked, "source_preserved":true}), None)?;
+        }
+        Command::ProxyConfig {
+            name,
+            output: path,
+            force,
+        } => {
+            let data = monica_pass_cli::ai_proxy::write_client_config(&store, &name, &path, force)?;
+            output.result("proxy-config", data, None)?;
+        }
+        Command::DirectConfig { command } => {
+            use monica_pass_cli::direct_config::{self, Command as Direct};
+            let (action, data) = match command {
+                Direct::Manual {
+                    options,
+                    api_base,
+                    auth,
+                } => {
+                    if direct_config::same_file(&absolute(&options.output)?, &store.path) {
+                        return Err(GatewayError::InvalidRequest);
+                    }
+                    let token = input.take(SecretField::Token, tr!(lang, PromptToken))?;
+                    (
+                        "direct-config manual",
+                        direct_config::manual(&options, &api_base, auth, &token)?,
+                    )
+                }
+                Direct::Saved { name, options } => {
+                    let password = input.password(tr!(lang, PromptPassword))?;
+                    admin::lock_broker(&store).await?;
+                    (
+                        "direct-config saved",
+                        direct_config::saved(&store, &name, &options, &password)?,
+                    )
+                }
+            };
+            output.result(action, data, None)?;
+        }
+        Command::Unbind { name } => {
+            let password = input.password(tr!(lang, PromptPassword))?;
+            admin::lock_broker(&store).await?;
+            let revoked = monica_pass_cli::api_keys::unbind(&store, &name, &password)?;
+            output.result(
+                "unbind",
+                json!({"name":name, "grants_revoked":revoked, "source_preserved":true}),
+                None,
+            )?;
+        }
         Command::Connect {
             category,
             name,
@@ -549,6 +604,10 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             admin::lock_broker(&store).await?;
             let path = admin::issue_grant(&store, &options, &password)?;
             drop(password);
+            if options.operations.iter().any(|op| op.is_proxy()) {
+                output.result("grant", json!({"name":options.name,"client_file":path,"proxy_config":format!("monica proxy-config {} --output <PRIVATE_FILE>", options.name)}), None)?;
+                return Ok(());
+            }
             let settings = admin::mcp_settings(&options.name, &path)?;
             output.result(
                 "grant",
@@ -563,6 +622,15 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             admin::lock_broker(&store).await?;
             let path = admin::refresh_grant(&store, &options, &password)?;
             drop(password);
+            if store
+                .load()?
+                .grants
+                .iter()
+                .any(|g| g.name == options.name && g.operations.iter().any(|op| op.is_proxy()))
+            {
+                output.result("refresh", json!({"name":options.name,"client_file":path,"proxy_config":format!("monica proxy-config {} --output <PRIVATE_FILE> --force", options.name)}), None)?;
+                return Ok(());
+            }
             let settings = admin::mcp_settings(&options.name, &path)?;
             output.result(
                 "refresh",
@@ -576,10 +644,13 @@ pub async fn run(cli: Cli, lang: Language) -> Result<()> {
             output.result("revoke", json!({"name":name, "revoked":true}), None)?;
             output.note(tr!(lang, CliGrantRevoked, name = name));
         }
-        Command::Serve => {
+        Command::Serve {
+            session_minutes,
+            proxy_grants,
+        } => {
             let password = input.password(tr!(lang, PromptPassword))?;
             admin::lock_broker(&store).await?;
-            return run_broker(store, password, lang, output).await;
+            return run_broker(store, password, lang, output, session_minutes, proxy_grants).await;
         }
         Command::Lock => {
             if !store.path.is_file() {
@@ -636,17 +707,37 @@ async fn run_broker(
     password: monica_pass_cli::credentials::VaultCredentials,
     lang: Language,
     output: Output,
+    session_minutes: u32,
+    proxy_grants: Vec<String>,
 ) -> Result<()> {
-    let mut session = BrokerSession::start(store.clone(), password).await?;
+    let mut session = BrokerSession::start_with_proxy_grants(
+        store.clone(),
+        password,
+        session_minutes,
+        proxy_grants,
+    )
+    .await?;
     let config = store.load()?;
     let address = config.listen;
     output.event(
         "serve",
         "ready",
-        json!({"listen":address, "session_seconds":300}),
+        json!({"listen":address, "session_seconds":u64::from(session_minutes) * 60, "proxy_sessions":session.proxy_sessions()}),
     )?;
     output.note(tr!(lang, CliBrokerReady, address = address));
-    output.note(tr!(lang, CliSessionLifetime));
+    output.note(tr!(lang, CliSessionLifetime, minutes = session_minutes));
+    for info in session.proxy_sessions().as_array().into_iter().flatten() {
+        let expires = info["expires_at_unix"].as_i64().unwrap_or_default();
+        let expires = chrono::DateTime::from_timestamp(expires, 0)
+            .map(|time| time.with_timezone(&chrono::Local).to_rfc3339())
+            .unwrap_or_default();
+        output.note(tr!(
+            lang,
+            CliProxySession,
+            grant = info["grant"].as_str().unwrap_or_default(),
+            expires = expires
+        ));
+    }
     let gated = config
         .grants
         .iter()

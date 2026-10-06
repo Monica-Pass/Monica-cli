@@ -83,6 +83,7 @@ pub(crate) struct GatewayInventory {
     pub vault_id: String,
     pub collection_id: Option<String>,
     pub connections: BTreeMap<String, Connection>,
+    pub api_key_heads: BTreeMap<String, ObjectSummary>,
 }
 
 /// Why a payload is being decrypted. The two purposes never share a size limit or a type check,
@@ -423,6 +424,7 @@ impl Vault {
         Ok((
             collection,
             Connection {
+                api_key: None,
                 provider,
                 credential_id,
                 api_base,
@@ -433,6 +435,9 @@ impl Vault {
 
     /// Called only after the gateway grant and repository have been checked.
     pub(crate) fn credential(&self, binding: &Connection, now: i64) -> Result<Credential> {
+        if binding.api_key.is_some() {
+            return self.bound_api_key(binding, now);
+        }
         let (mut stored, _) = self.reveal_stored(binding, now)?;
         Ok(Credential {
             token: Zeroizing::new(std::mem::take(&mut stored.token)),
@@ -452,7 +457,7 @@ impl Vault {
         let disclosed = self.reveal(&binding.credential_id, RevealPurpose::GatewayToken, now)?;
         let stored: StoredCredential = serde_json::from_slice(&disclosed.payload)
             .map_err(|_| GatewayError::CredentialUnavailable)?;
-        if stored.schema != CREDENTIAL_SCHEMA {
+        if stored.schema != CREDENTIAL_SCHEMA || stored.provider == Provider::ApiKey {
             return Err(GatewayError::ObjectReadOnly);
         }
         if stored.provider != binding.provider
@@ -732,7 +737,7 @@ impl Vault {
                 )?;
                 let stored: StoredCredential = serde_json::from_slice(&disclosed.payload)
                     .map_err(|_| GatewayError::ObjectReadOnly)?;
-                if stored.schema != CREDENTIAL_SCHEMA {
+                if stored.schema != CREDENTIAL_SCHEMA || stored.provider == Provider::ApiKey {
                     return Err(GatewayError::ObjectReadOnly);
                 }
                 Ok(disclosed.snapshot)
@@ -1096,6 +1101,7 @@ impl Vault {
             return Err(GatewayError::VaultConnectionsInvalid);
         }
         let mut result = GatewayInventory {
+            api_key_heads: BTreeMap::new(),
             vault_id: connection
                 .vault_id()
                 .map_err(|_| GatewayError::InvalidVault)?,
@@ -1124,13 +1130,29 @@ impl Vault {
                     let objects = ObjectSummaryRepo::list(
                         &connection,
                         &collection.collection_id,
-                        Some(&ObjectTypeId::ApiToken),
+                        None,
                         100,
                         object_cursor.as_deref(),
                     )
                     .map_err(|_| GatewayError::InvalidVault)?;
                     for object in objects.items {
                         if object.payload_schema_version != 1 {
+                            continue;
+                        }
+                        if matches!(
+                            object.object_type_id,
+                            ObjectTypeId::Login | ObjectTypeId::ApiToken
+                        ) {
+                            if result.api_key_heads.len() >= 16384 {
+                                return Err(GatewayError::VaultConnectionsInvalid);
+                            }
+                            result
+                                .api_key_heads
+                                .insert(object.object_id.clone(), object.clone());
+                        }
+                        // Login payloads are never revealed by this scan; only an
+                        // explicit bind to one API_KEY record may read that key.
+                        if object.object_type_id != ObjectTypeId::ApiToken {
                             continue;
                         }
                         inspected += 1;
@@ -1159,7 +1181,8 @@ impl Vault {
                         else {
                             continue;
                         };
-                        if stored.schema != CREDENTIAL_SCHEMA {
+                        if stored.schema != CREDENTIAL_SCHEMA || stored.provider == Provider::ApiKey
+                        {
                             continue;
                         }
                         let name = if stored.name.is_empty() {
@@ -1179,6 +1202,7 @@ impl Vault {
                         )
                         .map_err(|_| GatewayError::SensitiveMetadata)?;
                         let binding = Connection {
+                            api_key: None,
                             provider: stored.provider,
                             api_base: stored.api_base.clone(),
                             credential_id: object.object_id,
@@ -1783,6 +1807,7 @@ mod tests {
             Err(GatewayError::CredentialUnavailable)
         ));
         let binding = Connection {
+            api_key: None,
             provider: Provider::Github,
             api_base: Provider::Github.default_api_base().to_owned(),
             credential_id: key.entry_id.clone(),

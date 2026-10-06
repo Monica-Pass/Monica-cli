@@ -1,6 +1,6 @@
 # Token storage and Android integration
 
-Monica CLI stores credentials as native MDBX3 `api-token` entries. A Token is not a password/login record and is not stored in a public note or custom display field.
+Monica CLI creates GitHub/GitLab credentials as native MDBX3 `api-token` entries. Their tokens are not stored in a public note or custom display field. It can also bind existing Android API Keys stored as v1 `login` (`kind=password`, `login_type=API_KEY`) or v1 `api-token` (`monica.api-token.v1` / `monica.gateway.credential.v1`) without converting or rewriting their payloads. See [the local model proxy guide](model-proxy.md).
 
 The encrypted JSON payload has this versioned contract (synthetic example):
 
@@ -16,6 +16,8 @@ The encrypted JSON payload has this versioned contract (synthetic example):
 
 - `provider`: `github` or `gitlab`. `api_base` is a validated HTTPS API root.
 - `note`: optional public context, at most 1024 UTF-8 bytes; never a place for secrets.
+
+That public-note rule applies to CLI-created gateway credentials. A bound Android object's note/custom fields remain private: `bind --note` explicitly supplies separate public context. Local bindings pin the native UUID, format and head commit; source changes require rebinding and new grants. Upstream keys have no grant TTL, and unbinding never deletes the source object.
 - `token`: required secret, available only through an authorized engine disclosure. Mask it in editors and exclude it from logs, previews and MCP output.
 - Entry ID, title and collection ID use native MDBX metadata. Category parent IDs use the collection's `group_id`. Moving or renaming a category does not change the Token's identity.
 - Recovery scans typed API tokens in all categories. Native type `api-token`, payload version `1` and schema `monica.gateway.credential.v1` must all match. Other formats and records over the Gateway adapter's 16 KiB limit remain in the library without becoming Gateway connections.

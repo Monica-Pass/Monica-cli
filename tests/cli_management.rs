@@ -96,6 +96,269 @@ fn android_password_management_is_metadata_only_and_not_an_ai_disclosure_tool() 
 }
 
 #[test]
+fn direct_manual_uses_only_secret_stdin_and_needs_no_vault() {
+    let directory = tempfile::tempdir().unwrap();
+    let dir = directory.path();
+    let path = dir.join("config.toml");
+    let args = [
+        "direct-config",
+        "manual",
+        "--client",
+        "codex",
+        "--api-base",
+        "https://models.example.test",
+        "--model",
+        "test-model",
+        "--output",
+        path.to_str().unwrap(),
+        "--json",
+        "--secrets-stdin",
+    ];
+    let result = success(cli(
+        dir,
+        &args,
+        Some(json!({"token":TOKEN}).to_string().as_bytes()),
+    ));
+    assert_eq!(result["mode"], "direct");
+    assert!(std::fs::read_to_string(&path).unwrap().contains(TOKEN));
+    assert!(!dir.join("gateway.json").exists());
+    let before = std::fs::read(&path).unwrap();
+    let rejected = cli(
+        dir,
+        &args,
+        Some(
+            json!({"token":TOKEN,"password":PASSWORD})
+                .to_string()
+                .as_bytes(),
+        ),
+    );
+    assert!(!rejected.status.success());
+    assert!(!String::from_utf8_lossy(&rejected.stdout).contains(TOKEN));
+    assert!(!String::from_utf8_lossy(&rejected.stderr).contains(PASSWORD));
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+#[test]
+fn android_key_binding_grant_proxy_config_renewal_and_unbind_work_through_cli() {
+    android_key_cli_roundtrip(false);
+}
+
+#[test]
+fn combined_factors_survive_bind_direct_config_proxy_renewal_and_unbind() {
+    android_key_cli_roundtrip(true);
+}
+
+fn android_key_cli_roundtrip(with_key_file: bool) {
+    use mdbx_storage::repo::{
+        CommitContext, OperationCoordinator, ProjectRepo, WriteCommand, WriteOperationRequest,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let dir = directory.path();
+    let key_file = dir.join("synthetic.key");
+    if with_key_file {
+        std::fs::write(&key_file, [0x47; 32]).unwrap();
+    }
+    let cli = |root: &std::path::Path, args: &[&str], secrets: Option<&[u8]>| {
+        let mut args = args.to_vec();
+        if with_key_file {
+            args.extend(["--key-file", key_file.to_str().unwrap()]);
+        }
+        crate::cli(root, &args, secrets)
+    };
+    let command = |root: &std::path::Path, args: &[&str]| {
+        let mut args = args.to_vec();
+        if with_key_file {
+            args.extend(["--key-file", key_file.to_str().unwrap()]);
+        }
+        crate::command(root, &args)
+    };
+    success(cli(
+        dir,
+        &["init", "--json", "--secrets-stdin"],
+        Some(&password()),
+    ));
+    let store = ConfigStore::new(dir.join("gateway.json"));
+    let config = store.load().unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    {
+        let mut conn = mdbx_storage::connection::VaultConnection::open(&config.vault).unwrap();
+        if with_key_file {
+            mdbx_storage::unlock::UnlockService::unlock_with_password_security_key(
+                &mut conn,
+                PASSWORD,
+                &[0x47; 32],
+            )
+            .unwrap();
+        } else {
+            mdbx_storage::unlock::UnlockService::unlock_with_password(&mut conn, PASSWORD).unwrap();
+        }
+        let ctx = CommitContext::new("android-fixture".to_owned());
+        let project = ProjectRepo::create(&conn, &ctx, "Android keys", None, None).unwrap();
+        OperationCoordinator::execute(&conn,&ctx,WriteOperationRequest::new(uuid::Uuid::new_v4().to_string(),"synthetic-key",vec![WriteCommand::CreateEntry {
+            entry_id:id.clone(),project_id:project.project_id,entry_type:"login".to_owned(),title:"Android model".to_owned(),
+            payload_json:json!({"kind":"password","login_type":"API_KEY","password_plain":TOKEN,"custom_fields":[{"title":"monica_api_key_url","value":"https://models.example.test/v1"}]}).to_string(),
+        }])).unwrap();
+    }
+    let bound = success(cli(
+        dir,
+        &[
+            "bind",
+            "work-ai",
+            "--entry",
+            &id,
+            "--protocol",
+            "anthropic",
+            "--json",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    ));
+    assert_eq!(bound["entry_id"], id);
+    let direct_file = dir.join("settings.json");
+    let direct = success(cli(
+        dir,
+        &[
+            "direct-config",
+            "saved",
+            "work-ai",
+            "--client",
+            "claude",
+            "--model",
+            "test-model",
+            "--output",
+            direct_file.to_str().unwrap(),
+            "--json",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    ));
+    assert_eq!(direct["contains_upstream_key"], true);
+    let direct: Value = serde_json::from_slice(&std::fs::read(direct_file).unwrap()).unwrap();
+    assert_eq!(direct["env"]["ANTHROPIC_API_KEY"], TOKEN);
+    let grant = success(cli(
+        dir,
+        &[
+            "grant",
+            "model-client",
+            "--connection",
+            "work-ai",
+            "--repo",
+            "*",
+            "--operation",
+            "model-list",
+            "--operation",
+            "model-invoke",
+            "--json",
+            "--secrets-stdin",
+        ],
+        Some(&password()),
+    ));
+    assert!(grant.get("mcp").is_none());
+    let next = success(cli(
+        dir,
+        &["next", "--grant", "model-client", "--json"],
+        None,
+    ));
+    assert!(
+        next["commands"][0]
+            .as_str()
+            .unwrap()
+            .contains("proxy-config")
+    );
+    assert_eq!(
+        next["commands"][1],
+        "monica serve --proxy-grant model-client --session-minutes 60"
+    );
+    let output = dir.join("model-client.json");
+    let args = [
+        "proxy-config",
+        "model-client",
+        "--output",
+        output.to_str().unwrap(),
+        "--json",
+    ];
+    let saved = success(cli(dir, &args, None));
+    let first: Value = serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
+    assert!(first["api_key"].as_str().unwrap().starts_with("monica-"));
+    assert!(!first.to_string().contains(TOKEN));
+    assert!(
+        !saved
+            .to_string()
+            .contains(first["api_key"].as_str().unwrap())
+    );
+    success(cli(
+        dir,
+        &["renew", "model-client", "--json", "--secrets-stdin"],
+        Some(&password()),
+    ));
+    let mut forced = args.to_vec();
+    forced.push("--force");
+    success(cli(dir, &forced, None));
+    let second: Value = serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
+    assert_ne!(first["api_key"], second["api_key"]);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    store
+        .update(|config| {
+            let mut config = config.unwrap();
+            config.listen.set_port(port);
+            Ok((config, ()))
+        })
+        .unwrap();
+    drop(listener);
+    let mut broker = Broker(
+        command(
+            dir,
+            &[
+                "serve",
+                "--proxy-grant",
+                "model-client",
+                "--session-minutes",
+                "60",
+                "--json",
+                "--secrets-stdin",
+            ],
+        )
+        .spawn()
+        .unwrap(),
+    );
+    broker
+        .0
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&password())
+        .unwrap();
+    let mut reader = BufReader::new(broker.0.stdout.take().unwrap());
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    assert!(!line.contains(TOKEN));
+    assert!(!line.contains(PASSWORD));
+    assert!(!line.contains(second["api_key"].as_str().unwrap()));
+    let ready: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(ready["event"], "ready");
+    assert_eq!(ready["data"]["proxy_sessions"][0]["grant"], "model-client");
+    let expires = ready["data"]["proxy_sessions"][0]["expires_at_unix"]
+        .as_i64()
+        .unwrap();
+    assert!(expires > chrono::Utc::now().timestamp() + 3500);
+    success(cli(dir, &["lock", "--json"], None));
+    assert!(broker.0.wait().unwrap().success());
+    success(cli(
+        dir,
+        &["unbind", "work-ai", "--json", "--secrets-stdin"],
+        Some(&password()),
+    ));
+    assert!(store.load().unwrap().grants.is_empty());
+    let library = success(cli(
+        dir,
+        &["library", "--json", "--secrets-stdin"],
+        Some(&password()),
+    ));
+    assert!(library.to_string().contains(&id));
+}
+
+#[test]
 fn compact_discovery_is_locale_independent_and_cli_errors_offer_safe_recovery() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path();

@@ -13,7 +13,7 @@
 - 远端操作在已知 Glitter 本地库上不发网络请求；未知远端只下载到临时区识别，拒绝后不安装、不绑定、不抓附件、不上传。普通档位不得覆盖远端 Glitter。
 - 原有 Sky / Multi / Power 的密码与组合凭据路径保留，错误密钥不能静默退回密码单因子。
 
-## 已完成验证
+## 整合前的旧基线验证
 
 Windows，GNU Rust `1.97.0-x86_64-pc-windows-gnu`，合成凭据、临时库与本地假 WebDAV。
 
@@ -39,6 +39,18 @@ Windows，GNU Rust `1.97.0-x86_64-pc-windows-gnu`，合成凭据、临时库与�
 | Portable state | 1 | 0 |
 
 新增的旧档位组合凭据测试、共享 broker/网络拒绝测试与中英文恢复提示检查全部通过。首次全量测试暴露一条仍匹配旧提示措辞的断言，已更新为检查明确支持 Glitter 的客户端提示，并禁止推荐 Android、CLI 创建或打开；完整重跑通过。保留首次失败日志，不覆盖历史证据。
+
+## 与远端 main 整合后的验证
+
+在本地边界改动上合并远端 CLI `a26b0c1`，保留 1.0.101 的模型 API 代理、限时授权、direct-config 和 Windows 打包修复。配套引擎合并远端 `d1d3cc4` 后为 `f004673ef07a04c31702eaf1015e062f29730537`；CI 与源码构建说明固定这一提交。既有发布标签、发行记录和二进制不变，本次不是新版本发布。
+
+- 合并后的绑定、解绑、direct-config 和 broker 全程传递显式组合凭据，不静默丢弃密钥文件。新增端到端红测先在 `bind` 返回 `unlock_required`，修复后完整链路通过。
+- 扩展真实加密 Glitter 子进程测试：绑定、解绑、direct-config、带代理授权的 serve 均返回 `glitter_unavailable`；文件和配置保持原样，不生成客户端配置、不泄露合成密码。专项通过。
+- 首次全量测试发现上游授权过期测试依赖运行耗时：快速创建时过期时间早于生效时间，配置校验先拒绝。只修正测试的历史时间窗口，另加配置合法性断言；生产安全检查未放宽。
+- MDBX workspace release：1166 passed、0 failed、1 个既有手动性能基准 ignored。release 构建和 fmt 通过；普通 workspace Clippy 通过但保留旧警告，不声称严格零警告。
+- CLI 严格 Clippy（all-targets、`-D warnings`）通过；production release 构建通过；重新生成的文档与实际语法一致（57 条命令、58 个教学条目）。
+
+最终 CLI release 全量重跑：**357 passed、0 failed、3 ignored**。其中库测试 279、命令解析 39、CLI 管理子进程 22、剪贴板 2、Glitter 专项 11、语言 3、便携状态 1；3 个跳过项仍为已有独立 Android 合成样本导出／回读测试，本轮未新增跳过。该结果来自整合后的代码，不是旧基线的 327 项结果。日志位于工作区 `.codex-tasks/cli-mdbx-integrate-sync/`，首次失败日志保留。未重新进行 Android 真机、真实云账户、Linux/macOS 或 MSVC 运行验证，不将本地 GNU 结果声称为所有平台 CI 成功。
 
 ## 可复现命令
 

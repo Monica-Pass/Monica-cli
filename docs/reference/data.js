@@ -3,10 +3,10 @@
 window.MONICA_TEACH = {
  "meta": {
   "cli": "monica",
-  "version": "monica 0.5.0",
+  "version": "monica 1.0.101",
   "grammarVersion": 1,
   "generatedFrom": "monica commands --json",
-  "commandCount": 51,
+  "commandCount": 57,
   "groups": [
    {
     "id": "start",
@@ -42,6 +42,11 @@ window.MONICA_TEACH = {
     "id": "sync",
     "label": "WebDAV 同步",
     "hint": "和手机上的 Monica 共用一份库"
+   },
+   {
+    "id": "models",
+    "label": "本地模型中转",
+    "hint": "用 Android 已存 Key 代理 OpenAI / Anthropic"
    }
   ],
   "globals": [
@@ -1501,7 +1506,7 @@ window.MONICA_TEACH = {
    ],
    "name": "serve",
    "parent": "",
-   "summary": "Unlock and run until Ctrl+C, lock, or five-minute session expiry",
+   "summary": "Unlock and run until Ctrl+C, lock, or session expiry; Tiga limits still apply",
    "semantics": {
     "discovery_grants_authority": false,
     "effects": [
@@ -1514,8 +1519,12 @@ window.MONICA_TEACH = {
       "when": "always"
      },
      {
-      "effect": "five_minute_session",
+      "effect": "bounded_broker_session",
       "when": "always"
+     },
+     {
+      "effect": "authorize_local_model_session",
+      "when": "--proxy-grant"
      }
     ],
     "mcp_tool": false,
@@ -1536,6 +1545,46 @@ window.MONICA_TEACH = {
     "unlock"
    ],
    "args": [
+    {
+     "id": "session_minutes",
+     "role": "session_minutes",
+     "long": "session-minutes",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "SESSION_MINUTES"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [
+      "5"
+     ],
+     "help": "Broker lifetime: 1–1440 minutes, default 5; proxy sessions also respect Tiga's absolute deadline"
+    },
+    {
+     "id": "proxy_grants",
+     "role": "grant",
+     "long": "proxy-grant",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": true,
+     "takesValue": true,
+     "valueNames": [
+      "GRANT"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Explicitly authorize this model grant for the session; repeat for multiple grants"
+    },
     {
      "id": "help",
      "role": null,
@@ -1562,12 +1611,12 @@ window.MONICA_TEACH = {
     "password"
    ],
    "group": "start",
-   "summaryZh": "解锁并在前台跑起本地网关：AI 的每一次调用都要经过它。",
+   "summaryZh": "解锁并运行代理，默认 5 分钟；Tiga 和授权期限独立生效。",
    "whenToUse": "要让已接入的 AI 客户端真的能调用时。",
    "handAuthored": false,
    "pitfalls": [
     "先用 mcp-config GRANT --install CLIENT 配置 AI，再执行 serve；在另一个终端运行 check GRANT。",
-    "会话最长 5 分钟，到期需由人重新解锁，不改变授权窗口。",
+    "默认时长 5 分钟；模型代理用 --proxy-grant 与 --session-minutes 显式批准，受 Tiga 绝对期限和授权预算约束。",
     "需要访问保险库的管理操作会先停止并排空代理；完成后重新 serve。端口被其他进程占用时先检查。",
     "旧别名 s / u / unlock 保持兼容。"
    ],
@@ -1578,6 +1627,13 @@ window.MONICA_TEACH = {
      "tested": true,
      "out": "Gateway ready at http://127.0.0.1:47831/. Keep this human terminal open.\nThe session locks after five minutes. Ctrl+C or 'monica-pass lock' also stops the gateway.",
      "capturedAt": "此前版本快照"
+    },
+    {
+     "cmd": "monica serve --proxy-grant my-model-client --session-minutes 60",
+     "note": "明确批准指定模型授权的一小时代理；不延长普通秘密读取，Multi 默认仍有两小时绝对上限。",
+     "secrets": "{\"password\":\"<主密码>\"}",
+     "tested": false,
+     "reason": "此处使用说明性名称与 UUID；功能由临时 MDBX 和模拟上游回归覆盖，未为这条展示命令采集输出。"
     }
    ]
   },
@@ -3037,7 +3093,11 @@ window.MONICA_TEACH = {
      },
      {
       "effect": "print_mcp_snippet",
-      "when": "always"
+      "when": "service_tool_grant"
+     },
+     {
+      "effect": "print_proxy_config_hint",
+      "when": "model_proxy_grant"
      }
     ],
     "mcp_tool": false,
@@ -3135,7 +3195,9 @@ window.MONICA_TEACH = {
       "get-issue",
       "create-issue",
       "api-read",
-      "api-write"
+      "api-write",
+      "model-list",
+      "model-invoke"
      ],
      "choiceAliases": [],
      "ignoreCase": false,
@@ -3143,7 +3205,7 @@ window.MONICA_TEACH = {
       "list-issues",
       "get-issue"
      ],
-     "help": "Issue tools by default; use api-read and api-write for service-wide API access"
+     "help": "Issue tools by default; api-read/api-write for service APIs; model-list/model-invoke for bound model proxies"
     },
     {
      "id": "ttl_minutes",
@@ -3314,6 +3376,13 @@ window.MONICA_TEACH = {
      "tested": true,
      "out": "Grant  Handle  Scope  Operations  Expires           Calls      Gate\napi-ro  work    *      api_read    2026-09-23 09:57  unlimited  off",
      "capturedAt": "此前版本快照"
+    },
+    {
+     "cmd": "monica grant my-model-client --connection work-ai --repo \"*\" --operation model-list --operation model-invoke --ttl-minutes 240 --max-calls 1000",
+     "note": "模型专用权限；无法调用通用 API 或 Issue 工具。接着运行 proxy-config。",
+     "secrets": "{\"password\":\"<主密码>\"}",
+     "tested": false,
+     "reason": "此处使用说明性名称与 UUID；功能由临时 MDBX 和模拟上游回归覆盖，未为这条展示命令采集输出。"
     }
    ]
   },
@@ -3346,7 +3415,11 @@ window.MONICA_TEACH = {
      },
      {
       "effect": "print_mcp_snippet",
-      "when": "always"
+      "when": "service_tool_grant"
+     },
+     {
+      "effect": "print_proxy_config_hint",
+      "when": "model_proxy_grant"
      },
      {
       "effect": "change_approval_policy",
@@ -6610,6 +6683,901 @@ window.MONICA_TEACH = {
      "tested": true,
      "out": "monica-pass: No WebDAV vault is connected. Open a remote MDBX file or publish the local vault first.",
      "capturedAt": "此前版本快照"
+    }
+   ]
+  },
+  {
+   "key": "bind",
+   "path": [
+    "bind"
+   ],
+   "name": "bind",
+   "parent": "",
+   "summary": "Bind a saved Android API Key to an AI connection; preserve the source",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "bind_existing_api_key",
+      "when": "always"
+     },
+     {
+      "effect": "write_local_config",
+      "when": "always"
+     },
+     {
+      "effect": "revoke_connection_grants",
+      "when": "--replace"
+     },
+     {
+      "effect": "restore_android_root",
+      "when": "android_root_missing"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "existing_api_key_entry",
+     "secure_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "connection",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "bind",
+   "aliases": [],
+   "args": [
+    {
+     "id": "name",
+     "role": "connection",
+     "long": null,
+     "short": null,
+     "aliases": [],
+     "positional": true,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "CONNECTION"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Connection handle (CONNECTION); add also creates a grant with this name"
+    },
+    {
+     "id": "entry",
+     "role": "entry_id",
+     "long": "entry",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "ENTRY_ID"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Native entry UUID from monica library"
+    },
+    {
+     "id": "auth",
+     "role": "auth",
+     "long": "auth",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "AUTH"
+     ],
+     "choices": [
+      "bearer",
+      "x-api-key"
+     ],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Upstream auth: bearer for OpenAI, x-api-key for Anthropic by default"
+    },
+    {
+     "id": "protocol",
+     "role": "protocol",
+     "long": "protocol",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "PROTOCOL"
+     ],
+     "choices": [
+      "openai",
+      "anthropic"
+     ],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [
+      "openai"
+     ],
+     "help": "Client/upstream protocol: openai (default) or anthropic; no conversion"
+    },
+    {
+     "id": "api_base",
+     "role": "api_base",
+     "long": "api-base",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "API_BASE"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "HTTPS API root; only supplies a missing stored endpoint"
+    },
+    {
+     "id": "note",
+     "role": "note",
+     "long": "note",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "NOTE"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [
+      ""
+     ],
+     "help": "Explicit public purpose for AI; Android notes remain private"
+    },
+    {
+     "id": "replace",
+     "role": null,
+     "long": "replace",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [
+      "REPLACE"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [
+      "false"
+     ],
+     "help": "Rebind an existing API-key connection and revoke its grants"
+    },
+    {
+     "id": "help",
+     "role": null,
+     "long": "help",
+     "short": "h",
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Print help"
+    }
+   ],
+   "jsonSupported": true,
+   "longRunning": false,
+   "subcommandRequired": false,
+   "argGroups": [],
+   "secretRequired": [
+    "password"
+   ],
+   "group": "models",
+   "summaryZh": "绑定 MDBX 中已有的 Android API Key；固定协议和来源版本，保留原条目。",
+   "whenToUse": "模型客户端需要通过 Monica 使用已有 Key 时。",
+   "handAuthored": false,
+   "pitfalls": [],
+   "examples": [
+    {
+     "cmd": "monica bind work-ai --entry 123e4567-e89b-42d3-a456-426614174000 --protocol openai --note \"编程助手\"",
+     "note": "主密码在终端输入；UUID 来自 library，不需重新输入上游 Key。",
+     "secrets": "{\"password\":\"<主密码>\"}",
+     "tested": false,
+     "reason": "此处使用说明性名称与 UUID；功能由临时 MDBX 和模拟上游回归覆盖，未为这条展示命令采集输出。"
+    },
+    {
+     "cmd": "monica bind work-claude --entry 123e4567-e89b-42d3-a456-426614174001 --protocol anthropic",
+     "note": "Anthropic 默认向上游注入 x-api-key。",
+     "tested": false,
+     "reason": "此处使用说明性名称与 UUID；功能由临时 MDBX 和模拟上游回归覆盖，未为这条展示命令采集输出。"
+    }
+   ]
+  },
+  {
+   "key": "proxy-config",
+   "path": [
+    "proxy-config"
+   ],
+   "name": "proxy-config",
+   "parent": "",
+   "summary": "Save the local proxy URL and scoped local Key to a private file",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "write_proxy_client_config",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "existing_grant"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "grant",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "proxy-config",
+   "aliases": [],
+   "args": [
+    {
+     "id": "name",
+     "role": "grant",
+     "long": null,
+     "short": null,
+     "aliases": [],
+     "positional": true,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "GRANT"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "AI authorization name (GRANT), not a connection handle"
+    },
+    {
+     "id": "output",
+     "role": "file",
+     "long": "output",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "FILE"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "File to write; an existing file needs --force"
+    },
+    {
+     "id": "force",
+     "role": null,
+     "long": "force",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [
+      "FORCE"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [
+      "false"
+     ],
+     "help": "Replace an existing output file"
+    },
+    {
+     "id": "help",
+     "role": null,
+     "long": "help",
+     "short": "h",
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Print help"
+    }
+   ],
+   "jsonSupported": true,
+   "longRunning": false,
+   "subcommandRequired": false,
+   "argGroups": [],
+   "secretRequired": [],
+   "group": "models",
+   "summaryZh": "将本地地址和可撤销的本地 Key 写入私有文件；不输出上游 Key。",
+   "whenToUse": "为模型授权生成客户端配置；renew 后用 --force 更新原文件。",
+   "handAuthored": false,
+   "pitfalls": [],
+   "examples": [
+    {
+     "cmd": "monica proxy-config my-model-client --output ./model-client.json",
+     "note": "先 grant model-list/model-invoke；客户端读取 base_url/api_key，文件应放在版本库外。",
+     "tested": false,
+     "reason": "此处使用说明性名称与 UUID；功能由临时 MDBX 和模拟上游回归覆盖，未为这条展示命令采集输出。"
+    }
+   ]
+  },
+  {
+   "key": "unbind",
+   "path": [
+    "unbind"
+   ],
+   "name": "unbind",
+   "parent": "",
+   "summary": "Remove an API-key binding and its grants; preserve the Android entry",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "remove_api_key_binding",
+      "when": "always"
+     },
+     {
+      "effect": "revoke_connection_grants",
+      "when": "always"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "existing_connection",
+     "secure_password_input"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "connection",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "unbind",
+   "aliases": [],
+   "args": [
+    {
+     "id": "name",
+     "role": "connection",
+     "long": null,
+     "short": null,
+     "aliases": [],
+     "positional": true,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "CONNECTION"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Connection handle (CONNECTION); add also creates a grant with this name"
+    },
+    {
+     "id": "help",
+     "role": null,
+     "long": "help",
+     "short": "h",
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Print help"
+    }
+   ],
+   "jsonSupported": true,
+   "longRunning": false,
+   "subcommandRequired": false,
+   "argGroups": [],
+   "secretRequired": [
+    "password"
+   ],
+   "group": "models",
+   "summaryZh": "解除本地 API Key 连接并撤销相关授权，保留 Android 原条目。",
+   "whenToUse": "不再用这个连接中转模型请求时。",
+   "handAuthored": false,
+   "pitfalls": [],
+   "examples": [
+    {
+     "cmd": "monica unbind work-ai",
+     "note": "只移除本地绑定和授权。",
+     "secrets": "{\"password\":\"<主密码>\"}",
+     "tested": false,
+     "reason": "此处使用说明性名称与 UUID；功能由临时 MDBX 和模拟上游回归覆盖，未为这条展示命令采集输出。"
+    }
+   ]
+  },
+  {
+   "key": "direct-config",
+   "path": [
+    "direct-config"
+   ],
+   "name": "direct-config",
+   "parent": "",
+   "summary": "Write the raw upstream Key to client settings; Monica proxy limits do not apply",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [],
+    "mcp_tool": false,
+    "prerequisites": [],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "subcommand",
+    "trust_boundary": "command_group"
+   },
+   "executionCommand": "direct-config",
+   "aliases": [],
+   "args": [
+    {
+     "id": "help",
+     "role": null,
+     "long": "help",
+     "short": "h",
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Print help"
+    }
+   ],
+   "jsonSupported": true,
+   "longRunning": false,
+   "subcommandRequired": true,
+   "argGroups": [],
+   "secretRequired": [],
+   "group": "models",
+   "summaryZh": "选择手动输入或已保存的 Key，生成客户端直连配置。",
+   "whenToUse": "选择手动输入或已保存的 Key，生成客户端直连配置。",
+   "handAuthored": false,
+   "pitfalls": [],
+   "examples": [
+    {
+     "cmd": "monica direct-config",
+     "note": "需选择 manual 或 saved 子命令；直连文件包含原始 Key，不受 Monica 代理授权限制。",
+     "teachesError": true,
+     "tested": false,
+     "reason": "示例使用说明性连接名和模型名；自动测试使用临时保险库和合成凭据。"
+    }
+   ]
+  },
+  {
+   "key": "direct-config manual",
+   "path": [
+    "direct-config",
+    "manual"
+   ],
+   "name": "manual",
+   "parent": "direct-config",
+   "summary": "Configure a client with a manually supplied Key and HTTPS base",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "write_direct_client_config",
+      "when": "always"
+     },
+     {
+      "effect": "backup_client_config",
+      "when": "changed_existing_file"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "secure_token_input",
+     "explicit_client_file"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "client_file",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "direct-config manual",
+   "aliases": [],
+   "args": [
+    {
+     "id": "client",
+     "role": "client",
+     "long": "client",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "CLIENT"
+     ],
+     "choices": [
+      "codex",
+      "claude"
+     ],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Generated client capability file"
+    },
+    {
+     "id": "model",
+     "role": "model",
+     "long": "model",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "MODEL"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Exact upstream model ID. Monica does not infer or translate model names"
+    },
+    {
+     "id": "output",
+     "role": "file",
+     "long": "output",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "FILE"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "File to write; an existing file needs --force"
+    },
+    {
+     "id": "force",
+     "role": null,
+     "long": "force",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [
+      "FORCE"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [
+      "false"
+     ],
+     "help": "Replace an existing output file"
+    },
+    {
+     "id": "api_base",
+     "role": "api_base",
+     "long": "api-base",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "API_BASE"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "HTTPS API root; omit for the hosted service"
+    },
+    {
+     "id": "auth",
+     "role": "auth",
+     "long": "auth",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "AUTH"
+     ],
+     "choices": [
+      "bearer",
+      "x-api-key"
+     ],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Upstream auth: bearer for OpenAI, x-api-key for Anthropic by default"
+    },
+    {
+     "id": "help",
+     "role": null,
+     "long": "help",
+     "short": "h",
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Print help"
+    }
+   ],
+   "jsonSupported": true,
+   "longRunning": false,
+   "subcommandRequired": false,
+   "argGroups": [],
+   "secretRequired": [
+    "token"
+   ],
+   "group": "models",
+   "summaryZh": "手动输入原始 Key 和 HTTPS 地址，不需要保险库。",
+   "whenToUse": "手动输入原始 Key 和 HTTPS 地址，不需要保险库。",
+   "handAuthored": false,
+   "pitfalls": [],
+   "examples": [
+    {
+     "cmd": "monica direct-config manual --client codex --api-base https://models.example.test --model YOUR_MODEL --output ./codex-direct/config.toml",
+     "note": "Key 通过隐藏提示或可信 stdin 的 token 字段注入，不能写在参数中。",
+     "secrets": "{\"token\":\"<原始 Key>\"}",
+     "tested": false,
+     "reason": "示例使用说明性连接名和模型名；自动测试使用临时保险库和合成凭据。"
+    }
+   ]
+  },
+  {
+   "key": "direct-config saved",
+   "path": [
+    "direct-config",
+    "saved"
+   ],
+   "name": "saved",
+   "parent": "direct-config",
+   "summary": "Configure a client from a bound API Key after password and Tiga export authorization",
+   "semantics": {
+    "discovery_grants_authority": false,
+    "effects": [
+     {
+      "effect": "lock_broker",
+      "when": "always"
+     },
+     {
+      "effect": "write_direct_client_config",
+      "when": "always"
+     },
+     {
+      "effect": "backup_client_config",
+      "when": "changed_existing_file"
+     }
+    ],
+    "mcp_tool": false,
+    "prerequisites": [
+     "configured_vault",
+     "existing_connection",
+     "secure_password_input",
+     "tiga_export_allowed",
+     "explicit_client_file"
+    ],
+    "retry": "inspect_state_before_retry",
+    "schema_version": 1,
+    "target": "connection",
+    "trust_boundary": "trusted_local_management"
+   },
+   "executionCommand": "direct-config saved",
+   "aliases": [],
+   "args": [
+    {
+     "id": "name",
+     "role": "connection",
+     "long": null,
+     "short": null,
+     "aliases": [],
+     "positional": true,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "CONNECTION"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Connection handle (CONNECTION); add also creates a grant with this name"
+    },
+    {
+     "id": "client",
+     "role": "client",
+     "long": "client",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "CLIENT"
+     ],
+     "choices": [
+      "codex",
+      "claude"
+     ],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Generated client capability file"
+    },
+    {
+     "id": "model",
+     "role": "model",
+     "long": "model",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "MODEL"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Exact upstream model ID. Monica does not infer or translate model names"
+    },
+    {
+     "id": "output",
+     "role": "file",
+     "long": "output",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": true,
+     "repeatable": false,
+     "takesValue": true,
+     "valueNames": [
+      "FILE"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "File to write; an existing file needs --force"
+    },
+    {
+     "id": "force",
+     "role": null,
+     "long": "force",
+     "short": null,
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [
+      "FORCE"
+     ],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [
+      "false"
+     ],
+     "help": "Replace an existing output file"
+    },
+    {
+     "id": "help",
+     "role": null,
+     "long": "help",
+     "short": "h",
+     "aliases": [],
+     "positional": false,
+     "required": false,
+     "repeatable": false,
+     "takesValue": false,
+     "valueNames": [],
+     "choices": [],
+     "choiceAliases": [],
+     "ignoreCase": false,
+     "defaults": [],
+     "help": "Print help"
+    }
+   ],
+   "jsonSupported": true,
+   "longRunning": false,
+   "subcommandRequired": false,
+   "argGroups": [],
+   "secretRequired": [
+    "password"
+   ],
+   "group": "models",
+   "summaryZh": "验证主密码和 Tiga 导出权限后使用已绑定的 API Key。",
+   "whenToUse": "验证主密码和 Tiga 导出权限后使用已绑定的 API Key。",
+   "handAuthored": false,
+   "pitfalls": [],
+   "examples": [
+    {
+     "cmd": "monica direct-config saved work-ai --client claude --model YOUR_MODEL --output ./claude-direct/settings.json",
+     "note": "连接须绑定为 anthropic；stdin 只需要 password。原条目保持不变，配置包含真实 Key。",
+     "secrets": "{\"password\":\"<主密码>\"}",
+     "tested": false,
+     "reason": "示例使用说明性连接名和模型名；自动测试使用临时保险库和合成凭据。"
     }
    ]
   }

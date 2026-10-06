@@ -58,7 +58,7 @@
         <dl class="object-guide">
           <div><dt>CONNECTION · 连接</dt><dd>保存服务凭据，例如 <code>work-github</code>。用 <code>connections</code>、<code>show</code> 查看。</dd></div>
           <div><dt>GRANT · 授权</dt><dd>限定 AI 的范围、操作和时长，例如 <code>review-agent</code>。用 <code>status</code> 查看。</dd></div>
-          <div><dt>BROKER · 代理</dt><dd><code>serve</code> 启动的调用通道。会话 5 分钟，和授权有效期分开计算。</dd></div>
+          <div><dt>BROKER · 代理</dt><dd><code>serve</code> 启动的调用通道。默认 5 分钟，可显式设置时长；Tiga 和授权有效期独立生效。</dd></div>
         </dl>
         <div class="guide-paths">
           <article class="panel">
@@ -67,7 +67,7 @@
             <ol class="setup-route">
               <li>创建连接与同名只读授权<pre>monica add work-github --repo your-org/repo</pre></li>
               <li>配置 AI 客户端（这里选 Codex）<pre>monica mcp-config work-github --install codex</pre></li>
-              <li>启动代理，保持这个终端打开<pre>monica serve</pre></li>
+              <li>启动代理，保持这个终端打开<pre>monica serve --proxy-grant my-model-client --session-minutes 60</pre></li>
               <li>在另一个终端验证通道<pre>monica check work-github</pre></li>
             </ol>
             <p class="pane-hint">使用自定义 <code>--config</code> 时，每一步和另一个终端都沿用同一路径。<code>check</code> 验证代理通道，AI 客户端仍需加载配置。</p>
@@ -96,6 +96,19 @@ monica commands grant --json</pre>
           </article>
         </div>
         <p class="compat-note">推荐写法：<code>connections</code> / <code>mcp-config</code> / <code>renew</code>。旧命令 <code>list</code> / <code>settings</code> / <code>refresh</code> 和缩写继续可用；执行 JSON 的 command 标识保持原值。TUI 重载列表用 <code>:reload</code>，旧 <code>:refresh</code> 仍兼容。</p>
+        <article class="panel">
+          <h2>Android API Key → 本地模型地址</h2>
+          <p>用手机在 MDBX 中保存的 Key 代理 OpenAI 或 Anthropic 请求。模型客户端只拿到可撤销的本地 Key；原条目保持原生类型和身份。</p>
+          <pre>monica library
+monica bind work-ai --entry &lt;ENTRY_ID&gt; --protocol openai
+monica grant my-model-client --connection work-ai --repo "*" --operation model-list --operation model-invoke
+monica proxy-config my-model-client --output ./model-client.json
+monica serve --proxy-grant my-model-client --session-minutes 60</pre>
+          <p>OpenAI 本地地址默认 <code>http://127.0.0.1:47831/v1</code>；Anthropic 使用 <code>--protocol anthropic</code>，地址为 <code>http://127.0.0.1:47831</code>。让受信客户端读取输出文件的 <code>base_url</code> 和 <code>api_key</code>；文件应放在版本库外。</p>
+          <p>支持 JSON 与 SSE。一个本地 Key 选择一个上游，不转换协议。<code>renew</code> 后重新用 <code>proxy-config --force</code> 生成配置并让客户端重新载入。<code>revoke</code> 撤销授权；<code>unbind</code> 保留手机原条目。</p>
+          <p><code>serve --proxy-grant my-model-client --session-minutes 60</code> 明确批准一小时模型代理；可重复指定授权。实际期限会在启动时显示，默认 Multi 仍有解锁后两小时的绝对上限。未指定代理授权时保留原新鲜认证规则。模型授权不能调用通用服务 API 或 Issue 工具。</p>
+          <a href="https://github.com/Monica-Pass/Monica-cli/blob/main/docs/model-proxy.md">查看完整接入步骤与限制 →</a>
+        </article>
       </section>
 
       <!-- ============================ 总表 ============================ -->
