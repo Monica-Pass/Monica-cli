@@ -12,9 +12,15 @@ CLI 联动默认关闭，且标记为「不完善」。先在 CLI 中创建或�
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-browser.ps1 -EdgeExtensionId <扩展ID>
 ```
 
-Chrome 使用 `-ChromeExtensionId`，也可同时提供两个 ID。源码运行时加 `-HostPath .\target\release\monica-browser-host.exe`。注册只影响当前 Windows 用户，并精确限定提供的扩展 origin。浏览器安装、解压路径或扩展 ID 改变后需要重新注册。
+Chrome 使用 `-ChromeExtensionId`。Firefox 153+ 桌面版使用固定 ID，可与 Edge/Chrome 同时注册：
 
-在同一命令后加 `-Diagnose` 可运行只读诊断：检查辅助程序协议/能力、CLI 是否初始化、注册是否存在、manifest/辅助程序是否丢失及扩展 ID 是否匹配，不读取数据库秘密，也不修复或更改注册。Edge 与 Chrome 使用独立 manifest，单独更新一个浏览器不会移除另一个的 origin。辅助程序也可单独运行 `monica-browser-host --diagnose`。
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-browser.ps1 -FirefoxExtensionId 'monica@monica-pass.github.io'
+```
+
+源码运行时加 `-HostPath .\target\release\monica-browser-host.exe`。注册只影响当前 Windows 用户。Edge/Chrome 精确限定提供的扩展 origin；Firefox 只允许 `monica@monica-pass.github.io`，其他 ID 被拒绝。浏览器安装、解压路径或扩展 ID 改变后需要重新注册。
+
+在同一命令后加 `-Diagnose` 可运行只读诊断：检查辅助程序协议/能力、CLI 是否初始化、注册是否存在、manifest/辅助程序是否丢失及扩展 ID 是否匹配，不读取数据库秘密，也不修复或更改注册。Edge、Chrome、Firefox 使用独立 manifest，单独更新一个浏览器不会改变其他注册。Firefox 使用 `allowed_extensions`，注册位于 `HKCU:\Software\Mozilla\NativeMessagingHosts\app.monica.cli`。辅助程序也可单独运行 `monica-browser-host --diagnose`，输出支持的固定 Firefox ID。
 
 辅助程序与 CLI 放在同一目录时共享默认配置，包括 `monica-pass.portable` 指定的便携 `data/gateway.json`。扩展不能指定任意配置或数据库文件路径。CLI 使用自定义 `-C` 配置时，建议将该实例作为单独的便携安装使用；不会自动枚举其他目录。
 
@@ -24,7 +30,11 @@ Chrome 使用 `-ChromeExtensionId`，也可同时提供两个 ID。源码运行�
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-browser.ps1 -Uninstall
 ```
 
-这只撤销浏览器注册，保留数据库和 CLI 文件。当前附带的安装脚本支持 Windows Edge/Chrome。其他系统可按 Chromium Native Messaging 的规则手动安装精确 origin 的 manifest，指向相同的 `monica-browser-host` 二进制；未完成这些系统的浏览器验收。
+不提供 ID 时撤销全部三个浏览器的注册；提供一个或多个浏览器 ID 时只撤销对应浏览器，例如 `-FirefoxExtensionId 'monica@monica-pass.github.io' -Uninstall` 保留 Edge/Chrome。数据库、manifest 与 CLI 文件保留。当前附带的安装脚本支持 Windows Edge/Chrome/Firefox。其他系统需要按各浏览器的 Native Messaging 规则手动安装 manifest；Firefox 使用上述固定 `allowed_extensions`，Chromium 使用精确 origin。未完成其他系统的浏览器验收。
+
+Firefox 启动辅助程序时传入 manifest 的绝对路径、固定 add-on ID 两个位置参数；辅助程序拒绝其他 ID、相对路径、混合 Chromium/Firefox 参数和多余参数。manifest 路径只是启动上下文，不读取为 CLI 配置，不选择数据库或提供文件访问能力。Chromium 原有的 `chrome-extension://<32位a-p ID>/` 校验保留。该启动校验不能隔离同一系统用户的任意本地程序。
+
+CLI 参数、注册与隔离测试见 [Firefox 验证记录](firefox-native-messaging-verification-20261021.md)；真实浏览器界面验收由扩展仓库另行记录。
 
 ## 可管理内容
 
@@ -42,7 +52,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-browser.ps
 
 ## 通信和锁定
 
-辅助程序是独立的人类管理程序，不属于 CLI AI 命令发现或 MCP。没有 HTTP 端口、网页 CORS 接口、任意命令执行、原始 payload 读取或数据库导出操作。请求使用 Chromium 的 4 字节小端长度前缀，严格 UTF-8 JSON 和封闭操作枚举；最大请求 64 KiB，最大回复 900 KiB。过大的库会明确报错，不截断列表。
+辅助程序是独立的人类管理程序，不属于 CLI AI 命令发现或 MCP。没有 HTTP 端口、网页 CORS 接口、任意命令执行、原始 payload 读取或数据库导出操作。请求使用 Chromium/Firefox Native Messaging 的 4 字节小端长度前缀，严格 UTF-8 JSON 和封闭操作枚举；最大请求 64 KiB，最大回复 900 KiB。过大的库会明确报错，不截断列表。
 
 主密码只通过 Native Messaging stdin 传入辅助程序，保留在 zeroize 包装的进程内存中，不写入浏览器存储、CLI 配置或日志。每个操作重新打开并认证库，核对当前配置路径和原生 vault ID。离开管理页、切换浏览器标签或关闭页面会断开通道；辅助程序在 5 分钟无请求或 15 分钟绝对期限后清除密码。主动锁定不影响数据库内永久保存的凭据。
 
@@ -62,4 +72,4 @@ The helper negotiates protocol 2, CLI version ≥ 1.0.101 and integration revisi
 
 Native Messaging uses a separate binary and the existing human management/runtime functions; it adds no MCP tool, HTTP listener, generic secret reader, shell operation or export endpoint. The password stays in zeroized process memory. Leaving the page or switching tabs disconnects the session; idle and absolute limits are 5 and 15 minutes. Stale native heads cannot overwrite newer password edits. Writes are never retried automatically after an unknown outcome.
 
-The provided installer targets Windows Edge/Chrome; other platforms require manual Chromium host registration and have not received browser acceptance testing.
+The provided installer targets Windows Edge/Chrome and desktop Firefox 153+. Register Firefox with `-FirefoxExtensionId 'monica@monica-pass.github.io'`; no other Firefox ID is accepted. Its independent manifest contains only `allowed_extensions`, registered under `HKCU:\Software\Mozilla\NativeMessagingHosts\app.monica.cli`. Firefox passes an absolute manifest path followed by that exact add-on ID; this launch path never selects CLI configuration. Chromium origin validation is unchanged. `-Diagnose` reports all three browsers; `-Uninstall` with IDs removes only selected registrations, while no IDs removes all. Other platforms require manual browser-specific host registration and have not received browser acceptance testing.

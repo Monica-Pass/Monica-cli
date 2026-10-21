@@ -6,7 +6,7 @@ Pushes to `main`, pull requests targeting `main`, and manual runs use:
 | --- | --- |
 | Code quality | actionlint for every workflow, Rust format, strict Clippy for all targets |
 | Dependency security | Cargo.lock against the current RustSec database; also runs every Monday |
-| Build and verify release packages | Serial release-mode tests and builds on Ubuntu 22.04 / Windows 2022; extracted CLI discovery, native-host diagnostics and framed hello; Windows temporary installation; Linux offline source bundle |
+| Build and verify release packages | Serial release-mode tests and builds on Ubuntu 22.04 / Windows 2022; extracted CLI discovery, native-host diagnostics and Chromium/Firefox framed hello plus rejected callers; isolated Windows Edge/Chrome/Firefox registration, diagnostics and scoped uninstall; Windows temporary installation; Linux offline source bundle |
 | Deploy the command practice book | Publishes committed documentation when `docs/` or the Pages workflow changes |
 
 Rust builds pin toolchain 1.97.0 and sibling MDBX revision

@@ -70,6 +70,9 @@ jobs:
         run: cargo test --release --locked --all-targets --target ${{ matrix.target }} -- --test-threads=1
       - name: Build release
         run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Verify isolated Windows browser registrations
+        if: runner.os == 'Windows'
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-browser-installer.ps1 -HostPath "target/${{ matrix.target }}/release/monica-browser-host.exe"
       - name: Package and verify extracted binaries
         run: python scripts/package_release.py --target ${{ matrix.target }} --engine-revision "$MDBX_REVISION" --output ../dist
       - name: Verify command documentation

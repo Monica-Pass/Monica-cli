@@ -54,6 +54,8 @@ def verify_browser_host(binary, config, version):
     assert diagnosis['protocol'] == 2 and diagnosis['integration_revision'] >= 2
     assert diagnosis['state'] == 'setup_required' and diagnosis['secret_reading'] is False
     assert {'snapshots', 'mutation_receipts'} <= set(diagnosis['capabilities'])
+    firefox_id = 'monica@monica-pass.github.io'
+    assert diagnosis['firefox_extension_id'] == firefox_id
     request = json.dumps({'id': 1, 'protocol': 2, 'op': 'hello'}).encode('utf-8')
     process = subprocess.run(
         [str(binary), '--config', str(config), 'chrome-extension://' + 'a' * 32 + '/'],
@@ -66,6 +68,23 @@ def verify_browser_host(binary, config, version):
     assert reply['id'] == 1 and reply['ok'] is True
     assert reply['data']['protocol'] == 2 and reply['data']['version'] == version
     assert reply['data']['unlocked'] is False and reply['data']['databases'] == []
+    manifest = config.parent.parent / 'Firefox manifest with spaces.json'
+    manifest.write_text(json.dumps({'name': 'app.monica.cli', 'path': str(binary),
+                                   'type': 'stdio', 'allowed_extensions': [firefox_id]}), encoding='utf-8')
+    firefox = subprocess.run(
+        [str(binary), '--config', str(config), str(manifest), firefox_id],
+        input=struct.pack('<I', len(request)) + request,
+        capture_output=True, timeout=15, check=True)
+    assert len(firefox.stdout) >= 4 and struct.unpack_from('<I', firefox.stdout)[0] == len(firefox.stdout) - 4
+    assert json.loads(firefox.stdout[4:]) == reply, 'Firefox and Chromium hello differ'
+    for rejected in [
+            [str(manifest), 'other@example.com'],
+            [str(manifest), 'Monica@monica-pass.github.io'],
+            ['relative.json', firefox_id],
+            ['chrome-extension://' + 'a' * 32 + '/', firefox_id]]:
+        denied = subprocess.run([str(binary), '--config', str(config), *rejected],
+                                input=b'', capture_output=True, timeout=15)
+        assert denied.returncode != 0 and not denied.stdout, 'Invalid native caller accepted'
     assert not config.parent.exists(), 'Read-only host smoke test created state'
 
 
