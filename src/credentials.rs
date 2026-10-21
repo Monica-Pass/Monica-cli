@@ -15,6 +15,14 @@ pub trait VaultPassword: AsRef<str> + Sync {
     fn security_key(&self) -> Option<&[u8]> {
         None
     }
+    /// A human management session may pin authorization to one native vault.
+    /// Recheck inside open, including when another process switches the config.
+    fn expected_vault_id(&self) -> Option<&str> {
+        None
+    }
+    fn expected_vault_path(&self) -> Option<&Path> {
+        None
+    }
 }
 
 impl VaultPassword for str {}
@@ -57,6 +65,22 @@ impl VaultPassword for VaultCredentials {
 }
 
 impl VaultCredentials {
+    /// Bytes explicitly selected by a human browser file picker. No host path is accepted.
+    pub(crate) fn from_key_bytes(
+        password: Zeroizing<String>,
+        bytes: Option<Zeroizing<Vec<u8>>>,
+    ) -> Result<Self> {
+        if bytes
+            .as_ref()
+            .is_some_and(|b| b.is_empty() || b.len() > MAX_KEY_FILE_BYTES)
+        {
+            return Err(GatewayError::InvalidKeyFile);
+        }
+        Ok(Self {
+            password,
+            security_key: bytes,
+        })
+    }
     pub fn from_key_file(password: Zeroizing<String>, path: Option<&Path>) -> Result<Self> {
         let security_key = path.map(read_key_file).transpose()?;
         Ok(Self {

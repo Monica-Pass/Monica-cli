@@ -34,6 +34,10 @@ if ($InstallDir -eq [System.IO.Path]::GetPathRoot($InstallDir).TrimEnd('\', '/')
 $sourceFile = Get-Item -LiteralPath $Source
 if ($sourceFile.PSIsContainer) { throw 'Source must be a monica-pass.exe file.' }
 $sourcePath = $sourceFile.FullName
+$browserSource = Join-Path $sourceFile.DirectoryName 'monica-browser-host.exe'
+$browserTarget = Join-Path $InstallDir 'monica-browser-host.exe'
+$browserScriptDirectory = Join-Path $InstallDir 'scripts'
+$browserScriptTarget = Join-Path $browserScriptDirectory 'install-browser.ps1'
 $executable = Join-Path $InstallDir 'monica-pass.exe'
 $marker = Join-Path $InstallDir 'monica-pass.portable'
 $dataDir = Join-Path $InstallDir 'data'
@@ -56,7 +60,7 @@ if (Test-Path -LiteralPath $InstallDir) {
         }
     }
 }
-foreach ($existingPath in @($marker, $executable, $dataDir)) {
+foreach ($existingPath in @($marker, $executable, $dataDir, $browserTarget)) {
     if (Test-Path -LiteralPath $existingPath) {
         $item = Get-Item -LiteralPath $existingPath -Force
         if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
@@ -70,8 +74,16 @@ foreach ($existingPath in @($marker, $executable, $dataDir)) {
 if ((Test-Path -LiteralPath $marker) -and (Get-Item -LiteralPath $marker).Length -ne 0) {
     throw 'The portable marker must be an empty file.'
 }
+foreach ($browserInstallPath in @($browserScriptDirectory, $browserScriptTarget)) {
+    if (Test-Path -LiteralPath $browserInstallPath) {
+        $item = Get-Item -LiteralPath $browserInstallPath -Force
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or (($browserInstallPath -eq $browserScriptDirectory) -ne $item.PSIsContainer)) {
+            throw 'Browser helper installation paths must be ordinary files and directories.'
+        }
+    }
+}
 
-$running = Get-Process -Name 'monica-pass', 'monica', 'monicapass' -ErrorAction SilentlyContinue |
+$running = Get-Process -Name 'monica-pass', 'monica', 'monicapass', 'monica-browser-host' -ErrorAction SilentlyContinue |
     Where-Object { [System.IO.Path]::GetDirectoryName($_.Path) -eq $InstallDir }
 if ($running) { throw 'Close the installed Monica CLI before updating it.' }
 
@@ -115,6 +127,20 @@ try {
 }
 if (-not (Test-Path -LiteralPath $marker)) {
     [System.IO.File]::WriteAllBytes($marker, [byte[]]@())
+}
+
+# The browser helper shares this portable directory's authoritative CLI state.
+# Registration is explicit: the user supplies their extension ID afterwards.
+if (Test-Path -LiteralPath $browserSource -PathType Leaf) {
+    if ([System.IO.Path]::GetFullPath($browserSource) -ne $browserTarget) {
+        [System.IO.File]::Copy($browserSource, $browserTarget, $true)
+    }
+    $browserScript = Join-Path $PSScriptRoot 'install-browser.ps1'
+    $scriptTarget = $browserScriptTarget
+    if ((Test-Path -LiteralPath $browserScript -PathType Leaf) -and $browserScript -ne $scriptTarget) {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $scriptTarget) -Force | Out-Null
+        [System.IO.File]::Copy($browserScript, $scriptTarget, $true)
+    }
 }
 
 # Executable aliases work in PowerShell, cmd, and noninteractive AI processes.

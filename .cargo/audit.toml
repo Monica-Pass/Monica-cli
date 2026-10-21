@@ -1,0 +1,5 @@
+[advisories]
+# No patched rsa release. Only local SSH key generation/parsing is used;
+# no RSA private-key signing/decryption oracle is exposed. See SECURITY.md.
+# Revisit when rsa or ssh-key provides a fixed compatible release.
+ignore = ["RUSTSEC-2023-0071"]

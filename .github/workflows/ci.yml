@@ -1,0 +1,73 @@
+name: Code quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  workflows:
+    name: Validate GitHub Actions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
+        with:
+          tool: actionlint@1.7.12
+      - run: actionlint -color
+
+  rust:
+    name: Format and strict Clippy
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      MDBX_REVISION: f004673ef07a04c31702eaf1015e062f29730537
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+    defaults:
+      run:
+        working-directory: monica-pass-cli
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: monica-pass-cli
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Monica-Pass/Mdbx
+          ref: ${{ env.MDBX_REVISION }}
+          path: mdbx
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: '1.97.0'
+          components: rustfmt, clippy
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        id: cargo-cache
+        with:
+          # Compressed crate downloads and index only; never cache target/.
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+          key: ${{ runner.os }}-cargo-downloads-v1-${{ hashFiles('monica-pass-cli/Cargo.lock') }}
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        if: github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}

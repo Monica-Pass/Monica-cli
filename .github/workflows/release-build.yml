@@ -2,7 +2,7 @@ name: Build and verify release packages
 
 on:
   push:
-    branches: [main, codex/cli-android-api-keys]
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -31,38 +31,43 @@ jobs:
     env:
       MDBX_REVISION: f004673ef07a04c31702eaf1015e062f29730537
       CARGO_INCREMENTAL: '0'
-      CARGO_PROFILE_DEV_DEBUG: '0'
       RUSTFLAGS: ${{ matrix.rustflags }}
     defaults:
       run:
         working-directory: monica-pass-cli
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           path: monica-pass-cli
           persist-credentials: false
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Monica-Pass/Mdbx
           ref: ${{ env.MDBX_REVISION }}
           path: mdbx
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@1.97.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
+          toolchain: '1.97.0'
           targets: ${{ matrix.target }}
-          components: rustfmt, clippy
-      - uses: actions/setup-node@v4
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        id: cargo-cache
+        with:
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+          key: ${{ runner.os }}-cargo-downloads-v1-${{ hashFiles('monica-pass-cli/Cargo.lock') }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
-      - name: Check format and tests
-        run: |
-          cargo fmt --check
-          cargo test --locked --all-targets --target ${{ matrix.target }} -- --test-threads=1
-          cargo clippy --locked --all-targets --target ${{ matrix.target }} -- -D warnings
+      # Optimized KDF tests share the release profile with packaged binaries.
+      # Serial execution bounds memory use; a debug suite previously timed out.
+      - name: Test all targets in release mode
+        run: cargo test --release --locked --all-targets --target ${{ matrix.target }} -- --test-threads=1
       - name: Build release
         run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Package and verify extracted binaries
@@ -74,7 +79,14 @@ jobs:
       - name: Bundle corresponding source and locked dependencies
         if: runner.os == 'Linux'
         run: python scripts/package_source.py --engine-revision "$MDBX_REVISION" --output ../dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        if: github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-${{ matrix.target }}
           path: dist/*

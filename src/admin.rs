@@ -942,9 +942,20 @@ pub async fn lock_broker(store: &ConfigStore) -> Result<()> {
 }
 
 pub fn revoke(store: &ConfigStore, name: &str) -> Result<()> {
+    revoke_in_vault(store, name, None)
+}
+
+pub(crate) fn revoke_in_vault(
+    store: &ConfigStore,
+    name: &str,
+    expected_path: Option<&Path>,
+) -> Result<()> {
     validate_name(name)?;
     store.update(|config| {
         let mut config = config.ok_or(GatewayError::NotFound)?;
+        if expected_path.is_some_and(|expected| expected != config.vault) {
+            return Err(GatewayError::ObjectChanged);
+        }
         let count = config.grants.len();
         config.grants.retain(|grant| grant.name != name);
         if count == config.grants.len() {

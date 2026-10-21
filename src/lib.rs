@@ -5,6 +5,7 @@ pub mod api_keys;
 mod api_keys_tests;
 pub mod approval;
 mod blobs;
+pub mod browser;
 pub mod clipboard;
 pub mod config;
 #[cfg(test)]

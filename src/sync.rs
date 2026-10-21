@@ -18,6 +18,26 @@ use crate::webdav::{
     strong_etag,
 };
 
+/// Portable validation copies have another path but must authenticate the same
+/// native vault and factors. Remove only the path pin after checking the live
+/// path while holding the management lock; never remove the identity pin.
+struct SnapshotPassword<'a, T: crate::credentials::VaultPassword + ?Sized>(&'a T);
+impl<T: crate::credentials::VaultPassword + ?Sized> AsRef<str> for SnapshotPassword<'_, T> {
+    fn as_ref(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+impl<T: crate::credentials::VaultPassword + ?Sized> crate::credentials::VaultPassword
+    for SnapshotPassword<'_, T>
+{
+    fn security_key(&self) -> Option<&[u8]> {
+        self.0.security_key()
+    }
+    fn expected_vault_id(&self) -> Option<&str> {
+        self.0.expected_vault_id()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RemoteBinding {
@@ -568,6 +588,11 @@ pub async fn synchronize_with_progress(
     // Revocation remains allowed; every final config update preserves it.
     let _guard = store.acquire_broker_lock()?;
     let config = store.load()?;
+    if password.expected_vault_path().is_some() || password.expected_vault_id().is_some() {
+        let vault = Vault::open(&config.vault, password)?;
+        vault.lock()?;
+    }
+    let password = &SnapshotPassword(password);
     // Gate before even listing remote segments, including bindings saved by older builds.
     let local = Snapshot::new(store, &config.vault)?;
     local.require_remote_sync_allowed(password)?;

@@ -193,6 +193,12 @@ impl Vault {
         path: &Path,
         password: &(impl crate::credentials::VaultPassword + ?Sized),
     ) -> Result<Self> {
+        if password
+            .expected_vault_path()
+            .is_some_and(|expected| expected != path)
+        {
+            return Err(GatewayError::ObjectChanged);
+        }
         if !path.is_file() || password.as_ref().is_empty() {
             return Err(GatewayError::UnlockRequired);
         }
@@ -229,6 +235,13 @@ impl Vault {
         let vault = Self {
             runtime: VaultRuntime::from_connection(connection),
         };
+        if password
+            .expected_vault_id()
+            .is_some_and(|expected| vault.vault_id().as_deref() != Ok(expected))
+        {
+            vault.lock()?;
+            return Err(GatewayError::ObjectChanged);
+        }
         vault.ensure_android_root();
         Ok(vault)
     }

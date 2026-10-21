@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.97"
 license = "GPL-3.0-only"
 description = "Local credential gateway for AI tools, backed by MDBX3"
+default-run = "monica-pass"
 
 [workspace]
 resolver = "2"
@@ -12,6 +13,10 @@ resolver = "2"
 [[bin]]
 name = "monica-pass"
 path = "src/main.rs"
+
+[[bin]]
+name = "monica-browser-host"
+path = "src/browser_main.rs"
 
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
